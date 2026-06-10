@@ -1,0 +1,6 @@
+{
+  "name": "Mei Flow",
+  "description": "Aplicativo simples e intuitivo de gestão financeira e fiscal para Microempreendedores Individuais (MEI) com sincronização segura e autocompletar.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,70 @@
+{
+  "entities": {
+    "users": {
+      "title": "users",
+      "description": "Perfis MEI de Microempreendedor Individual",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "ID exclusivo de autenticação do usuário MEI" },
+        "nomeComercial": { "type": "string", "description": "Nome fantasia ou oficial do MEI" },
+        "limiteAnual": { "type": "number", "description": "Limite máximo legal de faturamento anual" }
+      },
+      "required": ["uid", "nomeComercial"]
+    },
+    "clientes": {
+      "title": "clientes",
+      "description": "Clientes associados ao MEI para fins de faturamento e Notas Fiscais",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID exclusivo do cliente" },
+        "mei_uid": { "type": "string", "description": "ID do usuário MEI proprietário do cliente" },
+        "nome": { "type": "string", "description": "Nome ou Razão Social do cliente" },
+        "documento": { "type": "string", "description": "CPF ou CNPJ do cliente" },
+        "email": { "type": "string", "description": "E-mail de contato" },
+        "telefone": { "type": "string", "description": "Telefone de contato" },
+        "createdAt": { "type": "string", "description": "Data de cadastramento" }
+      },
+      "required": ["id", "mei_uid", "nome"]
+    },
+    "transacoes": {
+      "title": "transacoes",
+      "description": "Registros fiscais e movimentações financeiras de entradas (vendas) e saídas (despesas)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID exclusivo da transação" },
+        "mei_uid": { "type": "string", "description": "ID do usuário MEI proprietário do lançamento" },
+        "tipo": { "type": "string", "enum": ["entrada", "saida"], "description": "Tipo de movimentação" },
+        "valor": { "type": "number", "description": "Valor monetário bruto em Reais" },
+        "data": { "type": "string", "description": "Data do fato gerador (DD/MM/AAAA)" },
+        "descricao": { "type": "string", "description": "Histórico ou descrição do serviço/despesa" },
+        "categoria": { "type": "string", "description": "Categoria fiscal para fins de livro caixa" },
+        "clienteId": { "type": "string", "description": "ID do cliente tomador associado" },
+        "clienteNome": { "type": "string", "description": "Nome do cliente denormalizado no lançamento" },
+        "clienteDocumento": { "type": "string", "description": "CNPJ/CPF do cliente denormalizado" }
+      },
+      "required": ["id", "mei_uid", "tipo", "valor", "data", "descricao", "categoria"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "users",
+      "description": "Dados do perfil MEI autenticado"
+    },
+    "/clientes/{clienteId}": {
+      "schema": "clientes",
+      "description": "Clientes associados ao MEI autenticado"
+    },
+    "/transacoes/{transacaoId}": {
+      "schema": "transacoes",
+      "description": "Movimentações de entradas e saídas fiscais do MEI autenticado"
+    },
+    "/usuarios/{userId}": {
+      "schema": "users",
+      "description": "Dados do perfil MEI autenticado (alternativo)"
+    },
+    "/usuarios/{userId}/vendas/{vendaId}": {
+      "schema": "transacoes",
+      "description": "Vendas do usuário MEI na subcoleção do usuário"
+    }
+  }
+}

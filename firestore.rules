@@ -1,0 +1,78 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 1. Regra de Segurança Geral - Bloqueio por Padrão (Zero-Trust)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+    
+    // Função auxiliar para checar autenticação básica
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    // Função para verificar se a operação pertence estritamente ao MEI autenticado
+    function isOwner(meiUid) {
+      return isSignedIn() && request.auth.uid == meiUid;
+    }
+
+    // 2. Perfil de Usuários MEI
+    match /users/{userId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // 2b. Perfil de Usuários MEI Alternativos e Subcoleção de Vendas
+    match /usuarios/{userId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+      
+      match /vendas/{vendaId} {
+        allow create: if isSignedIn()
+          && request.auth.uid == userId
+          && request.resource.data.valor is number
+          && request.resource.data.valor > 0;
+          
+        allow get, list: if isSignedIn() && request.auth.uid == userId;
+        
+        allow update: if isSignedIn()
+          && request.auth.uid == userId
+          && request.resource.data.valor is number
+          && request.resource.data.valor > 0;
+          
+        allow delete: if isSignedIn() && request.auth.uid == userId;
+      }
+    }
+
+    // 3. Clientes (Isolamento de PII e autocomplete seguro)
+    match /clientes/{clienteId} {
+      allow create: if isSignedIn() 
+        && request.resource.data.mei_uid == request.auth.uid 
+        && request.resource.data.nome is string 
+        && request.resource.data.nome.size() <= 150;
+        
+      allow get, list: if isSignedIn() && resource.data.mei_uid == request.auth.uid;
+      
+      allow update: if isSignedIn() 
+        && resource.data.mei_uid == request.auth.uid 
+        && request.resource.data.mei_uid == resource.data.mei_uid;
+        
+      allow delete: if isSignedIn() && resource.data.mei_uid == request.auth.uid;
+    }
+
+    // 4. Transações MEI (Entradas e Saídas Financieras/Fiscais)
+    match /transacoes/{transacaoId} {
+      allow create: if isSignedIn() 
+        && request.resource.data.mei_uid == request.auth.uid
+        && request.resource.data.valor is number
+        && request.resource.data.valor > 0;
+        
+      allow get, list: if isSignedIn() && resource.data.mei_uid == request.auth.uid;
+      
+      allow update: if isSignedIn() 
+        && resource.data.mei_uid == request.auth.uid 
+        && request.resource.data.mei_uid == resource.data.mei_uid;
+        
+      allow delete: if isSignedIn() && resource.data.mei_uid == request.auth.uid;
+    }
+  }
+}
