@@ -120,6 +120,50 @@ testConnection();
 export async function loginWithGoogle(): Promise<User | null> {
   try {
     const result = await signInWithPopup(auth, googleProvider);
+    if (result.user) {
+      const userRef = doc(db, 'users', result.user.uid);
+      const docSnap = await getDoc(userRef);
+      if (!docSnap.exists()) {
+        const name = result.user.displayName || result.user.email?.split('@')[0] || "MEI";
+        const email = result.user.email || "";
+        const initialProfile = {
+          uid: result.user.uid,
+          name: name,
+          email: email,
+          planType: 'free',
+          logoUrl: '',
+          createdAt: new Date(),
+          meiName: name,
+          cnpjPrestador: '',
+          inscricaoMunicipal: '',
+          telefone: '',
+          asaasAccessToken: '',
+          companyLogo: '',
+          updatedAt: new Date().toISOString()
+        };
+        await setDoc(userRef, initialProfile, { merge: true });
+
+        // Também persiste na coleção legada 'usuarios'
+        try {
+          const legacyDocRef = doc(db, 'usuarios', result.user.uid);
+          await setDoc(legacyDocRef, {
+            uid: result.user.uid,
+            meiName: name,
+            email: email,
+            cnpjPrestador: '',
+            inscricaoMunicipal: '',
+            telefone: '',
+            asaasAccessToken: '',
+            planType: 'free',
+            companyLogo: '',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+        } catch (legacyErr) {
+          console.warn("Não foi possivel persistir na coleção usuarios legada para usuário Google:", legacyErr);
+        }
+      }
+    }
     return result.user;
   } catch (error) {
     console.error("Erro ao autenticar com o Google:", error);
@@ -341,6 +385,7 @@ export async function registerWithEmailPassword(email: string, password: string,
     try {
       const userDocRef = doc(db, 'users', result.user.uid);
       const initialProfile = {
+        uid: result.user.uid,
         name: name,
         email: email,
         planType: 'free',
@@ -361,6 +406,7 @@ export async function registerWithEmailPassword(email: string, password: string,
       try {
         const legacyDocRef = doc(db, 'usuarios', result.user.uid);
         await setDoc(legacyDocRef, {
+          uid: result.user.uid,
           meiName: name,
           email: email,
           cnpjPrestador: '',
