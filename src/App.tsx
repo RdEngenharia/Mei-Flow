@@ -52,6 +52,7 @@ import autoTable from "jspdf-autotable";
 // IMPORTAÇÕES DO FIREBASE AUTH & FIRESTORE PARA SEGURANÇA MULTI-USUÁRIO
 import {
   auth,
+  db,
   loginWithGoogle,
   logoutUser,
   fetchClientesFromFirebase,
@@ -69,6 +70,7 @@ import {
   fetchUserProfileFromFirebase
 } from "./firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
+import { onSnapshot, doc } from "firebase/firestore";
 
 export default function App() {
   // Controle de Navegação por Abas/Módulos
@@ -313,6 +315,42 @@ export default function App() {
 
     return () => unsubscribe();
   }, []);
+
+  // Escuta em tempo real o perfil do usuário (incluindo planType e companyLogo) no Firestore
+  useEffect(() => {
+    if (!user) return;
+    
+    const docRef = doc(db, "users", user.uid);
+    const unsubscribeSnapshot = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.planType) {
+          setPlanType(data.planType);
+        } else {
+          setPlanType("free");
+        }
+        if (data.logoUrl || data.companyLogo) {
+          setCompanyLogo(data.logoUrl || data.companyLogo || "");
+        }
+        if (data.meiName || data.name) {
+          setMeiName(data.meiName || data.name || "");
+        }
+        if (data.cnpjPrestador) {
+          setCnpjPrestador(data.cnpjPrestador);
+        }
+        if (data.inscricaoMunicipal) {
+          setInscricaoMunicipal(data.inscricaoMunicipal);
+        }
+        if (data.telefone) {
+          setTelefonePrestador(data.telefone);
+        }
+      }
+    }, (err) => {
+      console.warn("Erro ao escutar atualizações de perfil em tempo real:", err);
+    });
+
+    return () => unsubscribeSnapshot();
+  }, [user]);
 
   // Perspectiva persistente do localStorage exclusivamente fora de login para impedir colisão
   useEffect(() => {
@@ -2975,6 +3013,7 @@ async function processarEmissao() {
           isOpen={showUpgradeModal}
           onClose={() => setShowUpgradeModal(false)}
           onUpgradeSuccess={handleUpgradeSuccess}
+          userId={userId}
         />
       )}
 

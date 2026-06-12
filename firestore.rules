@@ -1,48 +1,30 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Helper check to verify if the user is authenticated
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    // 1. Users collection (users)
     match /users/{userId} {
-      allow read, write: if isSignedIn() && request.auth.uid == userId;
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
-
-    // 1b. Legacy users collection (usuarios)
     match /usuarios/{userId} {
-      allow read, write: if isSignedIn() && request.auth.uid == userId;
-
+      allow read, write: if request.auth != null && request.auth.uid == userId;
       match /vendas/{vendaId} {
-        allow read, write: if isSignedIn() && request.auth.uid == userId;
+        allow read, write: if request.auth != null && request.auth.uid == userId;
       }
     }
-
-    // 2. Customers collection (customers)
     match /customers/{customerId} {
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow read, update, delete: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid);
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid);
     }
-
-    // 2b. Legacy Clientes collection (clientes)
     match /clientes/{clienteId} {
-      allow create: if isSignedIn() && request.resource.data.mei_uid == request.auth.uid;
-      allow read, update, delete: if isSignedIn() && (resource == null || resource.data.mei_uid == request.auth.uid);
+      allow create: if request.auth != null && request.resource.data.mei_uid == request.auth.uid;
+      allow read, update, delete: if request.auth != null && (resource == null || resource.data.mei_uid == request.auth.uid);
     }
-
-    // 3. Transactions collection (transactions)
     match /transactions/{transactionId} {
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow read, update, delete: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid);
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid);
     }
-
-    // 3b. Legacy Transacoes collection (transacoes)
     match /transacoes/{transacaoId} {
-      allow create: if isSignedIn() && request.resource.data.mei_uid == request.auth.uid;
-      allow read, update, delete: if isSignedIn() && (resource == null || resource.data.mei_uid == request.auth.uid);
+      allow create: if request.auth != null && request.resource.data.mei_uid == request.auth.uid;
+      allow read, update, delete: if request.auth != null && (resource == null || resource.data.mei_uid == request.auth.uid);
     }
   }
 }
