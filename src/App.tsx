@@ -44,7 +44,10 @@ import { Cliente, Transacao } from "./types";
 import ReceiptModal from "./components/ReceiptModal";
 import MeiConfigModal from "./components/MeiConfigModal";
 import AsaasWalletModal from "./components/AsaasWalletModal";
+import UpgradeModal from "./components/UpgradeModal";
 import { consultarSaldoAsaas } from "./asaasService";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 
 // IMPORTAÇÕES DO FIREBASE AUTH & FIRESTORE PARA SEGURANÇA MULTI-USUÁRIO
 import {
@@ -68,6 +71,9 @@ import {
 import { onAuthStateChanged, User } from "firebase/auth";
 
 export default function App() {
+  // Controle de Navegação por Abas/Módulos
+  const [currentView, setCurrentView] = useState<"home" | "clientes" | "financeiro" | "carteira">("home");
+
   // State e Credenciais de Autenticação MEI
   const [userId, setUserId] = useState("user_49281");
   const [meiName, setMeiName] = useState(() => {
@@ -97,6 +103,11 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isFirebaseSyncing, setIsFirebaseSyncing] = useState(false);
   const [showConfigGuide, setShowConfigGuide] = useState(false);
+
+  // TIERS & PREMIUM PLAN STATES
+  const [planType, setPlanType] = useState<"free" | "premium">("free");
+  const [companyLogo, setCompanyLogo] = useState("");
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
   // ESTADOS DE AUTENTICAÇÃO INTEGRADA EMAIL e SENHA
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -235,6 +246,15 @@ export default function App() {
               setAsaasAccessToken(profile.asaasAccessToken);
               localStorage.setItem("meiflow_asaas_access_token", profile.asaasAccessToken);
             }
+            if (profile.planType) {
+              setPlanType(profile.planType);
+            } else {
+              setPlanType("free");
+            }
+            setCompanyLogo(profile.companyLogo || "");
+          } else {
+            setPlanType("free");
+            setCompanyLogo("");
           }
 
           // Busca remotamente os dados específicos e restritos ao UID logado (Isolamento rígido)
@@ -400,12 +420,15 @@ export default function App() {
     }
   };
 
-  const handleSaveMeiProfile = async (newName: string, newCnpj: string, newInscricao: string, newTelefone: string) => {
+  const handleSaveMeiProfile = async (newName: string, newCnpj: string, newInscricao: string, newTelefone: string, logo?: string) => {
     try {
       setMeiName(newName);
       setCnpjPrestador(newCnpj);
       setInscricaoMunicipal(newInscricao);
       setTelefonePrestador(newTelefone);
+      if (logo !== undefined) {
+        setCompanyLogo(logo);
+      }
       
       localStorage.setItem("meiflow_mei_name", newName);
       localStorage.setItem("meiflow_cnpj_prestador", newCnpj);
@@ -418,7 +441,9 @@ export default function App() {
           cnpjPrestador: newCnpj,
           inscricaoMunicipal: newInscricao,
           telefone: newTelefone,
-          asaasAccessToken: asaasAccessToken
+          asaasAccessToken: asaasAccessToken,
+          planType: planType,
+          companyLogo: logo !== undefined ? logo : companyLogo
         });
         triggerToast("✓ Dados da empresa atualizados com sucesso e sincronizados na nuvem!");
       } else {
@@ -441,7 +466,9 @@ export default function App() {
           cnpjPrestador,
           inscricaoMunicipal,
           telefone: telefonePrestador,
-          asaasAccessToken: newToken
+          asaasAccessToken: newToken,
+          planType: planType,
+          companyLogo: companyLogo
         });
         triggerToast("✓ Token do Asaas atualizado e sincronizado na nuvem!");
       } else {
@@ -450,6 +477,29 @@ export default function App() {
     } catch (error) {
       console.error(error);
       triggerToast("⚠ Erro ao salvar o token do Asaas.");
+    }
+  };
+
+  const handleUpgradeSuccess = async () => {
+    try {
+      setPlanType("premium");
+      if (user) {
+        await saveUserProfileToFirebase(user.uid, {
+          meiName,
+          cnpjPrestador,
+          inscricaoMunicipal,
+          telefone: telefonePrestador,
+          asaasAccessToken,
+          planType: "premium",
+          companyLogo
+        });
+        triggerToast("✓ Parabéns! Ativação Premium do MEI Flow realizada com sucesso na nuvem!");
+      } else {
+        triggerToast("✓ Plano Premium do MEI Flow ativado com sucesso!");
+      }
+    } catch (e) {
+      console.error("Erro no upgrade premium remoto:", e);
+      triggerToast("⚠ Licença ativa!");
     }
   };
 
@@ -535,50 +585,118 @@ export default function App() {
     triggerToast("✓ Download do APK Android (meiflow.apk) iniciado direto para o telefone!");
   };
 
-  // Download do PDF (geração real de arquivo de texto formatado como comprovante oficial)
+  // Download do PDF (geração real de arquivo PDF formatado como comprovante oficial)
   const handleDownloadPDF = (tx: Transacao, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    const content = `
-==========================================================
-                 COMPROVANTE DE OPERAÇÃO FISCAL
-==========================================================
-Emitente MEI:   ${meiName}
-Identificador:  ${userId}
-Ambiente:       Sincronizado Cloud Ativo
-
-----------------------------------------------------------
-DETALHES DO LANÇAMENTO
-----------------------------------------------------------
-ID Registro:    ${tx.id}
-Operação:       ${tx.tipo === "entrada" ? "ENTRADA (VENDA / RECEITA)" : "SAÍDA (DESPESA / ENCARGO)"}
-Descrição:      ${tx.descricao}
-Categoria:      ${tx.categoria}
-Data Lançamento:${tx.data}
-
-VALOR CONSOLIDADO: R$ ${tx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-----------------------------------------------------------
-${
-  tx.tipo === "entrada"
-    ? `CLIENTE TOMADOR DO SERVIÇO:
-Nome/Razão:     ${tx.clienteNome || "Consumidor Geral"}
-Documento:      ${tx.clienteDocumento || "Não informado"}`
-    : "DESPESA INTERNA OPERACIONAL"
-}
-==========================================================
-Este recibo serve de lastro documental para fins do preenchimento 
-obrigatório do Relatório Mensal de Receitas Brutas (Lei Complementar 123/2006).
-
-MEI Flow - Planejamento & Controle Fiscal Simplificado
-==========================================================
-    `;
-    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `comprovante_mei_${tx.id}.txt`;
-    link.click();
-    URL.revokeObjectURL(url);
-    triggerToast(`✓ PDF/Texto do Comprovante ${tx.id} gerado e baixado!`);
+    
+    try {
+      const doc = new jsPDF();
+      
+      // Header
+      doc.setFillColor(15, 23, 42); // slate-900 (deep navy)
+      doc.rect(0, 0, 210, 40, "F");
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(22);
+      doc.text("MEI Flow", 15, 25);
+      
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.text("Controle Fiscal & Emissão de Comprovantes", 15, 33);
+      
+      // Title
+      doc.setTextColor(15, 23, 42);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(16);
+      doc.text("COMPROVANTE DE OPERAÇÃO FISCAL", 15, 55);
+      
+      // Metadata block
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(100, 116, 139); // slate-500
+      doc.text(`Emitente MEI: ${meiName || "Não Informado"}`, 15, 65);
+      doc.text(`Identificador MEI: ${userId}`, 15, 71);
+      doc.text(`Data de Emissão: ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR")}`, 15, 77);
+      
+      // Draw line
+      doc.setDrawColor(226, 232, 240); // slate-200
+      doc.line(15, 83, 195, 83);
+      
+      // Details title
+      doc.setTextColor(15, 23, 42);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(12);
+      doc.text("DETALHES DO LANÇAMENTO", 15, 93);
+      
+      const isEnt = tx.tipo === "entrada";
+      
+      const bodyRows = [
+        ["ID Registro", tx.id],
+        ["Operação", isEnt ? "ENTRADA (RECEITA / VENDA)" : "SAÍDA (DESPESA)"],
+        ["Descrição", tx.descricao],
+        ["Categoria", tx.categoria],
+        ["Data do Lançamento", tx.data],
+        ["Valor Consolidado", `R$ ${tx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`]
+      ];
+      
+      if (isEnt) {
+        bodyRows.push(["Cliente Destinatário", tx.clienteNome || "Consumidor Geral"]);
+        bodyRows.push(["Documento do Cliente", tx.clienteDocumento || "Não informado"]);
+      } else {
+        bodyRows.push(["Destino da Despesa", "Internalização de Custos Operacionais"]);
+      }
+      
+      autoTable(doc, {
+        startY: 98,
+        margin: { left: 15, right: 15 },
+        head: [["Campo", "Informação"]],
+        body: bodyRows,
+        theme: "striped",
+        styles: {
+          fontSize: 10,
+          cellPadding: 4,
+        },
+        headStyles: {
+          fillColor: [37, 99, 235], // blue-600
+          textColor: 255,
+        },
+        columnStyles: {
+          0: { fontStyle: "bold", cellWidth: 50 },
+        }
+      });
+      
+      // Total Block
+      const finalY = (doc as any).lastAutoTable.finalY + 15;
+      doc.setFillColor(248, 250, 252); // slate-50
+      doc.rect(15, finalY, 180, 20, "F");
+      doc.setDrawColor(37, 99, 235);
+      doc.line(15, finalY, 15, finalY + 20); // vertical blue indicator line
+      
+      doc.setTextColor(15, 23, 42);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(11);
+      doc.text(`VALOR TOTAL DO LANÇAMENTO:`, 20, finalY + 13);
+      
+      doc.setTextColor(37, 99, 235);
+      doc.setFontSize(14);
+      doc.text(`R$ ${tx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 125, finalY + 13);
+      
+      // Legal Disclaimer Footer
+      doc.setTextColor(148, 163, 184); // slate-400
+      doc.setFont("helvetica", "italic");
+      doc.setFontSize(8);
+      const disclaimerY = finalY + 35;
+      doc.text("Este recibo serve de lastro de autenticidade documental eletrônica para fins do preenchimento das", 15, disclaimerY);
+      doc.text("obrigações do MEI de transações mensais brutas em conformidade com o Art. 26 da Lei Complementar nº 123/2006.", 15, disclaimerY + 4.5);
+      doc.text("Gerado automaticamente via MEI Flow - Planejamento e Inteligência Tributária.", 15, disclaimerY + 9);
+      
+      doc.save(`comprovante_mei_${tx.id}.pdf`);
+      triggerToast(`✓ Comprovante em PDF de alta qualidade para ${tx.id} gerado e baixado!`);
+    } catch (err) {
+      console.error("Erro ao gerar PDF:", err);
+      triggerToast("⚠ Ocorreu um erro ao gerar o comprovante em PDF.");
+    }
   };
 
   // Gerar e Iniciar o Processo de NFS-e via Focus NFe
@@ -818,21 +936,185 @@ MEI Flow - Planejamento & Controle Fiscal Simplificado
     }, 1500);
   };
 
-  // Exportar todas as transações para planilha do livro caixa mensal do MEI
-  const handleExportLivroCaixa = () => {
-    let csv = "ID Lançamento;Tipo;Data;Descricao;Categoria;Cliente;Valor\n";
-    transacoes.forEach(t => {
-      csv += `${t.id};${t.tipo === "entrada" ? "Entrada" : "Saída"};${t.data};${t.descricao};${t.categoria};${t.clienteNome || "Interna"};R$ ${t.valor.toFixed(2)}\n`;
-    });
-    
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "livro_caixa_mei.csv";
-    link.click();
-    URL.revokeObjectURL(url);
-    triggerToast("✓ Livro caixa fiscal exportado de forma consolidada (CSV)!");
+  // Exportar todas as transações para relatório PDF profissional consolidado do MEI
+  const handleExportPDF = () => {
+    try {
+      const doc = new jsPDF();
+      
+      // Header banner
+      doc.setFillColor(15, 23, 42); // slate-900 (deep navy)
+      doc.rect(0, 0, 210, 42, "F");
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(24);
+      doc.text("MEI Flow", 15, 24);
+      
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.text("Relatório de Inteligência & Conformidade Fiscal do MEI", 15, 32);
+      
+      // Right aligned info in header
+      doc.setFontSize(9);
+      doc.setTextColor(203, 213, 225); // slate-300
+      doc.text(`Usuário: ${meiName || "Não Informado"}`, 140, 20);
+      doc.text(`ID MEI: ${userId}`, 140, 26);
+      doc.text(`Emitido em: ${new Date().toLocaleDateString("pt-BR")}`, 140, 32);
+      
+      // Document title
+      doc.setTextColor(15, 23, 42);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(16);
+      doc.text("LIVRO CAIXA & RELATÓRIO DE FATURAMENTO", 15, 58);
+      
+      // Intro paragraph
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9.5);
+      doc.setTextColor(71, 85, 105); // slate-600
+      doc.text(
+        "Abaixo estão consolidados os lançamentos tributários do período selecionado. Este relatório deve ser apresentado",
+        15,
+        66
+      );
+      doc.text(
+        "anualmente junto à Declaração Anual do Simples Nacional do MEI (DASN-SIMEI).",
+        15,
+        71
+      );
+      
+      // Main stats summary cards in PDF
+      // Draw cards backgrounds
+      doc.setFillColor(248, 250, 252); // slate-50
+      doc.rect(15, 78, 55, 24, "F");
+      doc.rect(77, 78, 55, 24, "F");
+      doc.rect(140, 78, 55, 24, "F");
+      
+      // Border indicators
+      doc.setDrawColor(16, 185, 129); // emerald-500
+      doc.line(15, 78, 15, 102);
+      doc.setDrawColor(239, 68, 68); // red-500
+      doc.line(77, 78, 77, 102);
+      doc.setDrawColor(37, 99, 235); // blue-600
+      doc.line(140, 78, 140, 102);
+      
+      // Stats labels & values
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8);
+      doc.setTextColor(100, 116, 139); // slate-500
+      doc.text("TOTAL RECEITAS (+)", 18, 84);
+      doc.text("TOTAL DESPESAS (-)", 80, 84);
+      doc.text("SALDO TRIBUTÁRIO", 143, 84);
+      
+      doc.setFontSize(11);
+      doc.setTextColor(16, 185, 129); // emerald-600
+      doc.text(`R$ ${totalEntradas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 18, 93);
+      
+      doc.setTextColor(220, 38, 38); // red-600
+      doc.text(`R$ ${totalSaidas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 80, 93);
+      
+      const isPositive = saldoMensal >= 0;
+      doc.setTextColor(isPositive ? 16 : 220, isPositive ? 185 : 38, isPositive ? 129 : 38);
+      doc.text(`R$ ${saldoMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 143, 93);
+      
+      doc.setFontSize(7.5);
+      doc.setTextColor(148, 163, 184); // slate-400
+      doc.text(`${porcentagemLimite.toFixed(1)}% do limite legal anual de R$ 81k`, 18, 99);
+      doc.text("Base operacional mensal", 80, 99);
+      doc.text("Conformidade fiscal ativa", 143, 99);
+      
+      // Table body mapping
+      const tableRows = filteredTransactions.map(t => {
+        const isEnt = t.tipo === "entrada";
+        return [
+          t.data,
+          isEnt ? "Receita (+)" : "Despesa (-)",
+          t.descricao,
+          t.categoria,
+          isEnt ? (t.clienteNome || "Consumidor Geral") : "Geral / Interno",
+          `R$ ${t.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
+        ];
+      });
+      
+      autoTable(doc, {
+        startY: 110,
+        margin: { left: 15, right: 15 },
+        head: [["Data", "Tipo", "Lançamento", "Categoria", "Cliente / Destinatário", "Valor"]],
+        body: tableRows,
+        theme: "striped",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: 3.5,
+          valign: "middle"
+        },
+        headStyles: {
+          fillColor: [15, 23, 42], // slate-900 (deep navy)
+          textColor: 255,
+          fontStyle: "bold"
+        },
+        columnStyles: {
+          0: { cellWidth: 22 },
+          1: { cellWidth: 22 },
+          2: { cellWidth: 50 },
+          3: { cellWidth: 30 },
+          4: { cellWidth: 40 },
+          5: { cellWidth: 26, halign: "right" }
+        }
+      });
+      
+      // Legal & Signature Area below table
+      const finalTableY = (doc as any).lastAutoTable.finalY + 12;
+      
+      // If we're close to the bottom, add a page
+      let drawY = finalTableY;
+      if (drawY > 260) {
+        doc.addPage();
+        drawY = 20;
+      }
+      
+      // Highlighted compliance box
+      doc.setFillColor(241, 245, 249); // slate-100
+      doc.rect(15, drawY, 180, 20, "F");
+      
+      doc.setTextColor(30, 41, 59); // slate-800
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.text("Selo de Autenticidade de Conformidade Tecnológica", 20, drawY + 8);
+      
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(100, 116, 139); // slate-500
+      doc.text(
+        "Declaro que as informações constantes em sistema refletem de forma idônea as operações de venda e de compras",
+        20,
+        drawY + 14
+      );
+      doc.text(
+        "efetuadas no decorrer do exercício pela empresa cadastrada.",
+        20,
+        drawY + 18
+      );
+      
+      const footerY = drawY + 34;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9.5);
+      doc.setTextColor(71, 85, 105);
+      doc.text("________________________________________", 15, footerY);
+      doc.text("Assinatura do MEI Responsável", 15, footerY + 5);
+      
+      doc.text("________________________________________", 115, footerY);
+      doc.text("Verificação ID Digital do Sistema", 115, footerY + 5);
+      
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`Chave Eletrônica: MEIFLOW_${userId.toUpperCase()}_REV_${Math.floor(Math.random()*90000 + 10000)}`, 115, footerY + 10);
+      
+      doc.save(`relatorio_faturamento_mei_flow.pdf`);
+      triggerToast("✓ Relatório Fiscal Completo em PDF emitido e baixado com sucesso!");
+    } catch (err) {
+      console.error("Erro ao exportar PDF:", err);
+      triggerToast("⚠ Ocorreu um erro ao exportar o relatório consolidado em PDF.");
+    }
   };
 
   // -------------------------------------------------------------------------
@@ -1010,6 +1292,26 @@ ${meiName}`;
     setShowClienteModal(false);
   };
 
+  const handleDeleteCliente = (cliId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirm("Deseja realmente excluir este cliente? Se houver transações vinculadas, elas serão mantidas, mas o cliente será desvinculado.")) {
+      if (user) {
+        deleteClienteFromFirebase(cliId)
+          .then(() => {
+            setClientes(prev => prev.filter(c => c.id !== cliId));
+            triggerToast("✓ Cliente removido com sucesso do Firestore.");
+          })
+          .catch(err => {
+            console.error(err);
+            triggerToast("⚠ Erro ao excluir cliente.");
+          });
+      } else {
+        setClientes(prev => prev.filter(c => c.id !== cliId));
+        triggerToast("✓ Cliente removido localmente.");
+      }
+    }
+  };
+
   const handleDeleteTransacao = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (confirm("Deseja realmente excluir esta movimentação permanente de seu histórico financeiro?")) {
@@ -1132,349 +1434,327 @@ ${meiName}`;
       </nav>
 
       {/* WORKSPACE PRINCIPAL */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-8 space-y-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-6 md:p-12 space-y-12 font-sans">
         
-        {/* BANNER PROMOCIONAL / DOWNLOAD DO APK - DISPENSADO E MOVIDO AO FOOTER PARA LEIAUTE LIMPO. MANTIDO COMENTADO ABAIXO PARA AJUSTES FUTUROS: */}
-        {/*
-        <div className="bg-gradient-to-r from-blue-600 to-indigo-700 text-white p-6 md:p-8 rounded-2xl shadow-lg border border-blue-500 flex flex-col md:flex-row items-center justify-between gap-6 relative overflow-hidden">
-          <div className="absolute right-0 top-0 -translate-y-6 translate-x-8 opacity-10 pointer-events-none">
-            <Smartphone className="w-72 h-72" />
-          </div>
-          <div className="space-y-2 max-w-2xl relative z-10">
-            <span className="inline-flex items-center gap-1.5 bg-blue-500/30 text-blue-100 font-bold text-[10px] px-2.5 py-1 rounded-full border border-blue-400/30 uppercase tracking-widest">
-              <Sparkles className="w-3.5 h-3.5 text-yellow-300" /> Versão Mobile Disponível
-            </span>
-            <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight">Leve o MEI Flow no seu bolso</h2>
-            <p className="text-sm text-blue-100 leading-relaxed">
-              Você pode anunciar o seu site e instalar o APP diretamente no celular Android sem depender da Play Store. Clique abaixo para fazer o download instantâneo do instalador APK configurado para sua consultoria.
-            </p>
-          </div>
-          <div className="shrink-0 flex flex-col sm:flex-row gap-3 w-full md:w-auto relative z-10">
-            <button
-              onClick={handleDownloadAPK}
-              className="bg-white hover:bg-slate-100 text-blue-700 font-extrabold py-3.5 px-6 rounded-xl text-sm flex items-center justify-center gap-2 shadow-sm transition-all"
-            >
-              <Download className="w-4.5 h-4.5 text-blue-600" /> Baixar APK Instalador
-            </button>
-          </div>
-        </div>
-        */}
-
-        <div className="grid grid-cols-12 gap-6 items-start">
-          
-          {/* PAINEL ESQUERDO: SAÚDE FINANCEIRA & RECORRENTES */}
-          <section className="col-span-12 lg:col-span-4 flex flex-col gap-6" id="dashboard-summary">
-            
-            {/* CARD DE SAÚDE FINANCEIRA */}
-            <div className="bg-white p-6 rounded-2xl shadow-xs border border-slate-200">
-              <span className="text-slate-400 text-xs font-bold uppercase tracking-wider block mb-1">
-                Saldo Consolidado do Mês
-              </span>
-              <div className="flex items-baseline gap-2">
-                <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">
-                  R$ {saldoMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                </h2>
+        {/* VIEW: HOME (DASHBOARD) */}
+        {currentView === "home" && (
+          <>
+            {/* Banner elegante para usuários do plano gratuito */}
+            {planType === "free" && (
+              <div 
+                onClick={() => setShowUpgradeModal(true)}
+                className="bg-radial from-slate-900 to-indigo-950 border border-slate-800 text-white rounded-3xl p-6 flex flex-col md:flex-row items-center justify-between gap-5 cursor-pointer hover:shadow-xl hover:border-indigo-900/60 transition-all duration-300 transform hover:-translate-y-0.5"
+                id="free-premium-banner"
+              >
+                <div className="flex items-center gap-4 text-center md:text-left flex-col md:flex-row min-w-0">
+                  <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center shrink-0 border border-white/10">
+                    <Sparkles className="w-6 h-6 text-yellow-300 animate-pulse" />
+                  </div>
+                  <div className="space-y-0.5 text-left">
+                    <h3 className="font-extrabold tracking-tight text-white text-sm sm:text-base">
+                      ✨ Evolua para o Premium e emita boletos, notas fiscais e use sua própria logo!
+                    </h3>
+                    <p className="text-xs text-slate-300">
+                      Desbloqueie todo o potencial financeiro e profissional do seu MEI por apenas R$ 29,90/mês. Clique para saber mais.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="px-5 py-2.5 bg-white text-indigo-950 font-extrabold text-[10px] rounded-lg shadow-lg hover:bg-slate-50 transition-all shrink-0 uppercase tracking-widest cursor-pointer"
+                >
+                  Conhecer Premium 🚀
+                </button>
               </div>
+            )}
 
-              {/* Grid comparativo */}
-              <div className="grid grid-cols-2 gap-3 mt-6">
-                <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 flex flex-col justify-between">
-                  <span className="text-emerald-800 text-xs font-semibold flex items-center gap-1">
-                    <TrendingUp className="w-3 h-3 text-emerald-600" /> Receitas (Vendas)
-                  </span>
-                  <span className="text-emerald-700 font-black block text-sm mt-1">
-                    R$ {totalEntradas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-                <div className="p-3 bg-rose-50 rounded-xl border border-rose-100 flex flex-col justify-between">
-                  <span className="text-rose-800 text-xs font-semibold flex items-center gap-1">
-                    <TrendingDown className="w-3 h-3 text-rose-600" /> Despesas (Saídas)
-                  </span>
-                  <span className="text-rose-700 font-black block text-sm mt-1">
-                    - R$ {totalSaidas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-              </div>
-
-              {/* Progress bar MEI anual faturamento */}
-              <div className="mt-6 pt-6 border-t border-slate-100">
-                <div className="flex justify-between text-xs text-slate-400 mb-2 font-semibold">
-                  <span className="flex items-center gap-1.5"><Scale className="w-3.5 h-3.5 text-blue-500" /> Limite Faturamento MEI</span>
-                  <span className="font-bold text-slate-600">
-                    R$ {faturamentoBrutoTotal.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} / R$ 81.000
-                  </span>
-                </div>
-                <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
-                  <div
-                    style={{ width: `${porcentagemLimite}%` }}
-                    className={`h-full rounded-full transition-all duration-500 ${
-                      porcentagemLimite > 85 ? "bg-rose-500" : "bg-blue-600"
-                    }`}
-                  ></div>
-                </div>
-                <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
-                  Faturamento bruto acumulado de R$ {faturamentoBrutoTotal.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} no ano. Limite legal máximo fiscal estabelecido de R$ 81.000,00 anuais.
+            {/* HEADER DA DASHBOARD: TÍTULO & BOTÕES DE AÇÃO RÁPIDA MINIMALISTAS */}
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 pb-6 border-b border-slate-100">
+              <div>
+                <h1 className="text-3xl md:text-4xl font-display font-light text-slate-900 tracking-tight">
+                  Visão Geral
+                </h1>
+                <p className="text-xs md:text-sm text-slate-400 mt-1 font-medium">
+                  Acompanhamento financeiro em tempo real com simplicidade.
                 </p>
               </div>
-            </div>
-
-            {/* MEI WALLET INTEGRATION: CARTEIRA DIGITAL ASAAS */}
-            <div className="bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6 rounded-3xl shadow-xl border border-white/5 text-white relative overflow-hidden transition-all duration-300 hover:shadow-2xl hover:border-slate-800" id="asaas-wallet-card">
-              {/* Elementos Estéticos de Cartão Premium */}
-              <div className="absolute top-0 right-0 w-44 h-44 bg-gradient-to-br from-blue-500/10 to-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
               
-              {/* Detalhe do Chip de Cartão Digital */}
-              <div className="flex justify-between items-start mb-6 relative z-10">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    <span className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest block">CONTA BANCO DIGITAL MEI</span>
-                  </div>
-                  <h4 className="text-sm font-black text-slate-100 flex items-center gap-1">
-                    MEI Flow <span className="text-blue-400 font-light">Bank</span>
-                  </h4>
-                </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  onClick={() => setShowVendaModal(true)}
+                  className="px-4.5 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+                  id="btn-new-sale-clean"
+                >
+                  <Plus className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Registrar Venda</span>
+                </button>
                 
-                {/* Logo / Chip de Neobank */}
-                <div className="w-9 h-7 bg-gradient-to-r from-amber-400 to-yellow-500 rounded-lg opacity-80 border border-yellow-300/30 shadow-inner flex flex-col justify-between p-1.5">
-                  <div className="grid grid-cols-3 gap-0.5 h-full opacity-40">
-                    <div className="border border-slate-900/40"></div>
-                    <div className="border border-slate-900/40"></div>
-                    <div className="border border-slate-900/40"></div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Informação de Saldo */}
-              <div className="space-y-1 relative z-10">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] text-slate-400 uppercase tracking-wider font-extrabold flex items-center gap-1.5">
-                    Saldo disponível em conta
-                  </span>
-                  {asaasAccessToken && (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          const nextVal = !showAsaasBalance;
-                          setShowAsaasBalance(nextVal);
-                          localStorage.setItem("meiflow_show_asaas_balance", String(nextVal));
-                        }}
-                        className="p-1 hover:bg-white/5 rounded-lg text-slate-400 hover:text-white transition-all cursor-pointer"
-                        title={showAsaasBalance ? "Ocultar Saldo" : "Mostrar Saldo"}
-                        type="button"
-                      >
-                        {showAsaasBalance ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                      <button
-                        onClick={handleRefreshAsaasBalance}
-                        disabled={isLoadingAsaasBalance}
-                        className="p-1 hover:bg-white/5 rounded-lg text-slate-400 hover:text-white transition-all disabled:opacity-40"
-                        title="Atualizar Saldo"
-                        type="button"
-                      >
-                        <RefreshCw className={`w-3.5 h-3.5 ${isLoadingAsaasBalance ? "animate-spin" : ""}`} />
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex items-baseline gap-2 pt-1">
-                  {asaasAccessToken ? (
-                    <div className="flex items-baseline gap-1.5 w-full">
-                      <span className="text-sm font-bold text-slate-400 font-mono">R$</span>
-                      {isLoadingAsaasBalance ? (
-                        <span className="text-xl text-slate-500 font-mono animate-pulse">Sincronizando...</span>
-                      ) : showAsaasBalance ? (
-                        <h2 className="text-2xl font-black text-white font-mono tracking-tight leading-none">
-                          {asaasBalance !== null ? asaasBalance.toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "0,00"}
-                        </h2>
-                      ) : (
-                        <h2 className="text-2xl font-black text-slate-400 font-mono tracking-wide leading-none select-none">
-                          ••••••
-                        </h2>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="py-1">
-                      <p className="text-xs text-slate-400 leading-relaxed font-semibold">
-                        Sua Conta Digital Asaas não está ativada. Ative para gerenciar recebíveis nativos!
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Detalhes de Organização Bancária PJ */}
-              <div className="mt-6 pt-4 border-t border-white/5 flex justify-between items-center text-[10px] text-slate-500 font-mono relative z-10">
-                <div className="text-left">
-                  <span className="block text-slate-400 font-extrabold">Instituição 323</span>
-                  <span className="text-[9px]">Asaas I.P. S.A.</span>
-                </div>
-                <div className="text-right">
-                  <span className="block text-slate-400 font-extrabold">Agência 0001</span>
-                  <span className="text-[9px]">Conta Principal PJ</span>
-                </div>
-              </div>
-
-              {/* Botões de Ação estilo Banco Digital */}
-              <div className="mt-5 space-y-2 relative z-10">
                 <button
-                  onClick={() => setShowAsaasWalletModal(true)}
-                  className="w-full bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-500/10 transition-all cursor-pointer border border-transparent hover:scale-[1.01]"
+                  onClick={() => setShowDespesaModal(true)}
+                  className="px-4.5 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+                  id="btn-new-expense-clean"
                 >
-                  <Wallet className="w-3.5 h-3.5" />
-                  {asaasAccessToken ? "Gerenciar Carteira & Extrato" : "Ativar Minha Conta Digital"}
+                  <Minus className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Adicionar Despesa</span>
                 </button>
-              </div>
-            </div>
 
-            {/* BOTÕES DE AÇÃO RÁPIDA PRINCIPAIS */}
-            <div className="flex flex-col gap-3">
-              <button
-                onClick={() => setShowVendaModal(true)}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer text-sm"
-                id="btn-new-sale"
-              >
-                <Plus className="w-4 h-4" /> Registrar Nova Venda
-              </button>
-              
-              <button
-                onClick={() => setShowDespesaModal(true)}
-                className="w-full bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer text-sm shadow-xs"
-                id="btn-new-expense"
-              >
-                <Minus className="w-4 h-4 text-rose-500" /> Adicionar Despesa
-              </button>
-
-              <button
-                onClick={handleExportLivroCaixa}
-                className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3.5 rounded-xl text-xs flex items-center justify-center gap-2 border border-slate-200 transition-all shadow-xs"
-              >
-                <FileDown className="w-4 h-4 text-slate-500" /> Exportar Livro Caixa (CSV)
-              </button>
-            </div>
-
-            {/* NOVO: MONITOR DE CONEXÃO DO BANCO DE DADOS (VINCULADO AO ISOLAMENTO DA CONTA MEI) */}
-            <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 space-y-4">
-              <div className="flex items-center justify-between">
-                <h4 className="font-bold text-slate-930 text-xs uppercase tracking-wider text-slate-400">Persistência Fiscal</h4>
-                <div className={`px-2 py-0.5 rounded text-[10px] font-bold ${user ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"}`}>
-                  {user ? "CLOUD FIRESTORE" : "BANCO LOCAL"}
-                </div>
-              </div>
-              
-              <div className="text-xs text-slate-600 space-y-2 leading-relaxed">
-                {user ? (
-                  <p>
-                    Seus clientes e faturamento estão isolados com segurança na nuvem do Google Firebase vinculada ao seu login exclusivo: <strong className="font-semibold text-blue-600 text-[11px] block truncate">{user.email}</strong>. Outras contas não têm acesso aos seus dados.
-                  </p>
-                ) : (
-                  <p>
-                    Lançamentos guardados localmente no seu computador ou celular. Para habilitar o ambiente isolado multi-usuário em nuvem, clique no botão <strong>Acessar Nuvem</strong> acima.
-                  </p>
-                )}
-              </div>
-
-              <div className="pt-2 border-t border-slate-100">
-                <button
-                  onClick={() => setShowConfigGuide(true)}
-                  className="w-full py-2.5 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border border-slate-200/50"
-                  title="Veja o passo a passo para conectar seu Firebase"
-                >
-                  <Database className="w-3.5 h-3.5 text-slate-500" />
-                  <span>Guia de Conexão Firebase</span>
-                </button>
-              </div>
-            </div>
-
-            {/* CARD PARA DOWNLOAD DO APK COM MAIS DETALHES DE SEGURANÇA - MOVIDO PARA O RODAPÉ DO APP. MANTIDO COMENTADO ABAIXO: */}
-            {/*
-            <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 space-y-3">
-              <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider text-slate-400">Canal Seguro Android</h4>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                O arquivo APK é ideal para baixar direto em navegadores mobile de clientes ao anunciar seu domínio corporativo.
-              </p>
-              <div className="p-3 bg-slate-50 rounded-xl space-y-2 border border-slate-100">
-                <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                  <span>Verificado Contra Vírus</span>
-                </div>
-                <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                  <span>Compactação Otimizada</span>
-                </div>
-              </div>
-              <button
-                onClick={handleDownloadAPK}
-                className="w-full py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all"
-              >
-                <Download className="w-3.5 h-3.5" /> meiflow.apk (Apenas 4.2 MB)
-              </button>
-            </div>
-            */}
-
-          </section>
-
-          {/* PAINEL DIREITO: FILTROS + TABELA DE REGISTROS FINANCEIROS */}
-          <section className="col-span-12 lg:col-span-8 flex flex-col gap-6" id="dashboard-items">
-            
-            {/* CLIENTES RECENTES (AUTOCOMPLETE & MOCKED CARDS) */}
-            <div className="bg-white p-6 rounded-2xl shadow-xs border border-slate-200">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="text-slate-900 font-bold block">Faturamento e Clientes para Lançamento Rápido</h3>
-                  <p className="text-xs text-slate-400">Clique em qualquer cliente cadastrado para pré-preencher uma nova venda.</p>
-                </div>
                 <button
                   onClick={() => setShowClienteModal(true)}
-                  className="text-blue-600 hover:text-blue-800 text-xs font-bold flex items-center gap-1 hover:bg-blue-50 px-2 py-1 rounded transition-all"
+                  className="px-4.5 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
                 >
-                  <UserPlus className="w-3.5 h-3.5" /> Cadastrar Cliente
+                  <UserPlus className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Novo Cliente</span>
                 </button>
               </div>
+            </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {clientes.map((c) => {
+            {/* METRICAS PRINCIPAIS: APENAS DUAS GRANDES & CLARAS */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              
+              {/* CARD 1: FATURAMENTO TOTAL (RESUMO FINANCEIRO) */}
+              <div 
+                onClick={() => setCurrentView("financeiro")}
+                className="bg-white p-10 md:p-12 rounded-3xl border border-slate-200/50 shadow-xs flex flex-col justify-between cursor-pointer hover:border-blue-300 hover:shadow-md transition-all duration-300 transform hover:-translate-y-0.5"
+                title="Clique para ver o extrato financeiro detalhado"
+              >
+                <div className="space-y-4">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block flex items-center justify-between">
+                    <span>Faturamento Consolidado</span>
+                    <span className="text-blue-600 font-semibold text-[11px] normal-case">Ver Lançamentos &rarr;</span>
+                  </span>
+                  <h2 className="text-4xl sm:text-5xl lg:text-6xl font-display font-light text-slate-900 tracking-tight leading-none">
+                    R$ {totalEntradas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                  </h2>
+                </div>
+                
+                <div className="mt-10 pt-6 border-t border-slate-50 flex flex-wrap items-center gap-y-2 justify-between text-xs text-slate-400">
+                  <span className="flex items-center gap-1 bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full font-bold">
+                    <TrendingUp className="w-3.5 h-3.5" />
+                    Saldo Líquido Mensal: R$ {saldoMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                  </span>
+                  <span className="font-medium">
+                    {porcentagemLimite.toFixed(1)}% do limite legal anual de R$ 81k
+                  </span>
+                </div>
+              </div>
+
+              {/* CARD 2: QUANTIDADE DE CLIENTES */}
+              <div 
+                onClick={() => setCurrentView("clientes")}
+                className="bg-white p-10 md:p-12 rounded-3xl border border-slate-200/50 shadow-xs flex flex-col justify-between cursor-pointer hover:border-blue-300 hover:shadow-md transition-all duration-300 transform hover:-translate-y-0.5"
+                title="Clique para ver a lista de clientes cadastrados"
+              >
+                <div className="space-y-4">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block flex items-center justify-between">
+                    <span>Clientes Ativos</span>
+                    <span className="text-blue-600 font-semibold text-[11px] normal-case">Gerenciar Carteira &rarr;</span>
+                  </span>
+                  <h2 className="text-4xl sm:text-5xl lg:text-6xl font-display font-light text-slate-900 tracking-tight leading-none">
+                    {clientes.length} <span className="text-xl sm:text-2xl font-light text-slate-400 ml-1">parceiros</span>
+                  </h2>
+                </div>
+
+                <div className="mt-10 pt-6 border-t border-slate-50 flex items-center justify-between text-xs text-slate-400">
+                  <span className="font-medium">Relação de clientes cadastrados no sistema</span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setCurrentView("clientes");
+                    }}
+                    className="text-blue-600 hover:text-blue-800 font-semibold hover:underline flex items-center gap-0.5"
+                  >
+                    Ver Tudo &rarr;
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+            {/* CENTRAL DE CARTEIRA DIGITAL: BOTÃO DE DESTAQUE ELEGANTE & CENTRALIZADO */}
+            <div className="flex flex-col items-center justify-center p-12 bg-slate-50 rounded-3xl border border-slate-200/40 text-center space-y-4">
+              <div className="space-y-1">
+                <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">
+                  Conta de Recebíveis Neobanking
+                </span>
+                <p className="text-xs text-slate-500 max-w-md">
+                  Gerencie seus saldos, simule saques via PIX e emita links de cobrança aos seus clientes cadastrados.
+                </p>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  onClick={() => {
+                    if (planType === "free") {
+                      setShowUpgradeModal(true);
+                    } else {
+                      setCurrentView("carteira");
+                    }
+                  }}
+                  className="group relative px-10 py-5 bg-slate-950 hover:bg-slate-900 text-white rounded-full font-bold text-sm tracking-wide shadow-xl shadow-slate-900/15 hover:shadow-slate-900/25 transition-all transform hover:-translate-y-0.5 active:translate-y-0 cursor-pointer flex items-center gap-3"
+                >
+                  <Wallet className="w-4.5 h-4.5 text-slate-300 group-hover:scale-110 transition-all duration-300" />
+                  <span>Acessar Carteira Digital & Cobranças {planType === "free" ? "🔒" : ""}</span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* VIEW: CLIENTES */}
+        {currentView === "clientes" && (
+          <div className="space-y-8 animate-fade-in text-left">
+            <div className="flex items-center gap-2 mb-2">
+              <button 
+                onClick={() => setCurrentView("home")}
+                className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-950 transition-all bg-white px-4 py-2 border border-slate-200 rounded-xl shadow-xs cursor-pointer"
+              >
+                <span>&larr; Voltar para o Início (Home)</span>
+              </button>
+            </div>
+
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 pb-6 border-b border-slate-100">
+              <div>
+                <h1 className="text-3xl md:text-4xl font-display font-light text-slate-900 tracking-tight">
+                  Lista de Clientes Cadastrados
+                </h1>
+                <p className="text-xs md:text-sm text-slate-400 mt-1 font-medium">
+                  Contatos e documentos para automação de boletos, NFS-e e extratos de cobrança.
+                </p>
+              </div>
+              
+              <div>
+                <button
+                  onClick={() => setShowClienteModal(true)}
+                  className="px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4 text-blue-100" />
+                  <span>Adicionar Novo Cliente</span>
+                </button>
+              </div>
+            </div>
+
+            {clientes.length === 0 ? (
+              <div className="text-center py-16 bg-white rounded-3xl border border-slate-200/50 shadow-xs p-8 space-y-4">
+                <p className="text-sm text-slate-400 italic">Nenhum cliente cadastrado no momento.</p>
+                <div className="pt-2">
+                  <button 
+                    onClick={() => setShowClienteModal(true)}
+                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-750 text-white font-bold text-xs rounded-xl cursor-pointer"
+                  >
+                    Cadastrar Primeiro Cliente
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {clientes.map(c => {
                   const initials = c.nome.split(" ").map(n => n[0]).slice(0, 2).join("").toUpperCase();
                   return (
-                    <div
-                      key={c.id}
-                      className="p-3 border border-slate-100 bg-slate-50 hover:bg-blue-50/40 hover:border-blue-200 rounded-xl transition-all cursor-pointer flex flex-col items-center gap-1.5 group text-center"
-                      onClick={() => {
-                        setVendaClienteId(c.id);
-                        setVendaDescricao(`Prestação de serviços para ${c.nome}`);
-                        setShowVendaModal(true);
-                      }}
-                      title={`Clique para registrar nova venda rápida para ${c.nome}`}
-                    >
-                      <div className="w-9 h-9 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded-full flex items-center justify-center font-bold text-xs tracking-wider transition-all">
-                        {initials}
+                    <div key={c.id} className="bg-white p-6 rounded-3xl border border-slate-200/60 hover:border-blue-200 hover:shadow-md transition-all duration-300 flex flex-col justify-between gap-4 group relative overflow-hidden">
+                      <div className="absolute top-0 right-0 w-24 h-24 bg-blue-50/20 rounded-full blur-xl pointer-events-none"></div>
+                      
+                      <div className="flex items-start gap-4">
+                        <div className="w-12 h-12 bg-blue-50 text-blue-600 font-extrabold text-sm rounded-2xl flex items-center justify-center shrink-0 group-hover:bg-blue-600 group-hover:text-white transition-all duration-300 shadow-inner">
+                          {initials}
+                        </div>
+                        <div className="text-left space-y-1 min-w-0">
+                          <h3 className="font-semibold text-slate-800 text-base truncate pr-2" title={c.nome}>
+                            {c.nome}
+                          </h3>
+                          <span className="text-xs text-slate-400 font-mono block">
+                            {c.documento || "Sem CNPJ/CPF"}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex flex-col items-center">
-                        <span className="text-xs font-bold text-slate-800 max-w-[125px] truncate">{c.nome}</span>
-                        <span className="text-[9px] text-slate-400 font-mono mt-0.5 truncate max-w-[110px]">{c.documento || "Sem CNPJ/CPF"}</span>
+
+                      <div className="space-y-2 border-t border-slate-50 pt-4 text-xs text-slate-500">
+                        {c.email && (
+                          <div className="flex items-center gap-2 truncate">
+                            <span className="text-slate-400 font-medium">E-mail:</span>
+                            <span className="text-slate-700 font-semibold truncate hover:underline" title={c.email}>{c.email}</span>
+                          </div>
+                        )}
+                        {c.telefone && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-slate-400 font-medium font-sans">Tel:</span>
+                            <span className="text-slate-700 font-semibold">{c.telefone}</span>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-400 font-medium">Desde:</span>
+                          <span className="text-slate-700 font-mono">{c.createdAt ? new Date(c.createdAt).toLocaleDateString("pt-BR") : "Não informado"}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-50">
+                        <button
+                          onClick={() => {
+                            setVendaClienteId(c.id);
+                            setVendaDescricao(`Prestação de serviços para ${c.nome}`);
+                            setShowVendaModal(true);
+                          }}
+                          className="flex items-center justify-center gap-1.5 px-3 py-2 bg-slate-50 hover:bg-blue-600 hover:text-white border border-slate-200 hover:border-transparent text-slate-700 font-bold text-[11px] rounded-xl transition-all flex-1 cursor-pointer"
+                          title={`Lançar venda direta para ${c.nome}`}
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Nova Venda</span>
+                        </button>
+                        
+                        <button
+                          onClick={(e) => handleDeleteCliente(c.id, e)}
+                          className="p-2 border border-slate-200 hover:bg-rose-50 hover:border-rose-100 text-slate-400 hover:text-rose-600 rounded-xl transition-all cursor-pointer"
+                          title="Excluir cadastro do cliente"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
                   );
                 })}
               </div>
+            )}
+          </div>
+        )}
+
+        {/* VIEW: FINANCEIRO (LIVRO CAIXA COMPLETO) */}
+        {currentView === "financeiro" && (
+          <div className="space-y-8 animate-fade-in text-left">
+            <div className="flex items-center gap-2 mb-2">
+              <button 
+                onClick={() => setCurrentView("home")}
+                className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-950 transition-all bg-white px-4 py-2 border border-slate-200 rounded-xl shadow-xs cursor-pointer"
+              >
+                <span>&larr; Voltar para o Início (Home)</span>
+              </button>
             </div>
 
-            {/* LISTAGEM DE MOVIMENTAÇÕES DIVERSAS */}
-            <div className="bg-white rounded-2xl shadow-xs border border-slate-200 flex flex-col overflow-hidden">
-              <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50/50">
-                <h3 className="text-slate-900 font-extrabold text-base">Últimas Movimentações Financeiras</h3>
+            <div className="pb-2 border-b border-slate-100">
+              <h1 className="text-3xl md:text-4xl font-display font-light text-slate-900 tracking-tight">
+                Livro Caixa & Lançamentos
+              </h1>
+              <p className="text-xs md:text-sm text-slate-400 mt-1 font-medium">
+                Controle simplificado oficial do seu MEI para conformidade anual do faturamento acumulado.
+              </p>
+            </div>
+
+            {/* SEÇÃO DA TABELA REAPROVEITADA */}
+            <div className="bg-white rounded-3xl border border-slate-200/50 shadow-xs overflow-hidden pt-6">
+              <div className="p-8 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-display font-medium text-slate-900">Histórico de Movimentações</h3>
+                  <p className="text-xs text-slate-400 mt-1">Lançamentos de receitas e despesas registradas.</p>
+                </div>
                 
-                {/* Busca e filtros integrados */}
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="relative">
                     <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
-                      placeholder="Buscar movimentação..."
+                      placeholder="Buscar..."
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      className="bg-white border border-slate-200 rounded-xl py-1.5 pl-9 pr-4 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 w-full sm:w-48 placeholder-slate-400"
+                      className="bg-slate-50 border border-slate-200/80 rounded-xl py-1.5 pl-9 pr-4 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-slate-400 w-full sm:w-48 placeholder-slate-400 transition-all focus:bg-white"
                     />
                   </div>
 
@@ -1490,40 +1770,47 @@ ${meiName}`;
                     <button
                       onClick={() => setFilterTipo("entrada")}
                       className={`px-3 py-1.5 rounded-md transition-all ${
-                        filterTipo === "entrada" ? "bg-white text-emerald-700 shadow-xs" : "hover:text-slate-900"
+                        filterTipo === "entrada" ? "bg-white text-slate-900 shadow-xs" : "hover:text-slate-900"
                       }`}
                     >
-                      Entradas
+                      Receitas
                     </button>
                     <button
                       onClick={() => setFilterTipo("saida")}
                       className={`px-3 py-1.5 rounded-md transition-all ${
-                        filterTipo === "saida" ? "bg-white text-rose-700 shadow-xs" : "hover:text-slate-900"
+                        filterTipo === "saida" ? "bg-white text-slate-900 shadow-xs" : "hover:text-slate-900"
                       }`}
                     >
                       Saídas
                     </button>
                   </div>
+
+                  <button
+                    onClick={handleExportPDF}
+                    className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-1.5 border border-slate-200 transition-all shadow-xs"
+                  >
+                    <FileDown className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Baixar PDF</span>
+                  </button>
                 </div>
               </div>
 
-              {/* Tabela de Transações com os botões de Emissão de Nota Fiscal, Imprimir Recibo e Baixar PDF ativos */}
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-slate-50/30 text-[10px] text-slate-400 uppercase tracking-widest border-b border-slate-100">
-                      <th className="px-5 py-4 font-bold">Data</th>
-                      <th className="px-5 py-4 font-bold">Lançamento / Categoria</th>
-                      <th className="px-5 py-4 font-bold">Cliente Destinatário</th>
-                      <th className="px-5 py-4 font-bold text-right">Valor</th>
-                      <th className="px-5 py-4 font-bold text-center">Opções Fiscais & Comprovantes</th>
+                    <tr className="bg-slate-50/20 text-[10px] text-slate-400 uppercase tracking-widest border-b border-slate-100">
+                      <th className="px-8 py-4 font-bold">Data</th>
+                      <th className="px-8 py-4 font-bold">Lançamento / Categoria</th>
+                      <th className="px-8 py-4 font-bold">Cliente Destinatário</th>
+                      <th className="px-8 py-4 font-bold text-right">Valor</th>
+                      <th className="px-8 py-4 text-center">Ações</th>
                     </tr>
                   </thead>
                   <tbody className="text-sm text-slate-600 divide-y divide-slate-100">
                     {filteredTransactions.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="text-center py-10 text-slate-400 italic">
-                          Nenhum registro correspondente foi encontrado com os dados inseridos.
+                        <td colSpan={5} className="text-center py-12 text-slate-400 italic">
+                          Nenhum lançamento foi encontrado.
                         </td>
                       </tr>
                     ) : (
@@ -1532,84 +1819,81 @@ ${meiName}`;
                         return (
                           <tr
                             key={tx.id}
-                            className="hover:bg-slate-50/50 transition-all group cursor-pointer"
+                            className="hover:bg-slate-50/30 transition-all group cursor-pointer"
                             onClick={() => setSelectedReceipt(tx)}
-                            title="Clique para abrir detalhes da transação"
                           >
-                            <td className="px-5 py-4 whitespace-nowrap font-medium text-xs font-mono text-slate-500">
+                            <td className="px-8 py-5 whitespace-nowrap text-xs font-mono text-slate-400">
                               {tx.data}
                             </td>
-                            <td className="px-5 py-4">
+                            <td className="px-8 py-5">
                               <div className="flex flex-col">
-                                <span className="font-bold text-slate-800 text-sm group-hover:text-blue-600 transition-all leading-snug">
+                                <span className="font-semibold text-slate-800 text-sm group-hover:text-blue-600 transition-all leading-snug">
                                   {tx.descricao}
                                 </span>
-                                <span className="text-[10px] bg-slate-100 text-slate-500 px-2.5 py-0.5 rounded-full border border-slate-200 mt-1 inline-block w-max font-medium">
+                                <span className="text-[10px] text-slate-400 font-medium mt-1">
                                   {tx.categoria}
                                 </span>
                               </div>
                             </td>
-                            <td className="px-5 py-4">
+                            <td className="px-8 py-5">
                               {isEnt ? (
                                 <div className="flex flex-col">
-                                  <span className="text-slate-700 font-semibold">{tx.clienteNome}</span>
+                                  <span className="text-slate-700 font-medium">{tx.clienteNome}</span>
                                   {tx.clienteDocumento && (
                                     <span className="text-[10px] text-slate-400 font-mono mt-0.5">{tx.clienteDocumento}</span>
                                   )}
                                 </div>
                               ) : (
-                                <span className="text-slate-400 italic font-mono text-xs">Despesa Interna</span>
+                                <span className="text-slate-400 italic text-xs">Despesa Geral</span>
                               )}
                             </td>
-                            <td className="px-5 py-4 text-right">
-                              <span className={`font-black text-sm ${isEnt ? "text-emerald-600" : "text-rose-600"}`}>
+                            <td className="px-8 py-5 text-right whitespace-nowrap">
+                              <span className={`font-semibold text-sm ${isEnt ? "text-slate-900" : "text-rose-500"}`}>
                                 {isEnt ? "+" : "-"} R$ {tx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                               </span>
                             </td>
-                            <td className="px-5 py-4" onClick={(e) => e.stopPropagation()}>
-                              <div className="flex items-center justify-center gap-2">
-                                
-                                {/* 1. IMPRIMIR RECIBO */}
+                            <td className="px-8 py-5" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center justify-center gap-1.5">
                                 <button
                                   onClick={() => setSelectedReceipt(tx)}
-                                  className="py-1.5 px-2 bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-700 rounded-lg transition-all text-xs font-semibold flex items-center gap-1"
-                                  title="Visualizar e Imprimir Recibo Completo"
+                                  className="p-1.5 hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded-lg transition-all"
+                                  title="Visualizar Recibo"
                                 >
-                                  <Receipt className="w-3.5 h-3.5" />
-                                  <span className="hidden xl:inline">Recibo</span>
+                                  <Receipt className="w-4 h-4" />
                                 </button>
 
-                                {/* 2. GERAR PDF */}
                                 <button
                                   onClick={(e) => handleDownloadPDF(tx, e)}
-                                  className="py-1.5 px-2 bg-slate-100 hover:bg-slate-800 hover:text-white text-slate-700 rounded-lg transition-all text-xs font-semibold flex items-center gap-1"
-                                  title="Baixar Comprovante em PDF/Texto"
+                                  className="p-1.5 hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded-lg transition-all"
+                                  title="Baixar PDF"
                                 >
-                                  <FileDown className="w-3.5 h-3.5" />
-                                  <span className="hidden xl:inline">Exportar</span>
+                                  <FileDown className="w-4 h-4" />
                                 </button>
 
-                                {/* 3. NOTA FISCAL (XML NFS-e) - APENAS RECEITAS */}
                                 {isEnt && (
                                   <button
-                                    onClick={(e) => handleDownloadNFSe(tx, e)}
-                                    className="py-1.5 px-2 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-700 rounded-lg transition-all text-xs font-semibold flex items-center gap-1 border border-blue-100 hover:border-transparent"
-                                    title="Emitir Nota Fiscal Eletrônica Nacional do MEI (NFSe XML)"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (planType === "free") {
+                                        setShowUpgradeModal(true);
+                                      } else {
+                                        handleDownloadNFSe(tx, e);
+                                      }
+                                    }}
+                                    className="px-2 py-1 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-600 border border-blue-100 hover:border-transparent rounded-lg transition-all text-[11px] font-bold flex items-center gap-1"
+                                    title="Gerar Nota NFS-e"
                                   >
-                                    <FileCode className="w-3.5 h-3.5" />
-                                    <span>NFS-e</span>
+                                    <span>NFS-e</span> {planType === "free" ? "🔒" : ""}
                                   </button>
                                 )}
 
-                                {/* DELETAR */}
                                 <button
                                   onClick={(e) => handleDeleteTransacao(tx.id, e)}
-                                  className="p-1.5 bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-600 rounded-lg transition-all shrink-0"
+                                  className="p-1.5 hover:bg-rose-50 hover:text-rose-600 text-slate-400 rounded-lg transition-all"
                                   title="Excluir Lançamento"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
-
                               </div>
                             </td>
                           </tr>
@@ -1620,15 +1904,50 @@ ${meiName}`;
                 </table>
               </div>
 
-              <div className="p-4 bg-slate-50 border-t border-slate-100 rounded-b-2xl flex flex-col sm:flex-row items-center justify-between gap-4 text-xs font-semibold text-slate-400 text-center">
-                <span>Visualizando {filteredTransactions.length} lançamentos fiscais de {transacoes.length} no total</span>
-                <span className="text-emerald-700">✓ Sincronização Local Rígida Ativa</span>
+              <div className="p-5 bg-slate-50 border-t border-slate-100 rounded-b-3xl flex flex-col sm:flex-row items-center justify-between gap-4 text-xs font-semibold text-slate-400 text-center">
+                <span>Visualizando {filteredTransactions.length} lançamentos de {transacoes.length} no total</span>
+                <span className="text-slate-400 font-medium">✓ Sincronização Ativa</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW: CARTEIRA DIGITAL */}
+        {currentView === "carteira" && (
+          <div className="space-y-8 animate-fade-in text-left">
+            <div className="flex items-center gap-2 mb-2">
+              <button 
+                onClick={() => setCurrentView("home")}
+                className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-950 transition-all bg-white px-4 py-2 border border-slate-200 rounded-xl shadow-xs cursor-pointer"
+              >
+                <span>&larr; Voltar para o Início (Home)</span>
+              </button>
+            </div>
+
+            <div className="pb-2 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <h1 className="text-3xl md:text-4xl font-display font-light text-slate-900 tracking-tight">
+                  Carteira Digital & Recebíveis
+                </h1>
+                <p className="text-xs md:text-sm text-slate-400 mt-1 font-medium">
+                  Gateway real integrado do Asaas para cobrança automatizada por boleto, cartão ou PIX e depósitos.
+                </p>
               </div>
             </div>
 
-          </section>
-
-        </div>
+            <div className="w-full flex justify-center py-4">
+              <AsaasWalletModal
+                userId={userId}
+                transactions={transacoes}
+                currentAsaasToken={asaasAccessToken}
+                onSaveAsaasToken={handleSaveAsaasToken}
+                onAddTransaction={handleAsaasAddTransaction}
+                onClose={() => setCurrentView("home")}
+                isInline={true}
+              />
+            </div>
+          </div>
+        )}
 
       </main>
 
@@ -2615,6 +2934,8 @@ async function processarEmissao() {
           meiCnpj={cnpjPrestador}
           meiInscricao={inscricaoMunicipal}
           meiTelefone={telefonePrestador}
+          planType={planType}
+          companyLogo={companyLogo || ""}
           onClose={() => setSelectedReceipt(null)}
         />
       )}
@@ -2626,8 +2947,11 @@ async function processarEmissao() {
           currentCnpj={cnpjPrestador}
           currentInscricao={inscricaoMunicipal}
           currentTelefone={telefonePrestador}
+          planType={planType}
+          companyLogo={companyLogo || ""}
           onClose={() => setShowMeiConfigModal(false)}
           onSave={handleSaveMeiProfile}
+          onTriggerUpgrade={() => setShowUpgradeModal(true)}
         />
       )}
 
@@ -2639,7 +2963,18 @@ async function processarEmissao() {
           currentAsaasToken={asaasAccessToken}
           onSaveAsaasToken={handleSaveAsaasToken}
           onAddTransaction={handleAsaasAddTransaction}
+          planType={planType}
+          onTriggerUpgrade={() => setShowUpgradeModal(true)}
           onClose={() => setShowAsaasWalletModal(false)}
+        />
+      )}
+
+      {/* MODAL DE ASSINATURA/UPGRADE PREMIUM */}
+      {showUpgradeModal && (
+        <UpgradeModal
+          isOpen={showUpgradeModal}
+          onClose={() => setShowUpgradeModal(false)}
+          onUpgradeSuccess={handleUpgradeSuccess}
         />
       )}
 

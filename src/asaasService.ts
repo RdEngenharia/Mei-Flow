@@ -175,3 +175,70 @@ export async function realizarTransferenciaPixAsaas(
     };
   }
 }
+
+/**
+ * Interface que representa o payload para criação de uma cobrança Pix/Boleto ou Carnê de Cobrança
+ */
+export interface AsaasCobrancaPayload {
+  customerName: string;
+  customerCpfCnpj: string;
+  customerEmail?: string;
+  value: number;
+  dueDate: string; // Formato YYYY-MM-DD
+  isInstallment: boolean;
+  installmentCount?: number;
+  description?: string;
+}
+
+/**
+ * Resposta retornada pelo proxy de emissão de cobranças do Asaas
+ */
+export interface AsaasCobrancaResponse {
+  success: boolean;
+  id?: string;
+  invoiceUrl?: string;
+  bankSlipUrl?: string;
+  barCode?: string;
+  pixQrCode?: {
+    encodedImage: string;
+    payload: string;
+  };
+  installmentId?: string;
+  mensagem?: string;
+  raw?: any;
+}
+
+/**
+ * 3. EMISSÃO DE LANÇAMENTO DE COBRANÇA (Boleto Único ou Carnê Parcelado)
+ * 
+ * Envia as informações do pagador e da cobrança ao Proxy seguro de backend.
+ */
+export async function criarCobrancaAsaas(
+  payload: AsaasCobrancaPayload,
+  accessToken?: string
+): Promise<AsaasCobrancaResponse> {
+  try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json"
+    };
+    if (accessToken) {
+      headers["access_token"] = accessToken;
+    }
+
+    const response = await fetch("/api/asaas/cobranca", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json();
+    return data;
+  } catch (error: any) {
+    console.error("Erro na requisição de cobrança Asaas:", error);
+    return {
+      success: false,
+      mensagem: error.message || "Exceção inesperada de conexão com o servidor."
+    };
+  }
+}
+

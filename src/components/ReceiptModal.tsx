@@ -6,6 +6,8 @@
 import React from "react";
 import { X, Printer, Receipt, FileText, CheckCircle2, Download } from "lucide-react";
 import { Transacao } from "../types";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 
 interface ReceiptModalProps {
   transaction: Transacao | null;
@@ -14,6 +16,8 @@ interface ReceiptModalProps {
   meiCnpj?: string;
   meiInscricao?: string;
   meiTelefone?: string;
+  planType?: "free" | "premium";
+  companyLogo?: string;
   onClose: () => void;
 }
 
@@ -24,6 +28,8 @@ export default function ReceiptModal({
   meiCnpj = "",
   meiInscricao = "",
   meiTelefone = "",
+  planType = "free",
+  companyLogo = "",
   onClose,
 }: ReceiptModalProps) {
   if (!transaction) return null;
@@ -37,43 +43,161 @@ export default function ReceiptModal({
   };
 
   const handleDownload = () => {
-    const isEntrada = transaction.tipo === "entrada";
-    const receiptText = `==========================================================
-             COMPROVANTE DE OPERAÇÃO - MEI FLOW
-==========================================================
-EMITENTE / EMISSOR MEI (PRESTADOR DO SERVIÇO):
-Nome/Razão: ${meiName}
-CNPJ: ${meiCnpj || "Não cadastrado"}
-${meiInscricao ? `Inscrição Municipal: ${meiInscricao}` : ""}
-${meiTelefone ? `Telefone: ${meiTelefone}` : ""}
-Registro ID: ${meiUid}
+    try {
+      const doc = new jsPDF();
+      const isEntrada = transaction.tipo === "entrada";
 
-DADOS DA TRANSAÇÃO:
-Lançamento ID: ${transaction.id}
-Tipo: ${isEntrada ? "Receita / Prestação de Serviço (ENTRADA)" : "Registro de Despesa (SAÍDA)"}
-Data: ${transaction.data}
-Valor Registrado: R$ ${transaction.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-Descrição/Histórico: ${transaction.descricao}
-Categoria Fiscal: ${transaction.categoria}
+      // Header Banner
+      doc.setFillColor(15, 23, 42); // slate-900
+      doc.rect(0, 0, 210, 38, "F");
 
-${isEntrada && transaction.clienteNome ? `DADOS DO CLIENTE TOMADOR:
-Nome/Razão Social: ${transaction.clienteNome}
-${transaction.clienteDocumento ? `CPF/CNPJ Tomador: ${transaction.clienteDocumento}` : ""}` : ""}
+      // App Title or Custom Premium Logo
+      doc.setTextColor(255, 255, 255);
+      if (planType === "premium" && companyLogo) {
+        try {
+          doc.addImage(companyLogo, "PNG", 15, 4, 30, 30);
+        } catch (e) {
+          console.error("Erro ao desenhar logotipo no PDF, fallback para texto:", e);
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(22);
+          doc.text("MEI Flow", 15, 22);
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(9);
+          doc.text("Controle Tributário & Serviços de Apoio ao MEI", 15, 29);
+        }
+      } else {
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(22);
+        doc.text("MEI Flow", 15, 22);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.text("Controle Tributário & Serviços de Apoio ao MEI", 15, 29);
+      }
 
-==========================================================
-Este documento atesta a sincronização fiscal do lançamento financeiro 
-para relatórios fiscais do MEI.
-Data de Geração: ${new Date().toLocaleString("pt-BR")}
-Sistema MEI Flow - Gestão Inteligente
-==========================================================`;
+      // Sub-heading right-aligned
+      doc.setFontSize(8.5);
+      doc.setTextColor(203, 213, 225); // slate-300
+      doc.text(`Identificação: ${meiUid.substring(0, 16)}`, 140, 18);
+      doc.text(`Emissão: ${new Date().toLocaleDateString("pt-BR")} ${new Date().toLocaleTimeString("pt-BR")}`, 140, 24);
 
-    const blob = new Blob([receiptText], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `comprovante_mei_flow_${transaction.id}.txt`;
-    link.click();
-    URL.revokeObjectURL(url);
+      // Centered Title
+      doc.setTextColor(15, 23, 42);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(14);
+      doc.text("COMPROVANTE DE OPERAÇÃO - MEI FLOW", 105, 50, { align: "center" });
+
+      // Clean metadata table/rows
+      // 1. BLOC EMITENTE
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "bold");
+      doc.text("1. DADOS DO EMITENTE MEI", 15, 62);
+      
+      doc.setDrawColor(226, 232, 240); // slate-200
+      doc.line(15, 64, 195, 64);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9.5);
+      doc.text(`Nome/Razão Social: ${meiName}`, 15, 71);
+      doc.text(`CNPJ Emitente: ${meiCnpj || "Não cadastrado"}`, 15, 77);
+      if (meiInscricao) {
+        doc.text(`Inscrição Municipal: ${meiInscricao}`, 15, 83);
+      }
+      if (meiTelefone) {
+        doc.text(`Telefone de Contato: ${meiTelefone}`, 115, 77);
+      }
+
+      // 2. BLOC TRANSAÇÃO
+      const startTransacaoy = meiInscricao ? 93 : 87;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(11);
+      doc.text("2. INFORMAÇÕES DA TRANSAÇÃO", 15, startTransacaoy);
+      doc.line(15, startTransacaoy + 2, 195, startTransacaoy + 2);
+
+      const tableRows = [
+        ["Identificador", transaction.id],
+        ["Fluxo Financeiro", isEntrada ? "ENTRADA (Receita do MEI)" : "SAÍDA (Despesa Operacional)"],
+        ["Data da Operação", transaction.data],
+        ["Descrição / Item", transaction.descricao],
+        ["Categoria", transaction.categoria],
+        ["Valor Consolidado", `R$ ${transaction.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`]
+      ];
+
+      autoTable(doc, {
+        startY: startTransacaoy + 5,
+        margin: { left: 15, right: 15 },
+        head: [["Campo / Parâmetro", "Informação Registrada"]],
+        body: tableRows,
+        theme: "striped",
+        styles: {
+          fontSize: 8.5,
+          cellPadding: 3.5,
+        },
+        headStyles: {
+          fillColor: [15, 23, 42], // slate-900
+          textColor: 255,
+        },
+        columnStyles: {
+          0: { fontStyle: "bold", cellWidth: 50 },
+        }
+      });
+
+      let currentY = (doc as any).lastAutoTable.finalY + 12;
+
+      // 3. BLOC CLIENTE TOMADOR (Somente se for Entrada e tiver dados do cliente)
+      if (isEntrada && transaction.clienteNome) {
+        if (currentY > 240) {
+          doc.addPage();
+          currentY = 20;
+        }
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(11);
+        doc.text("3. DADOS DO CLIENTE TOMADOR", 15, currentY);
+        doc.line(15, currentY + 2, 195, currentY + 2);
+
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9.5);
+        doc.text(`Nome / Razão Social: ${transaction.clienteNome}`, 15, currentY + 9);
+        if (transaction.clienteDocumento) {
+          doc.text(`Documento (CPF/CNPJ): ${transaction.clienteDocumento}`, 15, currentY + 15);
+        }
+        currentY += 22;
+      }
+
+      // Check footer overflow
+      if (currentY > 230) {
+        doc.addPage();
+        currentY = 20;
+      }
+
+      // Financial highlights box
+      doc.setFillColor(248, 250, 252); // slate-50
+      doc.rect(15, currentY, 180, 18, "F");
+      doc.setDrawColor(14, 165, 233); // sky-500
+      doc.line(15, currentY, 15, currentY + 18);
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(15, 23, 42);
+      doc.text("VALOR TOTAL DECLARADO:", 20, currentY + 10.5);
+      
+      doc.setFontSize(13);
+      doc.setTextColor(isEntrada ? "#10b981" : "#ef4444"); // emerald or red
+      doc.text(`R$ ${transaction.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 125, currentY + 11.5);
+
+      // Fiscal disclaimer bottom
+      doc.setTextColor(148, 163, 184); // slate-400
+      doc.setFont("helvetica", "italic");
+      doc.setFontSize(8);
+      
+      const textY = currentY + 28;
+      doc.text("Este recibo serve de lastro documental para fins do preenchimento obrigatório do Relatório", 15, textY);
+      doc.text("Mensal de Receitas Brutas, conforme diretivas do Art. 26 da Lei Complementar nº 123/2006.", 15, textY + 4);
+      
+      doc.save(`comprovante_mei_flow_${transaction.id}.pdf`);
+    } catch (err) {
+      console.error("Erro ao gerar PDF:", err);
+    }
   };
 
   const isEntrada = transaction.tipo === "entrada";
@@ -119,9 +243,15 @@ Sistema MEI Flow - Gestão Inteligente
           <div className="border border-dashed border-slate-300 rounded-xl p-6 bg-slate-50/50 space-y-6">
             {/* Header do Recibo */}
             <div className="text-center pb-6 border-b border-slate-200">
-              <div className="inline-flex w-12 h-12 bg-blue-600 rounded-xl items-center justify-center text-white font-bold text-xl shadow mb-2">
-                M
-              </div>
+              {planType === "premium" && companyLogo ? (
+                <div className="inline-flex items-center justify-center mb-2 bg-white p-1 rounded-xl border border-slate-200 shadow-xs">
+                  <img src={companyLogo} alt="Logo" className="h-14 w-auto object-contain rounded-lg max-w-[150px]" />
+                </div>
+              ) : (
+                <div className="inline-flex w-12 h-12 bg-blue-600 rounded-xl items-center justify-center text-white font-bold text-xl shadow mb-2">
+                  M
+                </div>
+              )}
               <h2 className="text-lg font-bold text-slate-900 uppercase tracking-tight">
                 {meiName}
               </h2>
@@ -211,9 +341,9 @@ Sistema MEI Flow - Gestão Inteligente
           
           <button
             onClick={handleDownload}
-            className="flex-1 sm:flex-initial bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all text-xs shadow-md cursor-pointer"
+            className="flex-1 sm:flex-initial bg-slate-900 hover:bg-slate-800 text-white font-bold py-2 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all text-xs shadow-md cursor-pointer"
           >
-            <Download className="w-4 h-4" /> Baixar Comprovante (.txt)
+            <Download className="w-4 h-4" /> Baixar Comprovante (PDF)
           </button>
 
           <button

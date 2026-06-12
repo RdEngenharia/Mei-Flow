@@ -6,8 +6,11 @@ interface MeiConfigModalProps {
   currentCnpj: string;
   currentInscricao: string;
   currentTelefone: string;
+  planType: "free" | "premium";
+  companyLogo: string;
   onClose: () => void;
-  onSave: (name: string, cnpj: string, inscricao: string, telefone: string) => Promise<void>;
+  onSave: (name: string, cnpj: string, inscricao: string, telefone: string, logo?: string) => Promise<void>;
+  onTriggerUpgrade: () => void;
 }
 
 export default function MeiConfigModal({
@@ -15,19 +18,40 @@ export default function MeiConfigModal({
   currentCnpj,
   currentInscricao,
   currentTelefone,
+  planType,
+  companyLogo,
   onClose,
   onSave,
+  onTriggerUpgrade,
 }: MeiConfigModalProps) {
   const [name, setName] = useState(currentName);
   const [cnpj, setCnpj] = useState(currentCnpj);
   const [inscricao, setInscricao] = useState(currentInscricao);
   const [telefone, setTelefone] = useState(currentTelefone);
+  const [logoBase64, setLogoBase64] = useState(companyLogo);
   const [loading, setLoading] = useState(false);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        alert("A imagem de logo deve possuir menos de 2 MB.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === "string") {
+          setLogoBase64(reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    await onSave(name, cnpj, inscricao, telefone);
+    await onSave(name, cnpj, inscricao, telefone, logoBase64);
     setLoading(false);
   };
 
@@ -106,6 +130,57 @@ export default function MeiConfigModal({
               placeholder="Ex: (11) 99999-9999"
               className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white font-mono"
             />
+          </div>
+
+          {/* LOGOTIPO DA EMPRESA */}
+          <div className="pt-2 border-t border-slate-100">
+            <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1 flex items-center justify-between">
+              <span>Logotipo da Empresa {planType === "free" ? "🔒" : ""}</span>
+              {planType === "free" && (
+                <span className="text-[8px] text-blue-600 font-bold lowercase bg-blue-50 px-1.5 py-0.5 rounded-full">premium</span>
+              )}
+            </label>
+            
+            {planType === "free" ? (
+              <div 
+                onClick={onTriggerUpgrade}
+                className="w-full bg-slate-50 border border-dashed border-slate-200 text-slate-400 rounded-xl py-3 px-3 text-center text-xs cursor-pointer hover:bg-blue-50/50 hover:border-blue-200 transition-all flex flex-col items-center gap-1"
+                id="logo-upload-locked-trigger"
+              >
+                <div className="font-bold text-xs text-slate-600">🔒 Configurar Logo Personalizada</div>
+                <div className="text-[9px] text-slate-400">Exclusivo para usuários Premium</div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {logoBase64 ? (
+                  <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 p-2.5 rounded-xl">
+                    <img src={logoBase64} alt="Logotipo" className="h-10 w-10 object-contain rounded-md bg-white border border-slate-100" />
+                    <div className="flex-1 min-w-0 text-left">
+                      <p className="text-[10px] text-slate-400 truncate font-semibold">Logo Configurada</p>
+                      <button 
+                        type="button" 
+                        onClick={() => setLogoBase64("")}
+                        className="text-[9px] text-rose-500 font-bold hover:underline"
+                      >
+                        Remover Logo
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <input
+                      type="file"
+                      accept="image/png, image/jpeg, image/jpg"
+                      onChange={handleFileChange}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    />
+                    <div className="w-full bg-slate-50 border border-dashed border-slate-200 text-slate-500 rounded-xl py-3 px-3 text-center text-xs hover:bg-slate-100/50 transition-all cursor-pointer">
+                      Selecione um arquivo PNG ou JPG
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex gap-2 pt-2">

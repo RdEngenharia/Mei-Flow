@@ -21,7 +21,8 @@ import {
   Receipt,
   FileCheck
 } from "lucide-react";
-import { consultarSaldoAsaas, realizarTransferenciaPixAsaas } from "../asaasService";
+import { consultarSaldoAsaas, realizarTransferenciaPixAsaas, criarCobrancaAsaas, AsaasCobrancaPayload } from "../asaasService";
+import { Plus, Copy, QrCode, ExternalLink, FileText } from "lucide-react";
 import { Transacao } from "../types";
 
 interface AsaasWalletModalProps {
@@ -31,6 +32,9 @@ interface AsaasWalletModalProps {
   onSaveAsaasToken: (newToken: string) => Promise<void>;
   onAddTransaction: (newTx: Omit<Transacao, "id">) => Promise<void>;
   onClose: () => void;
+  isInline?: boolean;
+  planType?: "free" | "premium";
+  onTriggerUpgrade?: () => void;
 }
 
 export default function AsaasWalletModal({
@@ -40,6 +44,9 @@ export default function AsaasWalletModal({
   onSaveAsaasToken,
   onAddTransaction,
   onClose,
+  isInline = false,
+  planType = "free",
+  onTriggerUpgrade,
 }: AsaasWalletModalProps) {
   // Configs do Token
   const [tokenInput, setTokenInput] = useState(currentAsaasToken);
@@ -71,8 +78,23 @@ export default function AsaasWalletModal({
   const [pixFeedback, setPixFeedback] = useState<{ success: boolean; message: string; submessage?: string } | null>(null);
 
   // Navegação Interna de Abas de Banco Digital
-  // "home" (ver saldo, ações rápidas, extrato recente), "pix" (área pix), "token" (mudar chaves api)
-  const [activeMenu, setActiveMenu] = useState<"home" | "pix" | "token">("home");
+  // "home" (ver saldo, ações rápidas, extrato recente), "pix" (área pix), "cobrar" (emitir boleto/carnê), "token" (mudar chaves api)
+  const [activeMenu, setActiveMenu] = useState<"home" | "pix" | "cobrar" | "token">("home");
+
+  // Estados para Emissão de Cobrança (Boleto, Pix ou Carnê Parcelado)
+  const [customerName, setCustomerName] = useState("");
+  const [customerCpfCnpj, setCustomerCpfCnpj] = useState("");
+  const [customerEmail, setCustomerEmail] = useState("");
+  const [cValue, setCValue] = useState("");
+  const [cDueDate, setCDueDate] = useState("");
+  const [cDescription, setCDescription] = useState("");
+  const [cIsInstallment, setCIsInstallment] = useState(false);
+  const [cInstallmentCount, setCInstallmentCount] = useState(3);
+  
+  const [isSubmittingCobranca, setIsSubmittingCobranca] = useState(false);
+  const [cobrancaFeedback, setCobrancaFeedback] = useState<{ success: boolean; message: string; submessage?: string } | null>(null);
+  const [cobrancaResultado, setCobrancaResultado] = useState<any | null>(null);
+  const [copiedPix, setCopiedPix] = useState(false);
 
   // Busca inicial do saldo
   useEffect(() => {
@@ -180,6 +202,107 @@ export default function AsaasWalletModal({
     }
   };
 
+  const handleCreateCobranca = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCobrancaFeedback(null);
+    setCobrancaResultado(null);
+
+    const valor = parseFloat(cValue.replace(",", "."));
+    if (isNaN(valor) || valor <= 0) {
+      setCobrancaFeedback({
+        success: false,
+        message: "Valor Inválido",
+        submessage: "Por favor, forneça um valor numérico válido maior que zero."
+      });
+      return;
+    }
+
+    if (!customerName.trim() || !customerCpfCnpj.trim()) {
+      setCobrancaFeedback({
+        success: false,
+        message: "Campos Requeridos",
+        submessage: "Preencha o Nome do Cliente e o CPF/CNPJ para continuar."
+      });
+      return;
+    }
+
+    if (!cDueDate) {
+      setCobrancaFeedback({
+        success: false,
+        message: "Data de Vencimento Ausente",
+        submessage: "Por favor, insira a data do primeiro vencimento."
+      });
+      return;
+    }
+
+    setIsSubmittingCobranca(true);
+
+    try {
+      const payload: AsaasCobrancaPayload = {
+        customerName: customerName.trim(),
+        customerCpfCnpj: customerCpfCnpj.trim(),
+        customerEmail: customerEmail.trim() || undefined,
+        value: valor,
+        dueDate: cDueDate,
+        isInstallment: cIsInstallment,
+        installmentCount: cIsInstallment ? Number(cInstallmentCount) : undefined,
+        description: cDescription.trim() || undefined
+      };
+
+      const res = await criarCobrancaAsaas(payload, currentAsaasToken);
+
+      if (res.success) {
+        setCobrancaResultado(res);
+        setCobrancaFeedback({
+          success: true,
+          message: cIsInstallment ? "Carnê Parcelado Gerado!" : "Boleto + Pix Gerado!",
+          submessage: cIsInstallment 
+            ? `Carnê de ${cInstallmentCount} parcelas de R$ ${valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} emitido à carteira.`
+            : `Um título de R$ ${valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} foi criado com link de Boleto PJ ativo.`
+        });
+
+        // Agrega no log de receitas
+        // Converte data de AAAA-MM-DD para DD/MM/AAAA
+        const fDateParts = cDueDate.split("-");
+        const formattedDate = fDateParts.length === 3 ? `${fDateParts[2]}/${fDateParts[1]}/${fDateParts[0]}` : new Date().toLocaleDateString("pt-BR");
+
+        await onAddTransaction({
+          tipo: "entrada",
+          valor: valor * (cIsInstallment ? Number(cInstallmentCount) : 1),
+          data: formattedDate,
+          descricao: `[Asaas] ${cIsInstallment ? `Carnê ${cInstallmentCount}x` : "Boleto/Pix"} - ${customerName.trim()}`,
+          categoria: "Prestação de Serviços",
+          clienteNome: customerName.trim(),
+          clienteDocumento: customerCpfCnpj.trim()
+        });
+
+        // Limpa parcialmente os campos para nova emissão
+        setCustomerName("");
+        setCustomerCpfCnpj("");
+        setCustomerEmail("");
+        setCValue("");
+        setCDueDate("");
+        setCDescription("");
+        setCIsInstallment(false);
+      } else {
+        setCobrancaFeedback({
+          success: false,
+          message: "Erro na Emissão Asaas",
+          submessage: res.mensagem || "Não foi possível emitir no gateway da Asaas. Verifique os dados tributários."
+        });
+      }
+    } catch (err: any) {
+      console.error("Erro interno ao tentar emitir:", err);
+      setCobrancaFeedback({
+        success: false,
+        message: "Falha de Conectividade",
+        submessage: err.message || "Erro inesperado de comunicação de rede PJ."
+      });
+    } finally {
+      setIsSubmittingCobranca(false);
+    }
+  };
+
   // Filtra as entradas recebidas de boletos (representadas pelas transações do tipo 'entrada')
   const extratoEntradas = transactions.filter(tx => tx.tipo === "entrada");
   const extratoSaidas = transactions.filter(tx => tx.tipo === "saida" && tx.descricao.includes("Asaas"));
@@ -189,12 +312,11 @@ export default function AsaasWalletModal({
     return new Date(b.data.split("/").reverse().join("-")).getTime() - new Date(a.data.split("/").reverse().join("-")).getTime();
   });
 
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 animate-fade-in">
-      <div className="bg-slate-900 rounded-3xl overflow-hidden shadow-2xl border border-slate-800 max-w-lg w-full max-h-[92vh] flex flex-col text-slate-100">
-        
-        {/* TOP BAR / PHONE BAR NOTIFICATION */}
-        <div className="bg-slate-950 px-6 py-2.5 flex items-center justify-between border-b border-slate-800 text-[11px] text-slate-500 font-mono">
+  const walletContent = (
+    <div className={`bg-slate-900 rounded-3xl overflow-hidden shadow-2xl border border-slate-800 max-w-lg w-full ${isInline ? "min-h-[500px]" : "max-h-[92vh]"} flex flex-col text-slate-100`}>
+      
+      {/* TOP BAR / PHONE BAR NOTIFICATION */}
+      <div className="bg-slate-950 px-6 py-2.5 flex items-center justify-between border-b border-slate-800 text-[11px] text-slate-500 font-mono">
           <div className="flex items-center gap-1.5 font-bold">
             <Smartphone className="w-3.5 h-3.5 text-blue-500" />
             <span>MEI BANK APP (ASAAS PLATFORM)</span>
@@ -347,17 +469,36 @@ export default function AsaasWalletModal({
               </div>
 
               {/* NAVIGATOR BUTTONS DE ACÕES RÁPIDAS */}
-              <div className="grid grid-cols-3 gap-2 mt-6 relative z-10">
+              <div className="grid grid-cols-4 gap-1.5 mt-6 relative z-10">
                 <button
                   onClick={() => setActiveMenu("home")}
-                  className={`py-2 rounded-xl text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 ${
+                  className={`py-2 px-1 rounded-xl text-[10px] sm:text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 ${
                     activeMenu === "home" 
                       ? "bg-blue-600/10 border border-blue-500/30 text-blue-400" 
                       : "bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200"
                   }`}
                 >
-                  <Receipt className="w-4 h-4" />
-                  <span>Conta & Extrato</span>
+                  <Receipt className="w-3.5 h-3.5" />
+                  <span>Extrato</span>
+                </button>
+                 <button
+                  onClick={() => {
+                    if (planType === "free") {
+                      if (onTriggerUpgrade) onTriggerUpgrade();
+                    } else if (!currentAsaasToken) {
+                      setActiveMenu("token");
+                    } else {
+                      setActiveMenu("cobrar");
+                    }
+                  }}
+                  className={`py-2 px-1 rounded-xl text-[10px] sm:text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 ${
+                    activeMenu === "cobrar" 
+                      ? "bg-blue-600/10 border border-blue-500/30 text-blue-400" 
+                      : "bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Cobrar {planType === "free" ? "🔒" : ""}</span>
                 </button>
                 <button
                   onClick={() => {
@@ -367,25 +508,25 @@ export default function AsaasWalletModal({
                       setActiveMenu("pix");
                     }
                   }}
-                  className={`py-2 rounded-xl text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 ${
+                  className={`py-2 px-1 rounded-xl text-[10px] sm:text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 ${
                     activeMenu === "pix" 
                       ? "bg-blue-600/10 border border-blue-500/30 text-blue-400" 
                       : "bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200"
                   }`}
                 >
-                  <Send className="w-4 h-4" />
+                  <Send className="w-3.5 h-3.5" />
                   <span>Área Pix</span>
                 </button>
                 <button
                   onClick={() => setActiveMenu("token")}
-                  className={`py-2 rounded-xl text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 ${
+                  className={`py-2 px-1 rounded-xl text-[10px] sm:text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 ${
                     activeMenu === "token" 
                       ? "bg-blue-600/10 border border-blue-500/30 text-blue-400" 
                       : "bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200"
                   }`}
                 >
-                  <Key className="w-4 h-4" />
-                  <span>Configurações</span>
+                  <Key className="w-3.5 h-3.5" />
+                  <span>Acesso</span>
                 </button>
               </div>
             </div>
@@ -573,6 +714,322 @@ export default function AsaasWalletModal({
                 </form>
               )}
 
+              {/* ABA DE COBRANÇA (EMISSÃO DE BOLETO/PIX/CARNÊ) */}
+              {activeMenu === "cobrar" && (
+                <div className="space-y-4 animate-fade-in relative z-10 text-left">
+                  
+                  {/* CASO A COBRANÇA TENHA SIDO GERADA COM SUCESSO */}
+                  {cobrancaResultado ? (
+                    <div className="space-y-4 p-5 bg-slate-900 border border-emerald-500/20 rounded-2xl">
+                      <div className="text-center space-y-2">
+                        <div className="inline-flex p-3 bg-emerald-500/10 text-emerald-400 rounded-full border border-emerald-500/25">
+                          <CheckCircle className="w-8 h-8" />
+                        </div>
+                        <h4 className="text-base font-black text-white">
+                          {cobrancaFeedback?.message || "Cobrança Emitida!"}
+                        </h4>
+                        <p className="text-xs text-slate-400">
+                          {cobrancaFeedback?.submessage}
+                        </p>
+                      </div>
+
+                      {/* DETALHES DA COBRANÇA */}
+                      <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2.5 font-mono text-xs text-slate-300">
+                        <div className="flex justify-between border-b border-slate-800 pb-1.5">
+                          <span className="text-slate-500">ID da Cobrança:</span>
+                          <span className="text-slate-200 select-all font-bold">{cobrancaResultado.id || "N/A"}</span>
+                        </div>
+                        <div className="flex justify-between border-b border-slate-800 pb-1.5">
+                          <span className="text-slate-500">Sacado/Cliente:</span>
+                          <span className="text-slate-200 font-sans font-semibold text-right">{customerName || "Cliente Cadastrado"}</span>
+                        </div>
+                        {cobrancaResultado.installmentId && (
+                          <div className="flex justify-between border-b border-slate-800 pb-1.5">
+                            <span className="text-slate-500">ID do Parcelamento:</span>
+                            <span className="text-slate-400 text-[10px]">{cobrancaResultado.installmentId}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Meio de Recebimento:</span>
+                          <span className="text-emerald-400 font-sans font-bold">Boleto + Pix Integrado</span>
+                        </div>
+                      </div>
+
+                      {/* PIX AREA (IF AVAILABLE) */}
+                      {cobrancaResultado.pixQrCode && (
+                        <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center space-y-3.5">
+                          <span className="text-[10px] font-extrabold uppercase tracking-widest text-blue-400 flex items-center justify-center gap-1.5 font-mono">
+                            <QrCode className="w-3.5 h-3.5" /> Pagar Imediatamente via Pix
+                          </span>
+                          
+                          {cobrancaResultado.pixQrCode.encodedImage && (
+                            <img 
+                              src={`data:image/png;base64,${cobrancaResultado.pixQrCode.encodedImage}`} 
+                              alt="Pix QR Code" 
+                              className="w-32 h-32 bg-white p-2 rounded-xl mx-auto shadow-lg"
+                              referrerPolicy="no-referrer"
+                            />
+                          )}
+
+                          {cobrancaResultado.pixQrCode.payload && (
+                            <div className="space-y-2">
+                              <p className="text-[10px] text-slate-500 truncate select-all bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800 font-mono max-w-full overflow-hidden text-ellipsis">
+                                {cobrancaResultado.pixQrCode.payload}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(cobrancaResultado.pixQrCode.payload);
+                                  setCopiedPix(true);
+                                  setTimeout(() => setCopiedPix(false), 2000);
+                                }}
+                                className="w-full bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold py-2 px-3 rounded-lg text-[10px] transition-all flex items-center justify-center gap-1.5 border border-slate-800"
+                              >
+                                <Copy className="w-3 h-3 text-blue-400" />
+                                {copiedPix ? "✓ Código Copiado!" : "Copiar Chave Copia e Cola"}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* ACTIONS: DOWNLOAD/VIEW AND RE-EMISSION */}
+                      <div className="space-y-2 pt-2">
+                        {cobrancaResultado.invoiceUrl && (
+                          <a
+                            href={cobrancaResultado.invoiceUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-all text-center"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5 text-white inline-block" />
+                            Visualizar Recibo / Fatura Online
+                          </a>
+                        )}
+
+                        {cobrancaResultado.bankSlipUrl && (
+                          <a
+                            href={cobrancaResultado.bankSlipUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="w-full bg-slate-800 hover:bg-slate-750 text-slate-200 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition-all border border-slate-700 text-center"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-slate-400 inline-block" />
+                            Baixar Boleto Bancário (PDF)
+                          </a>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCobrancaResultado(null);
+                            setCobrancaFeedback(null);
+                          }}
+                          className="w-full bg-slate-950 hover:bg-slate-900 text-slate-500 hover:text-slate-400 font-semibold py-2.5 px-4 rounded-xl text-[10px] transition-all"
+                        >
+                          Emitir Outro Lançamento / Carnê
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    // FORMULÁRIO DE PREENCHIMENTO DA COBRANÇA
+                    <form onSubmit={handleCreateCobranca} className="space-y-4">
+                      
+                      {/* FEEDBACKS SE EXISTIREM */}
+                      {cobrancaFeedback && !cobrancaFeedback.success && (
+                        <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl flex gap-2.5 items-start">
+                          <AlertCircle className="w-4.5 h-4.5 text-rose-400 shrink-0 mt-0.5" />
+                          <div className="text-left">
+                            <span className="font-extrabold block text-xs tracking-tight">{cobrancaFeedback.message}</span>
+                            <span className="text-[10px] mt-0.5 leading-relaxed block font-mono">{cobrancaFeedback.submessage}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="bg-slate-950 p-4 rounded-2xl border border-slate-850 space-y-3.5">
+                        <div className="flex gap-2.5 items-center border-b border-slate-900 pb-2.5 text-left">
+                          <Plus className="w-4 h-4 text-blue-400 shrink-0" />
+                          <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-200">Emitir Nova Cobrança PJ</span>
+                        </div>
+
+                        {/* Nome do Cliente */}
+                        <div className="space-y-1.5 text-left">
+                          <label className="block text-[10px] uppercase tracking-widest font-extrabold text-slate-400">
+                            Nome Completo do Cliente *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={customerName}
+                            onChange={(e) => setCustomerName(e.target.value)}
+                            placeholder="Ex: João da Silva"
+                            className="w-full bg-slate-900 border border-slate-850 text-white rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:border-blue-500"
+                          />
+                        </div>
+
+                        {/* CPF ou CNPJ e Email */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="space-y-1.5 text-left">
+                            <label className="block text-[10px] uppercase tracking-widest font-extrabold text-slate-400">
+                              CPF ou CNPJ do Cliente *
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={customerCpfCnpj}
+                              onChange={(e) => setCustomerCpfCnpj(e.target.value)}
+                              placeholder="Apenas números"
+                              className="w-full bg-slate-900 border border-slate-850 text-white rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:border-blue-500 font-mono"
+                            />
+                          </div>
+
+                          <div className="space-y-1.5 text-left">
+                            <label className="block text-[10px] uppercase tracking-widest font-extrabold text-slate-400">
+                              E-mail do Cliente
+                            </label>
+                            <input
+                              type="email"
+                              value={customerEmail}
+                              onChange={(e) => setCustomerEmail(e.target.value)}
+                              placeholder="exemplo@vendas.com"
+                              className="w-full bg-slate-900 border border-slate-850 text-white rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:border-blue-500"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Valor e Data de Vencimento */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="space-y-1.5 text-left">
+                            <label className="block text-[10px] uppercase tracking-widest font-extrabold text-slate-400">
+                               Valor da Cobrança (R$) *
+                            </label>
+                            <div className="relative">
+                              <span className="absolute left-3 top-2 text-slate-500 text-xs font-bold leading-none">R$</span>
+                              <input
+                                type="text"
+                                required
+                                value={cValue}
+                                onChange={(e) => setCValue(e.target.value)}
+                                placeholder="150.00"
+                                className="w-full bg-slate-900 border border-slate-850 text-white rounded-xl py-2 px-3 pl-8 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:border-blue-500 font-mono font-bold"
+                              />
+                            </div>
+                            <span className="text-[9px] text-slate-500 block leading-tight mt-0.5">
+                              No caso de carnê, este é o valor de cada parcela individual.
+                            </span>
+                          </div>
+
+                          <div className="space-y-1.5 text-left">
+                            <label className="block text-[10px] uppercase tracking-widest font-extrabold text-slate-400">
+                              Data do Vencimento *
+                            </label>
+                            <input
+                              type="date"
+                              required
+                              value={cDueDate}
+                              onChange={(e) => setCDueDate(e.target.value)}
+                              className="w-full bg-slate-900 border border-slate-850 text-white rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:border-blue-500 font-mono"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Descrição opcional */}
+                        <div className="space-y-1.5 text-left">
+                          <label className="block text-[10px] uppercase tracking-widest font-extrabold text-slate-400">
+                            Descrição do Produto/Serviço
+                          </label>
+                          <input
+                            type="text"
+                            value={cDescription}
+                            onChange={(e) => setCDescription(e.target.value)}
+                            placeholder="Consultoria de Vendas MEI"
+                            className="w-full bg-slate-900 border border-slate-850 text-slate-200 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:border-blue-500"
+                          />
+                        </div>
+
+                        {/* SELETOR DE MODALIDADE */}
+                        <div className="pt-3 border-t border-slate-900 space-y-2 text-left">
+                          <label className="block text-[10px] uppercase tracking-widest font-extrabold text-slate-400">
+                             Tipo de Cobrança
+                          </label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setCIsInstallment(false)}
+                              className={`py-2 rounded-xl text-xs font-bold transition-all ${
+                                !cIsInstallment
+                                  ? "bg-blue-600/10 border border-blue-500/30 text-blue-400"
+                                  : "bg-slate-900 border border-slate-800 text-slate-500 hover:text-slate-300"
+                              }`}
+                            >
+                              Boleto Único + Pix
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCIsInstallment(true)}
+                              className={`py-2 rounded-xl text-xs font-bold transition-all ${
+                                cIsInstallment
+                                  ? "bg-blue-600/10 border border-blue-500/30 text-blue-400"
+                                  : "bg-slate-900 border border-slate-800 text-slate-500 hover:text-slate-300"
+                              }`}
+                            >
+                              Carnê (Parcelado)
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* INPUT QUANTIDADE DE PARCELAS */}
+                        {cIsInstallment && (
+                          <div className="space-y-1.5 text-left animate-fade-in bg-slate-900 p-3 rounded-xl border border-slate-800">
+                            <label className="block text-[10px] uppercase tracking-widest font-extrabold text-slate-400">
+                              Quantidade de Parcelas
+                            </label>
+                            <select
+                              value={cInstallmentCount}
+                              onChange={(e) => setCInstallmentCount(Number(e.target.value))}
+                              className="w-full bg-slate-950 border border-slate-800 text-white rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:border-blue-500 font-sans font-bold"
+                            >
+                              <option value="2">2 boletos sequenciais</option>
+                              <option value="3">3 boletos sequenciais</option>
+                              <option value="4">4 boletos sequenciais</option>
+                              <option value="5">5 boletos sequenciais</option>
+                              <option value="6">6 boletos sequenciais</option>
+                              <option value="12">12 boletos sequenciais</option>
+                            </select>
+                            <p className="text-[9px] text-slate-400 leading-normal font-sans mt-1">
+                              * O Asaas gerará as parcelas seguintes com intervalo mensal (vencimentos automáticos calculados sucessivamente).
+                            </p>
+                          </div>
+                        )}
+
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={isSubmittingCobranca || !currentAsaasToken}
+                        className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-neutral-100 font-black py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer"
+                      >
+                        {isSubmittingCobranca ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin text-white" />
+                            Contatando Gateway PJ...
+                          </>
+                        ) : (
+                          <>
+                            <TrendingUp className="w-3.5 h-3.5 text-white" />
+                            {cIsInstallment ? "Emitir Carnê de Cobrança" : "Gerar Boleto Único + Pix"}
+                          </>
+                        )}
+                      </button>
+                      <p className="text-[10px] text-slate-400 font-sans text-center mt-2 mx-1 leading-relaxed">
+                        💡 <strong>Regra Asaas:</strong> A taxa fixa de <strong>R$ 2,50</strong> é cobrada <strong>apenas quando o boleto for pago</strong> por seu cliente. Não há tarifa de emissão, baixa ou alteração de vencimento.
+                      </p>
+                    </form>
+                  )}
+
+                </div>
+              )}
+
               {/* ABA 3: CONFIGURAÇÃO DE CREDENCIAIS (TOKEN) */}
               {activeMenu === "token" && (
                 <div className="space-y-4 animate-fade-in">
@@ -658,6 +1115,19 @@ export default function AsaasWalletModal({
         </div>
 
       </div>
-    </div>
-  );
+    );
+
+    if (isInline) {
+      return (
+        <div className="w-full max-w-lg mx-auto py-2">
+          {walletContent}
+        </div>
+      );
+    }
+
+    return (
+      <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 animate-fade-in">
+        {walletContent}
+      </div>
+    );
 }

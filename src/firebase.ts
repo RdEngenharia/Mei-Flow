@@ -142,23 +142,39 @@ export async function logoutUser(): Promise<void> {
  * CARREGAR CLIENTES DO FIRESTORE (Filtrado estritamente para o MEI autenticado)
  */
 export async function fetchClientesFromFirebase(meiUid: string): Promise<Cliente[]> {
-  const path = 'clientes';
+  const path = 'customers';
   try {
-    // Consulta restringida por índice no mei_uid para impedir visualização de dados alheios
-    const q = query(collection(db, path), where('mei_uid', '==', meiUid));
-    const snapshot = await getDocs(q);
+    // Consulta da nova coleção 'customers' vinculando por userId
+    const q1 = query(collection(db, 'customers'), where('userId', '==', meiUid));
+    const snapshot1 = await getDocs(q1);
     
-    return snapshot.docs.map(docSnap => {
+    // Fallback/compatibilidade para a tabela antiga de clientes
+    const q2 = query(collection(db, 'clientes'), where('mei_uid', '==', meiUid));
+    const snapshot2 = await getDocs(q2);
+
+    const mapSnap = (snap: any, isOld: boolean) => snap.docs.map((docSnap: any) => {
       const data = docSnap.data();
       return {
         id: docSnap.id,
-        nome: data.nome || '',
-        documento: data.documento || '',
+        nome: isOld ? (data.nome || '') : (data.name || ''),
+        documento: isOld ? (data.documento || '') : (data.cpfCnpj || ''),
         email: data.email || '',
         telefone: data.telefone || '',
-        createdAt: data.createdAt || new Date().toISOString()
+        createdAt: data.createdAt ? (typeof data.createdAt.toDate === 'function' ? data.createdAt.toDate().toISOString() : data.createdAt) : new Date().toISOString()
       } as Cliente;
     });
+
+    const list1 = mapSnap(snapshot1, false);
+    const list2 = mapSnap(snapshot2, true);
+
+    const merged = [...list1];
+    list2.forEach((c: Cliente) => {
+      if (!merged.some(m => m.id === c.id)) {
+        merged.push(c);
+      }
+    });
+
+    return merged;
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, path);
     return [];
@@ -169,25 +185,52 @@ export async function fetchClientesFromFirebase(meiUid: string): Promise<Cliente
  * CARREGAR TRANSAÇÕES DO FIRESTORE (Filtrado estritamente para o MEI autenticado)
  */
 export async function fetchTransacoesFromFirebase(meiUid: string): Promise<Transacao[]> {
-  const path = 'transacoes';
+  const path = 'transactions';
   try {
-    const q = query(collection(db, path), where('mei_uid', '==', meiUid));
-    const snapshot = await getDocs(q);
-    
-    return snapshot.docs.map(docSnap => {
+    // Consulta na nova coleção 'transactions' vinculando por userId
+    const q1 = query(collection(db, 'transactions'), where('userId', '==', meiUid));
+    const snapshot1 = await getDocs(q1);
+
+    // Compatibilidade com a tabela legada 'transacoes'
+    const q2 = query(collection(db, 'transacoes'), where('mei_uid', '==', meiUid));
+    const snapshot2 = await getDocs(q2);
+
+    const mapTransSnap = (snap: any, isOld: boolean) => snap.docs.map((docSnap: any) => {
       const data = docSnap.data();
+      let dt = new Date().toISOString().split('T')[0];
+      if (isOld) {
+        dt = data.data || dt;
+      } else if (data.date) {
+        if (typeof data.date.toDate === 'function') {
+          dt = data.date.toDate().toISOString().split('T')[0];
+        } else {
+          dt = new Date(data.date).toISOString().split('T')[0];
+        }
+      }
       return {
         id: docSnap.id,
-        tipo: data.tipo,
-        valor: data.valor,
-        data: data.data,
-        descricao: data.descricao,
-        categoria: data.categoria,
+        tipo: isOld ? (data.tipo || 'entrada') : (data.type || 'entrada'),
+        valor: isOld ? (data.valor || 0) : (data.value || 0),
+        data: dt,
+        descricao: isOld ? (data.descricao || '') : (data.description || ''),
+        categoria: data.categoria || 'Geral',
         clienteId: data.clienteId || undefined,
         clienteNome: data.clienteNome || undefined,
         clienteDocumento: data.clienteDocumento || undefined
       } as Transacao;
     });
+
+    const list1 = mapTransSnap(snapshot1, false);
+    const list2 = mapTransSnap(snapshot2, true);
+
+    const merged = [...list1];
+    list2.forEach((t: Transacao) => {
+      if (!merged.some(m => m.id === t.id)) {
+        merged.push(t);
+      }
+    });
+
+    return merged;
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, path);
     return [];
@@ -195,20 +238,20 @@ export async function fetchTransacoesFromFirebase(meiUid: string): Promise<Trans
 }
 
 /**
- * INSERIR / ATUALIZAR CLIENTE (Com amarração de mei_uid)
+ * INSERIR / ATUALIZAR CLIENTE (Com amarração de userId)
  */
 export async function saveClienteToFirebase(meiUid: string, cliente: Cliente): Promise<void> {
-  const path = `clientes/${cliente.id}`;
+  const path = `customers/${cliente.id}`;
   try {
-    const docRef = doc(db, 'clientes', cliente.id);
+    const docRef = doc(db, 'customers', cliente.id);
     await setDoc(docRef, {
       id: cliente.id,
-      mei_uid: meiUid, // Vinculação forçada contra sequestro de dados
-      nome: cliente.nome,
-      documento: cliente.documento || '',
+      userId: meiUid,
+      name: cliente.nome,
+      cpfCnpj: cliente.documento || '',
       email: cliente.email || '',
       telefone: cliente.telefone || '',
-      createdAt: cliente.createdAt
+      createdAt: cliente.createdAt ? new Date(cliente.createdAt) : new Date()
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
@@ -216,20 +259,20 @@ export async function saveClienteToFirebase(meiUid: string, cliente: Cliente): P
 }
 
 /**
- * INSERIR / ATUALIZAR TRANSAÇÃO (Com amarração de mei_uid)
+ * INSERIR / ATUALIZAR TRANSAÇÃO (Com amarração de userId)
  */
 export async function saveTransacaoToFirebase(meiUid: string, tx: Transacao): Promise<void> {
-  const path = `transacoes/${tx.id}`;
+  const path = `transactions/${tx.id}`;
   try {
-    const docRef = doc(db, 'transacoes', tx.id);
+    const docRef = doc(db, 'transactions', tx.id);
     await setDoc(docRef, {
       id: tx.id,
-      mei_uid: meiUid, // Amarração imutável para garantir posse privativa
-      tipo: tx.tipo,
-      valor: tx.valor,
-      data: tx.data,
-      descricao: tx.descricao,
-      categoria: tx.categoria,
+      userId: meiUid,
+      type: tx.tipo,
+      value: tx.valor,
+      description: tx.descricao,
+      date: tx.data ? new Date(tx.data) : new Date(),
+      categoria: tx.categoria || 'Geral',
       clienteId: tx.clienteId || '',
       clienteNome: tx.clienteNome || '',
       clienteDocumento: tx.clienteDocumento || ''
@@ -243,10 +286,15 @@ export async function saveTransacaoToFirebase(meiUid: string, tx: Transacao): Pr
  * EXCLUIR CLIENTE DO FIRESTORE
  */
 export async function deleteClienteFromFirebase(clienteId: string): Promise<void> {
-  const path = `clientes/${clienteId}`;
+  const path = `customers/${clienteId}`;
   try {
-    const docRef = doc(db, 'clientes', clienteId);
+    // Apaga do novo caminho 'customers'
+    const docRef = doc(db, 'customers', clienteId);
     await deleteDoc(docRef);
+    // Também garante apagamento do anterior para manter integridade
+    try {
+      await deleteDoc(doc(db, 'clientes', clienteId));
+    } catch (_) {}
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
@@ -256,10 +304,15 @@ export async function deleteClienteFromFirebase(clienteId: string): Promise<void
  * EXCLUIR TRANSAÇÃO DO FIRESTORE
  */
 export async function deleteTransacaoFromFirebase(transacaoId: string): Promise<void> {
-  const path = `transacoes/${transacaoId}`;
+  const path = `transactions/${transacaoId}`;
   try {
-    const docRef = doc(db, 'transacoes', transacaoId);
+    // Apaga do novo caminho 'transactions'
+    const docRef = doc(db, 'transactions', transacaoId);
     await deleteDoc(docRef);
+    // Também garante apagamento do anterior para manter integridade
+    try {
+      await deleteDoc(doc(db, 'transacoes', transacaoId));
+    } catch (_) {}
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
@@ -273,16 +326,63 @@ export async function deleteTransacaoFromFirebase(transacaoId: string): Promise<
  * CADASTRO: Registra um novo MEI com E-mail e Senha e define o nome fantasia
  */
 export async function registerWithEmailPassword(email: string, password: string, name: string): Promise<User | null> {
-  try {
-    const result = await createUserWithEmailAndPassword(auth, email, password);
-    if (result.user) {
+  // 1. PRIMEIRO: Tenta criar o usuário no Firebase Authentication
+  const result = await createUserWithEmailAndPassword(auth, email, password);
+  
+  if (result.user) {
+    // 2. Tenta atualizar o displayName no Auth
+    try {
       await updateProfile(result.user, { displayName: name });
+    } catch (profileError) {
+      console.warn("Aviso: Falha ao atualizar o displayName no Firebase Auth:", profileError);
     }
-    return result.user;
-  } catch (error) {
-    console.error("Erro no cadastro com e-mail e senha:", error);
-    throw error;
+    
+    // 3. Tenta persistir o perfil inicial do usuário no Firestore (Coleção 'users' principal)
+    try {
+      const userDocRef = doc(db, 'users', result.user.uid);
+      const initialProfile = {
+        name: name,
+        email: email,
+        planType: 'free',
+        logoUrl: '',
+        createdAt: new Date(),
+        // backwards compatibility with old structure for App.tsx state bindings:
+        meiName: name,
+        cnpjPrestador: '',
+        inscricaoMunicipal: '',
+        telefone: '',
+        asaasAccessToken: '',
+        companyLogo: '',
+        updatedAt: new Date().toISOString()
+      };
+      await setDoc(userDocRef, initialProfile, { merge: true });
+      
+      // Também persiste na coleção legada 'usuarios' por segurança e prevenção de bugs legados
+      try {
+        const legacyDocRef = doc(db, 'usuarios', result.user.uid);
+        await setDoc(legacyDocRef, {
+          meiName: name,
+          email: email,
+          cnpjPrestador: '',
+          inscricaoMunicipal: '',
+          telefone: '',
+          asaasAccessToken: '',
+          planType: 'free',
+          companyLogo: '',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      } catch (legacyErr) {
+        console.warn("Não foi possivel persistir na coleção usuarios legada:", legacyErr);
+      }
+      
+      console.log("Perfil inicial do usuário persistido com sucesso no Firestore.");
+    } catch (firestoreError) {
+      console.error("Alerta: Falha ao criar documento inicial de perfil no Firestore:", firestoreError);
+    }
   }
+  
+  return result.user;
 }
 
 /**
@@ -364,43 +464,99 @@ export async function deleteVendaFromFirebase(userId: string, vendaId: string): 
 }
 
 /**
- * SALVAR PERFIL DO USUÁRIO MEI: Grava informações cadastrais da empresa sob usuarios/{userId}
+ * SALVAR PERFIL DO USUÁRIO MEI: Grava informações cadastrais da empresa sob users/{userId}
  */
-export async function saveUserProfileToFirebase(userId: string, profileData: { meiName: string; cnpjPrestador: string; inscricaoMunicipal?: string; telefone?: string; asaasAccessToken?: string }): Promise<void> {
-  const path = `usuarios/${userId}`;
+export async function saveUserProfileToFirebase(
+  userId: string, 
+  profileData: { 
+    meiName: string; 
+    cnpjPrestador: string; 
+    inscricaoMunicipal?: string; 
+    telefone?: string; 
+    asaasAccessToken?: string;
+    planType?: "free" | "premium";
+    companyLogo?: string;
+  }
+): Promise<void> {
+  const path = `users/${userId}`;
   try {
-    const docRef = doc(db, 'usuarios', userId);
-    await setDoc(docRef, {
+    const docRef = doc(db, 'users', userId);
+    
+    const dataToSave = {
+      name: profileData.meiName,
+      email: auth.currentUser?.email || '',
+      planType: profileData.planType || 'free',
+      logoUrl: profileData.companyLogo || '',
+      updatedAt: new Date().toISOString(),
+      
+      // campos compatibilidade antiga do App:
       meiName: profileData.meiName,
       cnpjPrestador: profileData.cnpjPrestador,
       inscricaoMunicipal: profileData.inscricaoMunicipal || '',
       telefone: profileData.telefone || '',
       asaasAccessToken: profileData.asaasAccessToken || '',
-      updatedAt: new Date().toISOString()
-    }, { merge: true });
+      companyLogo: profileData.companyLogo || ''
+    };
+
+    await setDoc(docRef, dataToSave, { merge: true });
+    
+    // Sincroniza também na coleção antiga 'usuarios'
+    try {
+      const legacyDocRef = doc(db, 'usuarios', userId);
+      await setDoc(legacyDocRef, dataToSave, { merge: true });
+    } catch (legacyErr) {
+      console.warn("Não foi possível persistir cópia em usuarios:", legacyErr);
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
 /**
- * BUSCAR PERFIL DO USUÁRIO MEI: Obtém as informações cadastrais da empresa de usuarios/{userId}
+ * BUSCAR PERFIL DO USUÁRIO MEI: Obtém as informações cadastrais da empresa de users/{userId}
  */
-export async function fetchUserProfileFromFirebase(userId: string): Promise<{ meiName: string; cnpjPrestador: string; inscricaoMunicipal?: string; telefone?: string; asaasAccessToken?: string } | null> {
-  const path = `usuarios/${userId}`;
+export async function fetchUserProfileFromFirebase(userId: string): Promise<{ 
+  meiName: string; 
+  cnpjPrestador: string; 
+  inscricaoMunicipal?: string; 
+  telefone?: string; 
+  asaasAccessToken?: string;
+  planType?: "free" | "premium";
+  companyLogo?: string;
+} | null> {
+  const path = `users/${userId}`;
   try {
-    const docRef = doc(db, 'usuarios', userId);
+    const docRef = doc(db, 'users', userId);
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
       const data = docSnap.data();
+      return {
+        meiName: data.name || data.meiName || '',
+        cnpjPrestador: data.cnpjPrestador || '',
+        inscricaoMunicipal: data.inscricaoMunicipal || '',
+        telefone: data.telefone || '',
+        asaasAccessToken: data.asaasAccessToken || '',
+        planType: data.planType || 'free',
+        companyLogo: data.logoUrl || data.companyLogo || ''
+      };
+    }
+    
+    // Fallback retroativo caso esteja na coleção antiga
+    const legacyDocRef = doc(db, 'usuarios', userId);
+    const legacySnap = await getDoc(legacyDocRef);
+    if (legacySnap.exists()) {
+      const data = legacySnap.data();
       return {
         meiName: data.meiName || '',
         cnpjPrestador: data.cnpjPrestador || '',
         inscricaoMunicipal: data.inscricaoMunicipal || '',
         telefone: data.telefone || '',
-        asaasAccessToken: data.asaasAccessToken || ''
+        asaasAccessToken: data.asaasAccessToken || '',
+        planType: data.planType || 'free',
+        companyLogo: data.companyLogo || ''
       };
     }
+    
     return null;
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, path);

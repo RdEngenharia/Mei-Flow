@@ -1,78 +1,48 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // 1. Regra de Segurança Geral - Bloqueio por Padrão (Zero-Trust)
-    match /{document=**} {
-      allow read, write: if false;
-    }
-    
-    // Função auxiliar para checar autenticação básica
+
+    // Helper check to verify if the user is authenticated
     function isSignedIn() {
       return request.auth != null;
     }
-    
-    // Função para verificar se a operação pertence estritamente ao MEI autenticado
-    function isOwner(meiUid) {
-      return isSignedIn() && request.auth.uid == meiUid;
-    }
 
-    // 2. Perfil de Usuários MEI
+    // 1. Users collection (users)
     match /users/{userId} {
       allow read, write: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // 2b. Perfil de Usuários MEI Alternativos e Subcoleção de Vendas
+    // 1b. Legacy users collection (usuarios)
     match /usuarios/{userId} {
       allow read, write: if isSignedIn() && request.auth.uid == userId;
-      
+
       match /vendas/{vendaId} {
-        allow create: if isSignedIn()
-          && request.auth.uid == userId
-          && request.resource.data.valor is number
-          && request.resource.data.valor > 0;
-          
-        allow get, list: if isSignedIn() && request.auth.uid == userId;
-        
-        allow update: if isSignedIn()
-          && request.auth.uid == userId
-          && request.resource.data.valor is number
-          && request.resource.data.valor > 0;
-          
-        allow delete: if isSignedIn() && request.auth.uid == userId;
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
       }
     }
 
-    // 3. Clientes (Isolamento de PII e autocomplete seguro)
-    match /clientes/{clienteId} {
-      allow create: if isSignedIn() 
-        && request.resource.data.mei_uid == request.auth.uid 
-        && request.resource.data.nome is string 
-        && request.resource.data.nome.size() <= 150;
-        
-      allow get, list: if isSignedIn() && resource.data.mei_uid == request.auth.uid;
-      
-      allow update: if isSignedIn() 
-        && resource.data.mei_uid == request.auth.uid 
-        && request.resource.data.mei_uid == resource.data.mei_uid;
-        
-      allow delete: if isSignedIn() && resource.data.mei_uid == request.auth.uid;
+    // 2. Customers collection (customers)
+    match /customers/{customerId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid);
     }
 
-    // 4. Transações MEI (Entradas e Saídas Financieras/Fiscais)
+    // 2b. Legacy Clientes collection (clientes)
+    match /clientes/{clienteId} {
+      allow create: if isSignedIn() && request.resource.data.mei_uid == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && (resource == null || resource.data.mei_uid == request.auth.uid);
+    }
+
+    // 3. Transactions collection (transactions)
+    match /transactions/{transactionId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && (resource == null || resource.data.userId == request.auth.uid);
+    }
+
+    // 3b. Legacy Transacoes collection (transacoes)
     match /transacoes/{transacaoId} {
-      allow create: if isSignedIn() 
-        && request.resource.data.mei_uid == request.auth.uid
-        && request.resource.data.valor is number
-        && request.resource.data.valor > 0;
-        
-      allow get, list: if isSignedIn() && resource.data.mei_uid == request.auth.uid;
-      
-      allow update: if isSignedIn() 
-        && resource.data.mei_uid == request.auth.uid 
-        && request.resource.data.mei_uid == resource.data.mei_uid;
-        
-      allow delete: if isSignedIn() && resource.data.mei_uid == request.auth.uid;
+      allow create: if isSignedIn() && request.resource.data.mei_uid == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && (resource == null || resource.data.mei_uid == request.auth.uid);
     }
   }
 }
