@@ -30,3 +30,25 @@ export interface MEIProfile {
   faturamentoAcumulado: number;
   limiteAnual: number; // Padrão R$ 81.000,00
 }
+
+export interface CatalogItem {
+  id: string;
+  title: string;
+  type: "produto" | "serviço";
+  price: number;
+}
+
+export interface Orcamento {
+  id: string;
+  clienteId: string;
+  clienteNome: string;
+  clienteDocumento?: string;
+  clienteEmail?: string;
+  clienteTelefone?: string;
+  itemTipo: "produto" | "serviço";
+  itemNome: string;
+  itemValor: number;
+  validade: string;
+  createdAt: string;
+}
+

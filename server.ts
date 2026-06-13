@@ -5,6 +5,7 @@ import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import axios from "axios";
 
 // Load environment variables
 dotenv.config();
@@ -89,9 +90,7 @@ async function startServer() {
     }
   });
 
-  // ==========================================
-  // 2. PROXY: ASAAS COBRANÇA
-  // ==========================================
+
   app.post("/api/asaas/cobranca", async (req, res) => {
     try {
       const {
@@ -609,6 +608,177 @@ async function startServer() {
     } catch (err: any) {
       console.error("[Simulator Error]:", err.message);
       res.status(500).json({ success: false, erro: err.message });
+    }
+  });
+
+  // ==========================================
+  // 6. AUTO-CREATE SUBACCOUNT ON REGISTRATION/LOGIN
+  // ==========================================
+  app.post("/api/asaas/auto-criar-subconta", async (req, res) => {
+    try {
+      const { userId, email, name } = req.body;
+      
+      if (!userId) {
+        res.status(400).json({ success: false, mensagem: "userId é obrigatório." });
+        return;
+      }
+
+      if (!db) {
+        res.status(500).json({ success: false, mensagem: "Firestore não inicializado no backend." });
+        return;
+      }
+
+      // 1. Verter/checar se o usuário já possui ID de conta Asaas
+      let existingProfile: any = {};
+      if (db) {
+        try {
+          const userDocRef = db.collection("users").doc(userId);
+          const userDoc = await userDocRef.get();
+          if (userDoc.exists) {
+            existingProfile = userDoc.data() || {};
+          }
+        } catch (err: any) {
+          console.warn("[Asaas Auto Onboarding Warn]: Não foi possível ler o documento de 'users' no backend:", err.message);
+        }
+      }
+
+      const currentWalletId = existingProfile.walletId || existingProfile.asaasWalletId;
+      const currentApiKey = existingProfile.apiKey || existingProfile.asaasApiKey || existingProfile.asaasAccessToken;
+
+      if (currentWalletId && currentApiKey) {
+        res.status(200).json({
+          success: true,
+          mensagem: "Usuário já possui subconta Asaas vinculada.",
+          walletId: currentWalletId,
+          apiKey: currentApiKey
+        });
+        return;
+      }
+
+      // 2. Coletar dados cadastrais ou gerar fallbacks robustos de Sandbox
+      const cleanCnpj = (existingProfile.cnpjPrestador || "").replace(/\D/g, "");
+      const cleanPhone = (existingProfile.telefone || "").replace(/\D/g, "");
+
+      // Gerador de CNPJ válido para garantir sucesso total em Sandbox
+      function generateRandomCNPJ() {
+        const r = (n: number) => Math.floor(Math.random() * n);
+        const n1 = r(10);
+        const n2 = r(10);
+        const n3 = r(10);
+        const n4 = r(10);
+        const n5 = r(10);
+        const n6 = r(10);
+        const n7 = r(10);
+        const n8 = r(10);
+        const n9 = 0; // 0001
+        const n10 = 0;
+        const n11 = 0;
+        const n12 = 1;
+        let d1 = n12*2+n11*3+n10*4+n9*5+n8*6+n7*7+n6*8+n5*9+n4*2+n3*3+n2*4+n1*5;
+        d1 = 11 - (d1 % 11);
+        if (d1 >= 10) d1 = 0;
+        let d2 = d1*2+n12*3+n11*4+n10*5+n9*6+n8*7+n7*8+n6*9+n5*2+n4*3+n3*4+n2*5+n1*6;
+        d2 = 11 - (d2 % 11);
+        if (d2 >= 10) d2 = 0;
+        return `${n1}${n2}${n3}${n4}${n5}${n6}${n7}${n8}0001${d1}${d2}`;
+      }
+
+      const cpfCnpjLimpo = cleanCnpj.length === 14 ? cleanCnpj : generateRandomCNPJ();
+      const systemToken = process.env.ASAAS_API_KEY;
+      const asaasToken = (systemToken || "").trim();
+
+      if (!asaasToken) {
+        res.status(500).json({
+          success: false,
+          mensagem: "Erro de Servidor: Chave master ASAAS_API_KEY não configurada no ambiente sandbox de backend."
+        });
+        return;
+      }
+
+      const asaasBaseUrl = "https://sandbox.asaas.com/v3";
+
+      const payloadAsaas = {
+        name: (existingProfile.name || existingProfile.meiName || name || "MEI Flow Beneficiante").trim().substring(0, 80),
+        email: (existingProfile.email || email || `mei_${userId}@meiflow.com`).trim(),
+        loginEmail: (existingProfile.email || email || `mei_${userId}@meiflow.com`).trim(),
+        cpfCnpj: cpfCnpjLimpo,
+        companyType: "MEI",
+        phone: cleanPhone || "11999999999",
+        mobilePhone: cleanPhone || "11999999999",
+        postalCode: "01001000",
+        address: "Avenida Paulista",
+        addressNumber: "1000",
+        province: "Bela Vista",
+      };
+
+      console.log(`[Auto-Create Subaccount]: Triggering POST v3/accounts for user ${userId} using Axios`, payloadAsaas);
+
+      let asaasData: any;
+      try {
+        const response = await axios.post(`${asaasBaseUrl}/accounts`, payloadAsaas, {
+          headers: {
+            "Content-Type": "application/json",
+            "access_token": asaasToken
+          },
+          timeout: 15000
+        });
+        asaasData = response.data;
+      } catch (err: any) {
+        let errorMsg = err.message;
+        if (err.response && err.response.data) {
+          const parsedErr = err.response.data;
+          errorMsg = parsedErr?.errors?.[0]?.description || JSON.stringify(parsedErr);
+        }
+        console.error(`[Asaas Subaccount Error]: ${errorMsg}`);
+        res.status(400).json({
+          success: false,
+          mensagem: `Asaas: Falha ao criar subconta no Asaas Sandbox: ${errorMsg}`
+        });
+        return;
+      }
+
+      const walletId = asaasData.id;
+      const apiKey = asaasData.apiKey;
+
+      if (!walletId || !apiKey) {
+        res.status(500).json({
+          success: false,
+          mensagem: "O Asaas respondeu sem erros, porém o walletId ou apiKey vieram vazios na subconta."
+        });
+        return;
+      }
+
+      // Salvar no Firebase
+      const updateObj = {
+        asaasWalletId: walletId,
+        asaasApiKey: apiKey,
+        asaasAccessToken: apiKey, // Para consistência com asaasAccessToken do front
+        walletId: walletId,
+        apiKey: apiKey,
+        updatedAt: new Date().toISOString()
+      };
+
+      if (db) {
+        try {
+          // Atualiza coleção principal users
+          await db.collection("users").doc(userId).set(updateObj, { merge: true });
+          // Sincroniza na coleção antiga de herança usuarios
+          await db.collection("usuarios").doc(userId).set(updateObj, { merge: true });
+          console.log(`[Auto-Create Subaccount Success]: User ${userId} updated in Firestore with pocket subaccount: ${walletId}`);
+        } catch (dbErr: any) {
+          console.warn("[Asaas Auto Onboarding Warn]: Não foi possível salvar no Firestore usando o Admin SDK do backend:", dbErr.message);
+        }
+      }
+
+      res.status(200).json({
+        success: true,
+        walletId: walletId,
+        apiKey: apiKey
+      });
+
+    } catch (err: any) {
+      console.error("[Auto-Create Subaccount Catastrophic Error]:", err.message);
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 

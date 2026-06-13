@@ -3,6 +3,16 @@ service cloud.firestore {
   match /databases/{database}/documents {
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
+      
+      // Permite que o usuário gerencie seu próprio catálogo de produtos/serviços
+      match /catalog/{itemId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+      
+      // Mantém o acesso para qualquer outra subcoleção futura
+      match /{document=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
     }
     match /usuarios/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
@@ -11,20 +21,20 @@ service cloud.firestore {
       }
     }
     match /customers/{customerId} {
-      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      allow read, update, delete: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid);
+      allow create: if request.auth != null;
+      allow read, write: if request.auth != null && (resource == null || !("userId" in resource.data) || resource.data.userId == request.auth.uid);
     }
     match /clientes/{clienteId} {
-      allow create: if request.auth != null && request.resource.data.mei_uid == request.auth.uid;
-      allow read, update, delete: if request.auth != null && (resource == null || resource.data.mei_uid == request.auth.uid);
+      allow create: if request.auth != null;
+      allow read, write: if request.auth != null && (resource == null || !("mei_uid" in resource.data) || resource.data.mei_uid == request.auth.uid);
     }
     match /transactions/{transactionId} {
-      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      allow read, update, delete: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid);
+      allow create: if request.auth != null;
+      allow read, write: if request.auth != null && (resource == null || !("userId" in resource.data) || resource.data.userId == request.auth.uid);
     }
     match /transacoes/{transacaoId} {
-      allow create: if request.auth != null && request.resource.data.mei_uid == request.auth.uid;
-      allow read, update, delete: if request.auth != null && (resource == null || resource.data.mei_uid == request.auth.uid);
+      allow create: if request.auth != null;
+      allow read, write: if request.auth != null && (resource == null || !("mei_uid" in resource.data) || resource.data.mei_uid == request.auth.uid);
     }
   }
 }

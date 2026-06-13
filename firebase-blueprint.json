@@ -46,12 +46,28 @@
         "clienteDocumento": { "type": "string", "description": "CNPJ/CPF do cliente denormalizado" }
       },
       "required": ["id", "userId", "type", "value", "date", "description"]
+    },
+    "catalog": {
+      "title": "catalog",
+      "description": "Produtos e serviços cadastrados pelo usuário de forma recorrente para emissão de orçamentos",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID único do item" },
+        "title": { "type": "string", "description": "Título ou nome descritivo do item" },
+        "type": { "type": "string", "enum": ["produto", "serviço"], "description": "Classificação do item no catálogo" },
+        "price": { "type": "number", "description": "Valor monetário padrão do item" }
+      },
+      "required": ["id", "title", "type", "price"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "users",
       "description": "Dados do perfil MEI autenticado"
+    },
+    "/users/{userId}/catalog/{itemId}": {
+      "schema": "catalog",
+      "description": "Itens cadastrados no catálogo individual do MEI"
     },
     "/customers/{customerId}": {
       "schema": "customers",

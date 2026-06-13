@@ -77,8 +77,8 @@ export default function ReceiptModal({
       // Sub-heading right-aligned
       doc.setFontSize(8.5);
       doc.setTextColor(203, 213, 225); // slate-300
-      doc.text(`Identificação: ${meiUid.substring(0, 16)}`, 140, 18);
-      doc.text(`Emissão: ${new Date().toLocaleDateString("pt-BR")} ${new Date().toLocaleTimeString("pt-BR")}`, 140, 24);
+      doc.text(`Identificação: ${meiUid.substring(0, 16)}`, 195, 18, { align: "right" });
+      doc.text(`Emissão: ${new Date().toLocaleDateString("pt-BR")} ${new Date().toLocaleTimeString("pt-BR")}`, 195, 24, { align: "right" });
 
       // Centered Title
       doc.setTextColor(15, 23, 42);

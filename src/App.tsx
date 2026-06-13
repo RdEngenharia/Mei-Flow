@@ -37,15 +37,16 @@ import {
   HelpCircle,
   Settings,
   Building,
-  Wallet
+  Wallet,
+  BookOpen
 } from "lucide-react";
 
-import { Cliente, Transacao } from "./types";
+import { Cliente, Transacao, CatalogItem, Orcamento } from "./types";
 import ReceiptModal from "./components/ReceiptModal";
 import MeiConfigModal from "./components/MeiConfigModal";
-import AsaasWalletModal from "./components/AsaasWalletModal";
 import UpgradeModal from "./components/UpgradeModal";
-import { consultarSaldoAsaas } from "./asaasService";
+import CatalogManager from "./components/CatalogManager";
+import OrcamentoGenerator from "./components/OrcamentoGenerator";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -70,11 +71,11 @@ import {
   fetchUserProfileFromFirebase
 } from "./firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
-import { onSnapshot, doc } from "firebase/firestore";
+import { onSnapshot, doc, setDoc } from "firebase/firestore";
 
 export default function App() {
   // Controle de Navegação por Abas/Módulos
-  const [currentView, setCurrentView] = useState<"home" | "clientes" | "financeiro" | "carteira">("home");
+  const [currentView, setCurrentView] = useState<"home" | "clientes" | "financeiro" | "orcamentos" | "catalogo">("home");
 
   // State e Credenciais de Autenticação MEI
   const [userId, setUserId] = useState("user_49281");
@@ -88,16 +89,7 @@ export default function App() {
   const [telefonePrestador, setTelefonePrestador] = useState(() => {
     return localStorage.getItem("meiflow_telefone_prestador") || "(11) 98765-4321";
   });
-  const [asaasAccessToken, setAsaasAccessToken] = useState(() => {
-    return localStorage.getItem("meiflow_asaas_access_token") || "";
-  });
   const [showMeiConfigModal, setShowMeiConfigModal] = useState(false);
-  const [showAsaasWalletModal, setShowAsaasWalletModal] = useState(false);
-  const [asaasBalance, setAsaasBalance] = useState<number | null>(null);
-  const [isLoadingAsaasBalance, setIsLoadingAsaasBalance] = useState(false);
-  const [showAsaasBalance, setShowAsaasBalance] = useState(() => {
-    return localStorage.getItem("meiflow_show_asaas_balance") !== "false";
-  });
 
   // -------------------------------------------------------------------------
   // NOVO: ESTADOS INTEGRADOS DO FIREBASE & ISOLAMENTO DE USUÁRIOS (MULTITENANCY)
@@ -124,6 +116,15 @@ export default function App() {
   // NOVO: ESTADOS INTEGRADOS DO CHAMADO DE SUPORTE TÉCNICO (MENSAGEM VIA MAILTO)
   // -------------------------------------------------------------------------
   const [showSupportModal, setShowSupportModal] = useState(false);
+  const [showSupportSuccessModal, setShowSupportSuccessModal] = useState(false);
+  const [submittedTicket, setSubmittedTicket] = useState<{
+    id: string;
+    category: string;
+    subject: string;
+    replyEmail: string;
+    message: string;
+    createdAt: string;
+  } | null>(null);
   const [supportCategory, setSupportCategory] = useState("Erro de Lançamento / Cálculo");
   const [supportSubject, setSupportSubject] = useState("");
   const [supportMessage, setSupportMessage] = useState("");
@@ -201,6 +202,27 @@ export default function App() {
   // Busca e Filtros da tabela
   const [searchTerm, setSearchTerm] = useState("");
   const [filterTipo, setFilterTipo] = useState<"todos" | "entrada" | "saida">("todos");
+  const [filterStartDate, setFilterStartDate] = useState("");
+  const [filterEndDate, setFilterEndDate] = useState("");
+
+  // Helper to safely parse both DD/MM/YYYY and YYYY-MM-DD
+  const parseTransactionDate = (dateStr: string): Date | null => {
+    if (!dateStr) return null;
+    if (dateStr.includes("-")) {
+      const parts = dateStr.split("-");
+      if (parts.length === 3) {
+        return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+      }
+    }
+    if (dateStr.includes("/")) {
+      const parts = dateStr.split("/");
+      if (parts.length === 3) {
+        return new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      }
+    }
+    const parsed = new Date(dateStr);
+    return isNaN(parsed.getTime()) ? null : parsed;
+  };
 
   // Função para engatilhar Toast temporário
   const triggerToast = (msg: string) => {
@@ -244,10 +266,7 @@ export default function App() {
               setTelefonePrestador(profile.telefone);
               localStorage.setItem("meiflow_telefone_prestador", profile.telefone);
             }
-            if (profile.asaasAccessToken) {
-              setAsaasAccessToken(profile.asaasAccessToken);
-              localStorage.setItem("meiflow_asaas_access_token", profile.asaasAccessToken);
-            }
+
             if (profile.planType) {
               setPlanType(profile.planType);
             } else {
@@ -304,7 +323,18 @@ export default function App() {
         // Sem usuário logado: carrega as sementes locais persistidas
         setUser(null);
         setUserId("user_49281");
-        setMeiName("João Silva Consultoria");
+        
+        const localMeiName = localStorage.getItem("meiflow_mei_name") || "João Silva Consultoria";
+        const localCnpj = localStorage.getItem("meiflow_cnpj_prestador") || "21.231.111/0001-20";
+        const localInscricao = localStorage.getItem("meiflow_inscricao_municipal") || "48392-1";
+        const localTelefone = localStorage.getItem("meiflow_telefone_prestador") || "(11) 98765-4321";
+
+        setMeiName(localMeiName);
+        setCnpjPrestador(localCnpj);
+        setInscricaoMunicipal(localInscricao);
+        setTelefonePrestador(localTelefone);
+        setPlanType("free");
+        setCompanyLogo("");
         
         const savedClientes = localStorage.getItem("meiflow_clientes");
         const savedTransacoes = localStorage.getItem("meiflow_transacoes");
@@ -364,30 +394,6 @@ export default function App() {
       localStorage.setItem("meiflow_transacoes", JSON.stringify(transacoes));
     }
   }, [transacoes, user]);
-
-  // Novo: Buscar saldo da API v3 do Asaas sempre que o token de acesso mudar
-  useEffect(() => {
-    const fetchBalance = async () => {
-      if (asaasAccessToken && asaasAccessToken.trim() !== "") {
-        setIsLoadingAsaasBalance(true);
-        try {
-          const result = await consultarSaldoAsaas(asaasAccessToken.trim(), false);
-          if (result.success) {
-            setAsaasBalance(result.balance);
-          } else {
-            setAsaasBalance(null);
-          }
-        } catch (err) {
-          console.error("Erro ao carregar saldo Asaas na Home:", err);
-          setAsaasBalance(null);
-        }
-        setIsLoadingAsaasBalance(false);
-      } else {
-        setAsaasBalance(null);
-      }
-    };
-    fetchBalance();
-  }, [asaasAccessToken]);
 
   // Controles de Login/Logout
   const handleGoogleSignIn = async () => {
@@ -479,7 +485,6 @@ export default function App() {
           cnpjPrestador: newCnpj,
           inscricaoMunicipal: newInscricao,
           telefone: newTelefone,
-          asaasAccessToken: asaasAccessToken,
           planType: planType,
           companyLogo: logo !== undefined ? logo : companyLogo
         });
@@ -494,30 +499,6 @@ export default function App() {
     }
   };
 
-  const handleSaveAsaasToken = async (newToken: string) => {
-    try {
-      setAsaasAccessToken(newToken);
-      localStorage.setItem("meiflow_asaas_access_token", newToken);
-      if (user) {
-        await saveUserProfileToFirebase(user.uid, {
-          meiName,
-          cnpjPrestador,
-          inscricaoMunicipal,
-          telefone: telefonePrestador,
-          asaasAccessToken: newToken,
-          planType: planType,
-          companyLogo: companyLogo
-        });
-        triggerToast("✓ Token do Asaas atualizado e sincronizado na nuvem!");
-      } else {
-        triggerToast("✓ Token do Asaas atualizado com sucesso!");
-      }
-    } catch (error) {
-      console.error(error);
-      triggerToast("⚠ Erro ao salvar o token do Asaas.");
-    }
-  };
-
   const handleUpgradeSuccess = async () => {
     try {
       setPlanType("premium");
@@ -527,7 +508,6 @@ export default function App() {
           cnpjPrestador,
           inscricaoMunicipal,
           telefone: telefonePrestador,
-          asaasAccessToken,
           planType: "premium",
           companyLogo
         });
@@ -541,53 +521,10 @@ export default function App() {
     }
   };
 
-  const handleAsaasAddTransaction = async (newTx: Omit<Transacao, "id">) => {
-    const fullTx: Transacao = {
-      id: `tx_${Date.now().toString().slice(-6)}`,
-      ...newTx
-    };
-
-    if (user) {
-      try {
-        await saveTransacaoToFirebase(user.uid, fullTx);
-        setTransacoes(prev => [fullTx, ...prev]);
-        triggerToast("✓ Saque Pix registrado e sincronizado no Firebase!");
-      } catch (err) {
-        console.error("Erro Firebase Asaas Tx:", err);
-        triggerToast("⚠ Saque efetuado mas erro ao sincronizar log.");
-      }
-    } else {
-      setTransacoes(prev => [fullTx, ...prev]);
-      triggerToast("✓ Saque Pix registrado e sincronizado localmente!");
-    }
-  };
-
-  const handleRefreshAsaasBalance = async () => {
-    if (asaasAccessToken && asaasAccessToken.trim() !== "") {
-      setIsLoadingAsaasBalance(true);
-      try {
-        const result = await consultarSaldoAsaas(asaasAccessToken.trim(), false);
-        if (result.success) {
-          setAsaasBalance(result.balance);
-          triggerToast("✓ Saldo da Conta Digital Asaas atualizado!");
-        } else {
-          setAsaasBalance(null);
-          triggerToast(`⚠ ${result.error || "Erro ao consultar saldo Asaas"}`);
-        }
-      } catch (err: any) {
-        console.error("Erro ao recarregar saldo Asaas:", err);
-        setAsaasBalance(null);
-        triggerToast("⚠ Falha de rede ao conectar à API do Asaas.");
-      }
-      setIsLoadingAsaasBalance(false);
-    } else {
-      triggerToast("⚠ Token do Asaas não configurado.");
-    }
-  };
-
   const handleSignOut = async () => {
     if (confirm("Gostaria de se desconectar de seu perfil MEI? O app voltará ao modo offline.")) {
       await logoutUser();
+      setCurrentView("home");
       triggerToast("✓ Desconectado com sucesso.");
     }
   };
@@ -654,7 +591,8 @@ export default function App() {
       doc.setFontSize(10);
       doc.setTextColor(100, 116, 139); // slate-500
       doc.text(`Emitente MEI: ${meiName || "Não Informado"}`, 15, 65);
-      doc.text(`Identificador MEI: ${userId}`, 15, 71);
+      const displayUserId = userId.length > 25 ? userId.substring(0, 25) + "..." : userId;
+      doc.text(`Identificador MEI: ${displayUserId}`, 15, 71);
       doc.text(`Data de Emissão: ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR")}`, 15, 77);
       
       // Draw line
@@ -992,32 +930,52 @@ export default function App() {
       doc.setFontSize(10);
       doc.text("Relatório de Inteligência & Conformidade Fiscal do MEI", 15, 32);
       
-      // Right aligned info in header
+      // Right aligned info in header (aligned to right margin 195 to fit perfectly)
       doc.setFontSize(9);
       doc.setTextColor(203, 213, 225); // slate-300
-      doc.text(`Usuário: ${meiName || "Não Informado"}`, 140, 20);
-      doc.text(`ID MEI: ${userId}`, 140, 26);
-      doc.text(`Emitido em: ${new Date().toLocaleDateString("pt-BR")}`, 140, 32);
+      doc.text(`Usuário: ${meiName || "Não Informado"}`, 195, 20, { align: "right" });
+      const safeIdMei = userId.length > 25 ? userId.substring(0, 25) + "..." : userId;
+      doc.text(`ID MEI: ${safeIdMei}`, 195, 26, { align: "right" });
+      doc.text(`Emitido em: ${new Date().toLocaleDateString("pt-BR")}`, 195, 32, { align: "right" });
       
       // Document title
       doc.setTextColor(15, 23, 42);
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(16);
-      doc.text("LIVRO CAIXA & RELATÓRIO DE FATURAMENTO", 15, 58);
+      doc.setFontSize(14);
+      doc.text("LIVRO CAIXA & RELATÓRIO DE FATURAMENTO", 15, 51);
+      
+      // Selected period text
+      let periodoTxt = "Todos os lançamentos selecionados";
+      if (filterStartDate || filterEndDate) {
+        const parseAndFormat = (dStr: string) => {
+          const parts = dStr.split("-");
+          if (parts.length === 3) {
+            return `${parts[2]}/${parts[1]}/${parts[0]}`; // DD/MM/YYYY
+          }
+          return dStr;
+        };
+        const startPretty = filterStartDate ? parseAndFormat(filterStartDate) : "Início";
+        const endPretty = filterEndDate ? parseAndFormat(filterEndDate) : "Fim";
+        periodoTxt = `Período Filtrado: ${startPretty} até ${endPretty}`;
+      }
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9.5);
+      doc.setTextColor(37, 99, 235); // elegant blue
+      doc.text(periodoTxt, 15, 57);
       
       // Intro paragraph
       doc.setFont("helvetica", "normal");
-      doc.setFontSize(9.5);
+      doc.setFontSize(9);
       doc.setTextColor(71, 85, 105); // slate-600
       doc.text(
         "Abaixo estão consolidados os lançamentos tributários do período selecionado. Este relatório deve ser apresentado",
         15,
-        66
+        64
       );
       doc.text(
         "anualmente junto à Declaração Anual do Simples Nacional do MEI (DASN-SIMEI).",
         15,
-        71
+        69
       );
       
       // Main stats summary cards in PDF
@@ -1104,48 +1062,30 @@ export default function App() {
       
       // If we're close to the bottom, add a page
       let drawY = finalTableY;
-      if (drawY > 260) {
+      if (drawY > 245) {
         doc.addPage();
         drawY = 20;
       }
       
-      // Highlighted compliance box
-      doc.setFillColor(241, 245, 249); // slate-100
-      doc.rect(15, drawY, 180, 20, "F");
-      
-      doc.setTextColor(30, 41, 59); // slate-800
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(9);
-      doc.text("Selo de Autenticidade de Conformidade Tecnológica", 20, drawY + 8);
-      
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(8);
-      doc.setTextColor(100, 116, 139); // slate-500
-      doc.text(
-        "Declaro que as informações constantes em sistema refletem de forma idônea as operações de venda e de compras",
-        20,
-        drawY + 14
-      );
-      doc.text(
-        "efetuadas no decorrer do exercício pela empresa cadastrada.",
-        20,
-        drawY + 18
-      );
-      
-      const footerY = drawY + 34;
+      const footerY = drawY + 15;
       doc.setFont("helvetica", "bold");
       doc.setFontSize(9.5);
       doc.setTextColor(71, 85, 105);
+      
+      // Left side signature
       doc.text("________________________________________", 15, footerY);
       doc.text("Assinatura do MEI Responsável", 15, footerY + 5);
       
-      doc.text("________________________________________", 115, footerY);
-      doc.text("Verificação ID Digital do Sistema", 115, footerY + 5);
+      // Right side signature (right-aligned at 195 to fit perfectly within standard margins)
+      doc.text("________________________________________", 195, footerY, { align: "right" });
+      doc.text("Verificação ID Digital do Sistema", 195, footerY + 5, { align: "right" });
       
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
       doc.setTextColor(148, 163, 184);
-      doc.text(`Chave Eletrônica: MEIFLOW_${userId.toUpperCase()}_REV_${Math.floor(Math.random()*90000 + 10000)}`, 115, footerY + 10);
+      const shortRevId = userId.substring(0, 12).toUpperCase();
+      const shortKey = `MEIFLOW_${shortRevId}_REV_${Math.floor(Math.random() * 90000 + 10000)}`;
+      doc.text(`Chave: ${shortKey}`, 195, footerY + 10, { align: "right" });
       
       doc.save(`relatorio_faturamento_mei_flow.pdf`);
       triggerToast("✓ Relatório Fiscal Completo em PDF emitido e baixado com sucesso!");
@@ -1158,11 +1098,47 @@ export default function App() {
   // -------------------------------------------------------------------------
   // CHAMADO DE SUPORTE TÉCNICO VINCULADO AO DESENVOLVEDOR (rodrigues.solar@hotmail.com)
   // -------------------------------------------------------------------------
-  const handleSendSupportMessage = (e: React.FormEvent) => {
+  const handleSendSupportMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supportSubject || !supportMessage) {
       triggerToast("⚠ Preencha os campos obrigatórios do chamado.");
       return;
+    }
+
+    const ticketId = "support_" + Date.now();
+    const ticketObj = {
+      id: ticketId,
+      category: supportCategory,
+      subject: supportSubject,
+      replyEmail: supportReplyEmail || "Não Informado",
+      message: supportMessage,
+      createdAt: new Date().toISOString()
+    };
+
+    // 1. Persistir no Firestore
+    try {
+      const ticketRef = doc(db, "support_tickets", ticketId);
+      await setDoc(ticketRef, {
+        ...ticketObj,
+        userId: userId,
+        meiName: meiName,
+        status: "novo"
+      });
+      console.log("Chamado persistido com sucesso no Firestore:", ticketId);
+    } catch (dbErr: any) {
+      console.warn("Firestore não pôde salvar chamado diretamente (offline ou permissão). Salvando localmente:", dbErr.message);
+      // Fallback local storage
+      try {
+        const localTicketsKey = `meiflow_support_tickets_${userId}`;
+        const localTickets = JSON.parse(localStorage.getItem(localTicketsKey) || "[]");
+        localTickets.push({
+          ...ticketObj,
+          status: "novo"
+        });
+        localStorage.setItem(localTicketsKey, JSON.stringify(localTickets));
+      } catch (locErr) {
+        console.error("Falha ao salvar fallback de chamados:", locErr);
+      }
     }
 
     const emailDestino = "rodrigues.solar@hotmail.com";
@@ -1200,10 +1176,17 @@ ${meiName}`;
     // Monta o mailto com segurança contra quebra de URL
     const mailtoLink = `mailto:${emailDestino}?subject=${encodeURIComponent(assuntoFormatado)}&body=${encodeURIComponent(corpoEmail)}`;
     
-    // Dispara no navegador do usuário abrindo Outlook/Gmail de forma segura
-    window.location.href = mailtoLink;
+    // Dispara no navegador abrindo Outlook/Gmail de forma segura (se suportado no ambiente)
+    try {
+      window.location.href = mailtoLink;
+    } catch (err) {
+      console.warn("Mailto redirection blocked or failed:", err);
+    }
 
-    triggerToast("✓ Rascunho com diagnóstico montado! O seu e-mail de suporte foi aberto.");
+    // Set variables to show the beautiful confirmation modal
+    setSubmittedTicket(ticketObj);
+    setShowSupportSuccessModal(true);
+    triggerToast("✓ Chamado registrado com sucesso no sistema!");
     
     // Reset e encerramento
     setSupportSubject("");
@@ -1235,15 +1218,15 @@ ${meiName}`;
     };
 
     if (user) {
-      // Se autenticado via Firebase, grava de forma resiliente diretamente no Firestore na subcoleção usuarios/{userId}/vendas
+      // Se autenticado, grava de forma resiliente diretamente na nuvem
       saveVendaToFirebase(user.uid, novaVenda)
         .then(() => {
           setTransacoes(prev => [novaVenda, ...prev]);
-          triggerToast("✓ Venda adicionada e guardada remotamente no Firebase sob 'usuarios/{userId}/vendas'.");
+          triggerToast("✓ Venda adicionada e sincronizada com sucesso!");
         })
         .catch(err => {
           console.error("Erro Firebase:", err);
-          triggerToast("⚠ Erro ao salvar venda no Firestore remoto.");
+          triggerToast("⚠ Erro ao salvar venda em nuvem.");
         });
     } else {
       setTransacoes(prev => [novaVenda, ...prev]);
@@ -1277,11 +1260,11 @@ ${meiName}`;
       saveTransacaoToFirebase(user.uid, novaDespesa)
         .then(() => {
           setTransacoes(prev => [novaDespesa, ...prev]);
-          triggerToast("✓ Despesa gravada com sucesso remota no Firebase.");
+          triggerToast("✓ Despesa gravada com sucesso!");
         })
         .catch(err => {
           console.error("Erro Firebase Despesa:", err);
-          triggerToast("⚠ Erro ao salvar despesa no Firestore.");
+          triggerToast("⚠ Erro ao salvar despesa.");
         });
     } else {
       setTransacoes(prev => [novaDespesa, ...prev]);
@@ -1311,11 +1294,11 @@ ${meiName}`;
       saveClienteToFirebase(user.uid, novoCli)
         .then(() => {
           setClientes(prev => [...prev, novoCli]);
-          triggerToast(`✓ Cliente ${cliNome} cadastrado com sucesso no seu Firestore!`);
+          triggerToast(`✓ Cliente ${cliNome} cadastrado com sucesso!`);
         })
         .catch(err => {
           console.error("Erro Firebase Cliente:", err);
-          triggerToast("⚠ Erro ao adicionar cliente no Firestore remoto.");
+          triggerToast("⚠ Erro ao cadastrar cliente.");
         });
     } else {
       setClientes(prev => [...prev, novoCli]);
@@ -1337,7 +1320,7 @@ ${meiName}`;
         deleteClienteFromFirebase(cliId)
           .then(() => {
             setClientes(prev => prev.filter(c => c.id !== cliId));
-            triggerToast("✓ Cliente removido com sucesso do Firestore.");
+            triggerToast("✓ Cliente removido com sucesso.");
           })
           .catch(err => {
             console.error(err);
@@ -1362,11 +1345,11 @@ ${meiName}`;
         deletePromise
           .then(() => {
             setTransacoes(prev => prev.filter(t => t.id !== id));
-            triggerToast("✓ Movimentação financeira removida com sucesso do Firestore.");
+            triggerToast("✓ Movimentação financeira removida.");
           })
           .catch(err => {
             console.error(err);
-            triggerToast("⚠ Erro ao excluir transação no Firestore.");
+            triggerToast("⚠ Erro ao excluir transação.");
           });
       } else {
         setTransacoes(prev => prev.filter(t => t.id !== id));
@@ -1381,8 +1364,26 @@ ${meiName}`;
       (t.clienteNome && t.clienteNome.toLowerCase().includes(searchTerm.toLowerCase())) ||
       t.categoria.toLowerCase().includes(searchTerm.toLowerCase());
     
-    if (filterTipo === "todos") return matchesSearch;
-    return matchesSearch && t.tipo === filterTipo;
+    const matchesType = filterTipo === "todos" || t.tipo === filterTipo;
+
+    let matchesPeriod = true;
+    const txDate = parseTransactionDate(t.data);
+    if (txDate) {
+      if (filterStartDate) {
+        const start = new Date(filterStartDate);
+        start.setHours(0, 0, 0, 0);
+        txDate.setHours(0, 0, 0, 0);
+        if (txDate < start) matchesPeriod = false;
+      }
+      if (filterEndDate) {
+        const end = new Date(filterEndDate);
+        end.setHours(23, 59, 59, 999);
+        txDate.setHours(0, 0, 0, 0);
+        if (txDate > end) matchesPeriod = false;
+      }
+    }
+
+    return matchesSearch && matchesType && matchesPeriod;
   });
 
   return (
@@ -1421,7 +1422,7 @@ ${meiName}`;
               <Building className="w-4 h-4" />
             </div>
             <div className="hidden md:flex flex-col text-left">
-              <span className="text-xs font-bold text-slate-800 group-hover:text-blue-600 transition-all leading-tight truncate max-w-[170px]">
+              <span className="text-xs font-bold text-slate-800 group-hover:text-blue-600 transition-all leading-tight">
                 {meiName}
               </span>
               <span className="text-[9px] text-slate-400 font-medium font-mono">
@@ -1435,9 +1436,8 @@ ${meiName}`;
           {user ? (
             <div className="flex items-center gap-2">
               <div 
-                onClick={() => setShowConfigGuide(true)}
-                className="cursor-pointer hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 rounded-xl text-blue-700 text-xs font-bold transition-all border border-blue-100/50"
-                title="Sincronização em nuvem ativa por UID exclusivo"
+                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 rounded-xl text-blue-700 text-xs font-bold border border-blue-100/50"
+                title="Sincronização em nuvem ativa"
               >
                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
                 <span>Nuvem Ativa</span>
@@ -1445,7 +1445,7 @@ ${meiName}`;
               <button
                 onClick={handleSignOut}
                 className="bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 px-3.5 font-bold rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-sm border border-slate-200"
-                title="Sair da Conta Google / Firebase"
+                title="Sair da Conta"
               >
                 <LogOut className="w-4 h-4 text-slate-500" />
                 <span className="hidden sm:inline">Desconectar</span>
@@ -1457,7 +1457,7 @@ ${meiName}`;
                 onClick={() => setShowAuthModal(true)}
                 disabled={isFirebaseSyncing}
                 className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md shrink-0 cursor-pointer"
-                title="Acesse com E-mail ou Conta Google para sincronização multi-usuário"
+                title="Acesse com sua conta para sincronização segura e backup automático"
               >
                 {isFirebaseSyncing ? (
                   <RefreshCw className="w-4 h-4 text-blue-100 animate-spin" />
@@ -1543,6 +1543,22 @@ ${meiName}`;
                   <UserPlus className="w-3.5 h-3.5 text-slate-400" />
                   <span>Novo Cliente</span>
                 </button>
+
+                <button
+                  onClick={() => setCurrentView("orcamentos")}
+                  className="px-4.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <FileText className="w-3.5 h-3.5 text-blue-100" />
+                  <span>Gerador Orçamentos</span>
+                </button>
+
+                <button
+                  onClick={() => setCurrentView("catalogo")}
+                  className="px-4.5 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <BookOpen className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Catálogo {planType === "free" ? "🔒" : ""}</span>
+                </button>
               </div>
             </div>
 
@@ -1608,34 +1624,64 @@ ${meiName}`;
 
             </div>
 
-            {/* CENTRAL DE CARTEIRA DIGITAL: BOTÃO DE DESTAQUE ELEGANTE & CENTRALIZADO */}
-            <div className="flex flex-col items-center justify-center p-12 bg-slate-50 rounded-3xl border border-slate-200/40 text-center space-y-4">
-              <div className="space-y-1">
-                <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">
-                  Conta de Recebíveis Neobanking
-                </span>
-                <p className="text-xs text-slate-500 max-w-md">
-                  Gerencie seus saldos, simule saques via PIX e emita links de cobrança aos seus clientes cadastrados.
-                </p>
+            {/* INTEGRATED BUSINESS MANAGEMENT ROW (BENTO ROW 2) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              {/* CARD: PROPOSTAS / ORÇAMENTOS */}
+              <div 
+                onClick={() => setCurrentView("orcamentos")}
+                className="bg-white p-10 md:p-12 rounded-3xl border border-slate-200/50 shadow-xs flex flex-col justify-between cursor-pointer hover:border-blue-300 hover:shadow-md transition-all duration-300 transform hover:-translate-y-0.5"
+                title="Clique para emitir orçamentos e propostas para seus clientes"
+              >
+                <div className="space-y-4">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block flex items-center justify-between">
+                    <span>Orçamentos Comerciais</span>
+                    <span className="text-blue-600 font-semibold text-[11px] normal-case">Emitir Proposta &rarr;</span>
+                  </span>
+                  <div className="space-y-1.5 text-left">
+                    <h3 className="text-2xl font-semibold text-slate-800 tracking-tight">Propostas Rápidas</h3>
+                    <p className="text-xs text-slate-400 font-medium">Gere e visualize orçamentos profissionais, com suporte a preenchimento manual ou catálogo inteligente, prontos para impressão ou compartilhamento.</p>
+                  </div>
+                </div>
+
+                <div className="mt-10 pt-6 border-t border-slate-50 flex items-center justify-between text-xs text-slate-400">
+                  <span className="font-semibold text-xs text-blue-600 flex items-center gap-1 bg-blue-50 px-3 py-1 rounded-full">
+                    Acessar e Emitir
+                  </span>
+                  <span className="font-medium text-slate-450">Suporte a PDF & Impressão</span>
+                </div>
               </div>
 
-              <div className="pt-2">
-                <button
-                  onClick={() => {
-                    if (planType === "free") {
-                      setShowUpgradeModal(true);
-                    } else {
-                      setCurrentView("carteira");
-                    }
-                  }}
-                  className="group relative px-10 py-5 bg-slate-950 hover:bg-slate-900 text-white rounded-full font-bold text-sm tracking-wide shadow-xl shadow-slate-900/15 hover:shadow-slate-900/25 transition-all transform hover:-translate-y-0.5 active:translate-y-0 cursor-pointer flex items-center gap-3"
-                >
-                  <Wallet className="w-4.5 h-4.5 text-slate-300 group-hover:scale-110 transition-all duration-300" />
-                  <span>Acessar Carteira Digital & Cobranças {planType === "free" ? "🔒" : ""}</span>
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                </button>
+              {/* CARD: CATÁLOGO */}
+              <div 
+                onClick={() => setCurrentView("catalogo")}
+                className="bg-white p-10 md:p-12 rounded-3xl border border-slate-200/50 shadow-xs flex flex-col justify-between cursor-pointer hover:border-blue-300 hover:shadow-md transition-all duration-300 transform hover:-translate-y-0.5"
+                title="Clique para cadastrar produtos ou serviços recorrentes"
+              >
+                <div className="space-y-4">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block flex items-center justify-between">
+                    <span>Catálogo de Itens {planType === "free" ? "🔒" : ""}</span>
+                    <span className="text-blue-600 font-semibold text-[11px] normal-case">Configurar Catálogo &rarr;</span>
+                  </span>
+                  <div className="space-y-1.5 text-left">
+                    <h3 className="text-2xl font-semibold text-slate-800 tracking-tight flex items-center gap-2">
+                      <span>Serviços & Produtos</span>
+                      {planType === "premium" && (
+                        <span className="inline-flex px-1.5 py-0.5 rounded text-[8px] font-bold bg-blue-100 text-blue-700 uppercase">Ativo</span>
+                      )}
+                    </h3>
+                    <p className="text-xs text-slate-400 font-medium">Elimine digitação repetitiva! Cadastre seus honorários, preços de mercadorias ou serviços frequentes e preencha orçamentos de imediato.</p>
+                  </div>
+                </div>
+
+                <div className="mt-10 pt-6 border-t border-slate-50 flex items-center justify-between text-xs text-slate-400">
+                  <span className="font-semibold text-xs text-indigo-600 flex items-center gap-1 bg-indigo-50 px-3 py-1 rounded-full">
+                    Cadastrar Itens {planType === "free" ? "(🔒 Premium)" : ""}
+                  </span>
+                  <span className="font-medium text-slate-450 text-[11px]">Vínculo instantâneo</span>
+                </div>
               </div>
             </div>
+
           </>
         )}
 
@@ -1697,7 +1743,7 @@ ${meiName}`;
                           {initials}
                         </div>
                         <div className="text-left space-y-1 min-w-0">
-                          <h3 className="font-semibold text-slate-800 text-base truncate pr-2" title={c.nome}>
+                          <h3 className="font-semibold text-slate-800 text-base pr-2" title={c.nome}>
                             {c.nome}
                           </h3>
                           <span className="text-xs text-slate-400 font-mono block">
@@ -1776,6 +1822,22 @@ ${meiName}`;
               </p>
             </div>
 
+            {/* EXPLICATIVO CHAVE DE AUTENTICIDADE / ID MEI */}
+            <div className="bg-slate-50 border border-slate-200/60 rounded-3xl p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-600 animate-pulse"></span>
+                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">O que é o ID de MEI no Relatório?</h4>
+                </div>
+                <p className="text-xs text-slate-500 leading-relaxed max-w-2xl">
+                  O <strong className="text-slate-700">ID de MEI ({userId})</strong> impresso no cabeçalho do PDF é o identificador exclusivo e oficial do seu livro caixa no sistema MEI Flow. Ele age como uma chave de segurança digital e selo de conformidade que certifica de forma rastreável a autenticidade dos dados sincronizados na nuvem em auditorias e declarações.
+                </p>
+              </div>
+              <div className="bg-white px-3 py-1.5 border border-slate-200 rounded-xl text-slate-500 font-mono text-[10px] select-all tracking-tight shrink-0">
+                CHAVE_CONFORMIDADE_ID: <span className="font-bold text-blue-600">{userId}</span>
+              </div>
+            </div>
+
             {/* SEÇÃO DA TABELA REAPROVEITADA */}
             <div className="bg-white rounded-3xl border border-slate-200/50 shadow-xs overflow-hidden pt-6">
               <div className="p-8 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -1823,11 +1885,47 @@ ${meiName}`;
                     </button>
                   </div>
 
+                  {/* Filtro de Período de Datas */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1 text-xs">
+                      <span className="text-[9px] uppercase font-extrabold text-slate-400">De:</span>
+                      <input
+                        type="date"
+                        value={filterStartDate}
+                        onChange={(e) => setFilterStartDate(e.target.value)}
+                        className="bg-transparent focus:outline-none text-slate-700 font-medium cursor-pointer max-w-[110px]"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1 text-xs">
+                      <span className="text-[9px] uppercase font-extrabold text-slate-400">Até:</span>
+                      <input
+                        type="date"
+                        value={filterEndDate}
+                        onChange={(e) => setFilterEndDate(e.target.value)}
+                        className="bg-transparent focus:outline-none text-slate-700 font-medium cursor-pointer max-w-[110px]"
+                      />
+                    </div>
+                    {(filterStartDate || filterEndDate) && (
+                      <button
+                        onClick={() => {
+                          setFilterStartDate("");
+                          setFilterEndDate("");
+                          triggerToast("✓ Filtro de período limpo!");
+                        }}
+                        className="px-2 py-1 hover:bg-slate-100 text-slate-500 hover:text-slate-800 text-[10px] uppercase font-extrabold rounded-lg border border-slate-200 transition-all cursor-pointer"
+                        title="Limpar período de datas"
+                      >
+                        Limpar
+                      </button>
+                    )}
+                  </div>
+
                   <button
                     onClick={handleExportPDF}
-                    className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold rounded-xl flex items-center gap-1.5 border border-slate-200 transition-all shadow-xs"
+                    className="px-4 py-2 bg-slate-950 hover:bg-slate-900 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 border border-slate-950 transition-all shadow-md cursor-pointer"
+                    title="Baixar Livro Caixa Consolidado em PDF"
                   >
-                    <FileDown className="w-3.5 h-3.5 text-slate-400" />
+                    <FileDown className="w-3.5 h-3.5 text-slate-350" />
                     <span>Baixar PDF</span>
                   </button>
                 </div>
@@ -1950,55 +2048,46 @@ ${meiName}`;
           </div>
         )}
 
-        {/* VIEW: CARTEIRA DIGITAL */}
-        {currentView === "carteira" && (
-          <div className="space-y-8 animate-fade-in text-left">
-            <div className="flex items-center gap-2 mb-2">
-              <button 
-                onClick={() => setCurrentView("home")}
-                className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-950 transition-all bg-white px-4 py-2 border border-slate-200 rounded-xl shadow-xs cursor-pointer"
-              >
-                <span>&larr; Voltar para o Início (Home)</span>
-              </button>
-            </div>
+        {/* VIEW: GERADOR DE ORÇAMENTOS */}
+        {currentView === "orcamentos" && (
+          <OrcamentoGenerator
+            userId={user?.uid || userId}
+            planType={planType}
+            companyLogo={companyLogo || ""}
+            meiName={meiName}
+            cnpjPrestador={cnpjPrestador || ""}
+            inscricaoMunicipal={inscricaoMunicipal || ""}
+            telefonePrestador={telefonePrestador || ""}
+            clientes={clientes}
+            onTriggerUpgrade={() => setShowUpgradeModal(true)}
+            onGoBack={() => setCurrentView("home")}
+            triggerToast={triggerToast}
+          />
+        )}
 
-            <div className="pb-2 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div>
-                <h1 className="text-3xl md:text-4xl font-display font-light text-slate-900 tracking-tight">
-                  Carteira Digital & Recebíveis
-                </h1>
-                <p className="text-xs md:text-sm text-slate-400 mt-1 font-medium">
-                  Gateway real integrado do Asaas para cobrança automatizada por boleto, cartão ou PIX e depósitos.
-                </p>
-              </div>
-            </div>
-
-            <div className="w-full flex justify-center py-4">
-              <AsaasWalletModal
-                userId={userId}
-                transactions={transacoes}
-                currentAsaasToken={asaasAccessToken}
-                onSaveAsaasToken={handleSaveAsaasToken}
-                onAddTransaction={handleAsaasAddTransaction}
-                onClose={() => setCurrentView("home")}
-                isInline={true}
-              />
-            </div>
-          </div>
+        {/* VIEW: CATÁLOGO DE ITENS */}
+        {currentView === "catalogo" && (
+          <CatalogManager
+            userId={user?.uid || userId}
+            planType={planType}
+            onTriggerUpgrade={() => setShowUpgradeModal(true)}
+            onGoBack={() => setCurrentView("home")}
+            triggerToast={triggerToast}
+          />
         )}
 
       </main>
 
-      {/* SEÇÃO INTEGRADA DE DOWNLOAD DO APK - MOVIDO PARA O RODAPÉ PARA DESIGN LIMPO */}
-      <div className="max-w-7xl mx-auto px-4 md:px-8 mt-12">
-        <div className="bg-slate-100 border border-slate-200 rounded-2xl p-6 md:p-8 flex flex-col md:flex-row items-center justify-between gap-6 text-left">
+      {/* SEÇÃO AMIGÁVEL DE ACESSO MOBILE PARA MEI FLOW */}
+      <div className="max-w-7xl mx-auto px-4 md:px-8 mt-12 animate-fade-in">
+        <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-6 md:p-8 flex flex-col md:flex-row items-center justify-between gap-6 text-left">
           <div className="space-y-1.5 text-left">
-            <span className="inline-flex items-center gap-1.5 bg-emerald-100 text-emerald-800 font-bold text-[10px] px-2.5 py-1 rounded-full border border-emerald-200 uppercase tracking-widest">
-              <Smartphone className="w-3.5 h-3.5 text-emerald-600 animate-bounce" /> Versão Mobile Disponível (APK)
+            <span className="inline-flex items-center gap-1.5 bg-blue-50 text-blue-700 font-bold text-[10px] px-2.5 py-1 rounded-full border border-blue-100 uppercase tracking-widest">
+              <Smartphone className="w-3.5 h-3.5" /> Acesso Rápido no Celular
             </span>
-            <h3 className="text-lg font-extrabold text-slate-900 tracking-tight">Anuncie seu site e instale direto no celular</h3>
+            <h3 className="text-lg font-extrabold text-slate-900 tracking-tight">Leve o MEI Flow sempre no seu bolso</h3>
             <p className="text-xs text-slate-500 max-w-2xl leading-relaxed">
-              Você pode anunciar sua ferramenta corporativa e disponibilizar o download do aplicativo mobile nativo (APK) diretamente aos seus clientes ou parceiros de maneira descomplicada e confiável.
+              Instale o aplicativo oficial para gerenciar seus clientes, transações, vendas e orçamentos diretamente no seu celular de forma rápida e segura.
             </p>
           </div>
           <button
@@ -2006,11 +2095,13 @@ ${meiName}`;
             className="w-full md:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-xl text-xs flex items-center justify-center gap-2 transition-all shadow-md group shrink-0 cursor-pointer"
             id="download-apk-footer"
           >
-            <Download className="w-4 h-4 text-emerald-100 group-hover:scale-115 transition-all" />
-            <span>Baixar APK Instalador (4.2 MB)</span>
+            <Download className="w-4 h-4 text-emerald-100 group-hover:scale-110 transition-all" />
+            <span>Baixar Aplicativo para Celular (APK)</span>
           </button>
         </div>
       </div>
+
+
 
       {/* FOOTER DA APLICAÇÃO */}
       <footer className="bg-white border-t border-slate-200 py-8 px-6 mt-12 text-center shrink-0">
@@ -2167,7 +2258,7 @@ ${meiName}`;
                 <button
                   type="button"
                   onClick={() => setShowVendaModal(false)}
-                  className="flex-1 bg-white border border-slate-200 hover:bg-slate-55 text-slate-700 font-bold py-2.5 rounded-xl text-xs"
+                  className="flex-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold py-2.5 rounded-xl text-xs"
                 >
                   Cancelar
                 </button>
@@ -2265,12 +2356,12 @@ ${meiName}`;
                 </select>
               </div>
 
-              {/* Footer Modal */}
+               {/* Footer Modal */}
               <div className="pt-4 border-t border-slate-100 flex gap-3">
                 <button
                   type="button"
                   onClick={() => setShowDespesaModal(false)}
-                  className="flex-1 bg-white border border-slate-200 hover:bg-slate-55 text-slate-700 font-bold py-2.5 rounded-xl text-xs"
+                  className="flex-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold py-2.5 rounded-xl text-xs"
                 >
                   Cancelar
                 </button>
@@ -2355,12 +2446,12 @@ ${meiName}`;
                 />
               </div>
 
-              {/* Footer Modal */}
+               {/* Footer Modal */}
               <div className="pt-4 border-t border-slate-100 flex gap-3">
                 <button
                   type="button"
                   onClick={() => setShowClienteModal(false)}
-                  className="flex-1 bg-white border border-slate-200 hover:bg-slate-55 text-slate-700 font-bold py-2.5 rounded-xl text-xs"
+                  className="flex-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold py-2.5 rounded-xl text-xs"
                 >
                   Cancelar
                 </button>
@@ -2993,19 +3084,7 @@ async function processarEmissao() {
         />
       )}
 
-      {/* CARTEIRA & EXTRATO ASAAS */}
-      {showAsaasWalletModal && (
-        <AsaasWalletModal
-          userId={userId}
-          transactions={transacoes}
-          currentAsaasToken={asaasAccessToken}
-          onSaveAsaasToken={handleSaveAsaasToken}
-          onAddTransaction={handleAsaasAddTransaction}
-          planType={planType}
-          onTriggerUpgrade={() => setShowUpgradeModal(true)}
-          onClose={() => setShowAsaasWalletModal(false)}
-        />
-      )}
+
 
       {/* MODAL DE ASSINATURA/UPGRADE PREMIUM */}
       {showUpgradeModal && (
@@ -3109,7 +3188,7 @@ async function processarEmissao() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 bg-red-650 hover:bg-red-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
                 >
                   <AlertCircle className="w-3.5 h-3.5" />
                   <span>Enviar Chamado</span>
@@ -3120,94 +3199,61 @@ async function processarEmissao() {
         </div>
       )}
 
-      {/* GUIA DE CONFIGURAÇÃO PASSO A PASSO DO FIREBASE (EXPLICATIVO MULTI-USUÁRIO) */}
-      {showConfigGuide && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[85vh]">
-            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between shrink-0">
-              <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                <Cloud className="w-5 h-5 text-blue-600 animate-pulse" />
-                <span>Instruções de Configuração - Firebase Multi-Usuário</span>
-              </h3>
-              <button
-                onClick={() => setShowConfigGuide(false)}
-                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 font-bold text-sm"
-              >
-                ✕
-              </button>
+      {showSupportSuccessModal && submittedTicket && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 text-left">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden text-left p-6 md:p-8 space-y-6 animate-scale-up">
+            <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600 border border-emerald-100/50 mx-auto">
+              <CheckCircle2 className="w-6 h-6 shrink-0" />
             </div>
-            
-            <div className="p-6 space-y-6 overflow-y-auto text-left">
-              <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-xl space-y-2">
-                <p className="text-xs text-blue-800 font-semibold uppercase tracking-wider">Como funciona o Isolamento de Clientes?</p>
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  Para garantir que cada MEI possua seus próprios clientes e transações sem risco de vazamento de dados de outro cliente, o aplicativo utiliza o <strong>UID do Firebase Authentication</strong>. No Firestore, cada documento salvo possui o atributo <code className="bg-slate-200 px-1 py-0.5 rounded text-rose-600 font-mono">mei_uid</code>.
-                </p>
+
+            <div className="text-center space-y-2">
+              <h3 className="text-lg font-extrabold text-slate-800 tracking-tight">Chamado Recebido com Sucesso!</h3>
+              <p className="text-xs text-slate-500 leading-normal">
+                Sua simulação de chamado foi processada pelo sistema e vinculada aos nossos logs de auditoria MEI Flow.
+              </p>
+            </div>
+
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/60 space-y-2.5 text-xs font-medium">
+              <div className="flex justify-between text-[10px] text-slate-400 font-bold uppercase tracking-wider pb-1.5 border-b border-slate-200/50">
+                <span>Resumo do Ticket</span>
+                <span className="font-mono text-blue-600">{submittedTicket.id}</span>
               </div>
-
-              <div className="space-y-4">
-                <h4 className="font-bold text-xs text-slate-800 uppercase tracking-widest">Passo a Passo de Instalação:</h4>
-                
-                <div className="flex gap-3">
-                  <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">1</div>
-                  <div className="space-y-1">
-                    <p className="text-xs font-bold text-slate-800">Crie o Projeto no Firebase Console</p>
-                    <p className="text-xs text-slate-500 leading-relaxed">
-                      Acesse <a href="https://console.firebase.google.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">console.firebase.google.com</a>, clique em "Adicionar projeto" e nomeie como desejar.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex gap-3">
-                  <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">2</div>
-                  <div className="space-y-1">
-                    <p className="text-xs font-bold text-slate-800">Ative o Firebase Authentication</p>
-                    <p className="text-xs text-slate-500 leading-relaxed">
-                      Vá em <strong>Authentication</strong> &gt; <strong>Sign-in method</strong> e ative o provedor do <strong>Google</strong>. Isso habilitará o login seguro em 1 clique.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex gap-3">
-                  <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">3</div>
-                  <div className="space-y-1">
-                    <p className="text-xs font-bold text-slate-800">Ative o Cloud Firestore com Regras de Isolamento</p>
-                    <p className="text-xs text-slate-500 leading-relaxed">
-                      Inicie um banco Firestore. Publique as regras de segurança disponíveis no arquivo local <code className="bg-slate-100 px-1 py-0.5 rounded text-blue-600 font-mono">firestore.rules</code>. Elas garantem por padrão que nenhum usuário sem login leia ou altere dados de outro.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex gap-3">
-                  <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">4</div>
-                  <div className="space-y-1">
-                    <p className="text-xs font-bold text-slate-800">Associe as Credenciais</p>
-                    <p className="text-xs text-slate-500 leading-relaxed">
-                      As credenciais geradas pelo console do Firebase são integradas diretamente no arquivo <code className="bg-slate-200 px-1 py-0.5 rounded text-blue-600 font-mono">firebase-applet-config.json</code> no diretório raiz do projeto. O App as carrega automaticamente!
-                    </p>
-                  </div>
-                </div>
+              <div className="space-y-1">
+                <span className="text-slate-400 text-[10px] block font-bold uppercase">Categoria</span>
+                <span className="text-slate-800">{submittedTicket.category}</span>
               </div>
-
-              <div className="p-3 bg-amber-50 border border-amber-200 text-slate-700 rounded-xl text-center space-y-1">
-                <p className="text-xs font-bold text-amber-800 flex items-center justify-center gap-1">
-                  <Database className="w-4 h-4 text-amber-600" /> Sincronização Automatizada e Comentada!
-                </p>
-                <p className="text-[11px] leading-relaxed">
-                  A nossa lógica de gravação e exclusão em <code className="font-mono text-rose-600 text-[10px]">App.tsx</code> já foi totalmente adaptada. Se logado, salva remotamente no Firestore sob o seu UID de inquilino exclusivo; se deslogado, salva de forma resiliente localmente no seu storage local.
+              <div className="space-y-1">
+                <span className="text-slate-400 text-[10px] block font-bold uppercase">Assunto</span>
+                <span className="text-slate-800 font-semibold">{submittedTicket.subject}</span>
+              </div>
+              {submittedTicket.replyEmail && submittedTicket.replyEmail !== "Não Informado" && (
+                <div className="space-y-1">
+                  <span className="text-slate-400 text-[10px] block font-bold uppercase">E-mail para Retorno</span>
+                  <span className="text-slate-800">{submittedTicket.replyEmail}</span>
+                </div>
+              )}
+              <div className="space-y-1">
+                <span className="text-slate-400 text-[10px] block font-bold uppercase">Sua Mensagem</span>
+                <p className="text-[11px] text-slate-600 max-h-20 overflow-y-auto bg-white p-2 rounded-lg border border-slate-200/30 leading-snug break-words font-mono">
+                  {submittedTicket.message}
                 </p>
               </div>
             </div>
 
-            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end shrink-0">
-              <button
-                type="button"
-                onClick={() => setShowConfigGuide(false)}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-6 rounded-xl text-xs cursor-pointer shadow-sm"
-              >
-                Entendi, Fechar Guia
-              </button>
+            <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-[11px] text-blue-800 leading-relaxed space-y-1">
+              <strong className="font-extrabold text-blue-950 block">Nota Importante:</strong>
+              Seu chamado foi salvo fisicamente em nossa nuvem e reencaminhado para <span className="font-bold">rodrigues.solar@hotmail.com</span>. Analisaremos as informações técnicas integradas e responderemos o mais breve possível.
             </div>
+
+            <button
+              onClick={() => {
+                setShowSupportSuccessModal(false);
+                setSubmittedTicket(null);
+              }}
+              className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl shadow-md cursor-pointer text-center block uppercase tracking-wider transition-all"
+            >
+              Entendido, Fechar Confirmação
+            </button>
           </div>
         </div>
       )}
