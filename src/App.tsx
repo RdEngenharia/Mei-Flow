@@ -146,10 +146,10 @@ export default function App() {
     const saved = localStorage.getItem("meiflow_transacoes");
     if (saved) return JSON.parse(saved);
     return [
-      { id: "tx_1", tipo: "entrada", valor: 1200.00, data: "15/06/2026", descricao: "Consultoria UX", categoria: "Consultoria", clienteId: "cli_1", clienteNome: "Alice Martins", clienteDocumento: "123.456.789-00" },
-      { id: "tx_2", tipo: "saida", valor: 85.00, data: "12/06/2026", descricao: "Hospedagem AWS", categoria: "Infraestrutura" },
-      { id: "tx_3", tipo: "entrada", valor: 2400.00, data: "10/06/2026", descricao: "Protótipo App Mobile", categoria: "Desenvolvimento", clienteId: "cli_3", clienteNome: "Julia Soares", clienteDocumento: "88.112.554/0002-13" },
-      { id: "tx_4", tipo: "saida", valor: 72.00, data: "05/06/2026", descricao: "DAS (Imposto MEI)", categoria: "Impostos" },
+      { id: "tx_1", tipo: "entrada", valor: 1200.00, data: "15/06/2026", descricao: "Consultoria UX", categoria: "Consultoria", clienteId: "cli_1", clienteNome: "Alice Martins", clienteDocumento: "123.456.789-00", formaPagamento: "Pix" },
+      { id: "tx_2", tipo: "saida", valor: 85.00, data: "12/06/2026", descricao: "Hospedagem AWS", categoria: "Infraestrutura", formaPagamento: "Cartão de Crédito" },
+      { id: "tx_3", tipo: "entrada", valor: 2400.00, data: "10/06/2026", descricao: "Protótipo App Mobile", categoria: "Desenvolvimento", clienteId: "cli_3", clienteNome: "Julia Soares", clienteDocumento: "88.112.554/0002-13", formaPagamento: "Pix" },
+      { id: "tx_4", tipo: "saida", valor: 72.00, data: "05/06/2026", descricao: "DAS (Imposto MEI)", categoria: "Impostos", formaPagamento: "Boleto" },
     ];
   });
 
@@ -186,12 +186,14 @@ export default function App() {
   const [vendaCategoria, setVendaCategoria] = useState("Consultoria");
   const [vendaClienteId, setVendaClienteId] = useState("");
   const [vendaData, setVendaData] = useState("10/06/2026");
+  const [vendaFormaPagamento, setVendaFormaPagamento] = useState("Pix");
 
   // Campos de novas Despesas
   const [despesaValor, setDespesaValor] = useState("");
   const [despesaDescricao, setDespesaDescricao] = useState("");
   const [despesaCategoria, setDespesaCategoria] = useState("Infraestrutura");
   const [despesaData, setDespesaData] = useState("10/06/2026");
+  const [despesaFormaPagamento, setDespesaFormaPagamento] = useState("Pix");
 
   // Campos de novos clientes
   const [cliNome, setCliNome] = useState("");
@@ -572,13 +574,26 @@ export default function App() {
       doc.rect(0, 0, 210, 40, "F");
       
       doc.setTextColor(255, 255, 255);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(22);
-      doc.text("MEI Flow", 15, 25);
-      
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      doc.text("Controle Fiscal & Emissão de Comprovantes", 15, 33);
+      if (planType === "premium" && companyLogo) {
+        try {
+          doc.addImage(companyLogo, "PNG", 15, 5, 28, 28);
+        } catch (e) {
+          console.error("Erro ao desenhar logotipo no PDF, fallback para texto:", e);
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(22);
+          doc.text("MEI Flow", 15, 25);
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(10);
+          doc.text("Controle Fiscal & Emissão de Comprovantes", 15, 33);
+        }
+      } else {
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(22);
+        doc.text("MEI Flow", 15, 25);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(10);
+        doc.text("Controle Fiscal & Emissão de Comprovantes", 15, 33);
+      }
       
       // Title
       doc.setTextColor(15, 23, 42);
@@ -591,9 +606,14 @@ export default function App() {
       doc.setFontSize(10);
       doc.setTextColor(100, 116, 139); // slate-500
       doc.text(`Emitente MEI: ${meiName || "Não Informado"}`, 15, 65);
-      const displayUserId = userId.length > 25 ? userId.substring(0, 25) + "..." : userId;
-      doc.text(`Identificador MEI: ${displayUserId}`, 15, 71);
-      doc.text(`Data de Emissão: ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR")}`, 15, 77);
+      doc.text(`CNPJ Emitente: ${cnpjPrestador || "Não Informado"}`, 15, 71);
+      if (inscricaoMunicipal) {
+        doc.text(`Inscrição Municipal: ${inscricaoMunicipal}`, 15, 77);
+      } else {
+        doc.text(`Inscrição Municipal: Não Informada`, 15, 77);
+      }
+      doc.text(`Telefone de Contato: ${telefonePrestador || "Não Informado"}`, 115, 71);
+      doc.text(`Data de Emissão: ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR")}`, 115, 77);
       
       // Draw line
       doc.setDrawColor(226, 232, 240); // slate-200
@@ -922,21 +942,35 @@ export default function App() {
       doc.rect(0, 0, 210, 42, "F");
       
       doc.setTextColor(255, 255, 255);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(24);
-      doc.text("MEI Flow", 15, 24);
+      if (planType === "premium" && companyLogo) {
+        try {
+          doc.addImage(companyLogo, "PNG", 15, 5, 32, 32);
+        } catch (e) {
+          console.error("Erro ao desenhar logotipo no PDF, fallback para texto:", e);
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(24);
+          doc.text("MEI Flow", 15, 24);
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(10);
+          doc.text("Relatório de Inteligência & Conformidade Fiscal do MEI", 15, 32);
+        }
+      } else {
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(24);
+        doc.text("MEI Flow", 15, 24);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(10);
+        doc.text("Relatório de Inteligência & Conformidade Fiscal do MEI", 15, 32);
+      }
       
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      doc.text("Relatório de Inteligência & Conformidade Fiscal do MEI", 15, 32);
-      
-      // Right aligned info in header (aligned to right margin 195 to fit perfectly)
-      doc.setFontSize(9);
+      // Right aligned registered company info in header (aligned to right margin 195 to fit perfectly)
+      doc.setFontSize(8.5);
       doc.setTextColor(203, 213, 225); // slate-300
-      doc.text(`Usuário: ${meiName || "Não Informado"}`, 195, 20, { align: "right" });
-      const safeIdMei = userId.length > 25 ? userId.substring(0, 25) + "..." : userId;
-      doc.text(`ID MEI: ${safeIdMei}`, 195, 26, { align: "right" });
-      doc.text(`Emitido em: ${new Date().toLocaleDateString("pt-BR")}`, 195, 32, { align: "right" });
+      doc.text(`Empresa: ${meiName || "Não Informada"}`, 195, 12, { align: "right" });
+      doc.text(`CNPJ: ${cnpjPrestador || "Não Informado"}`, 195, 18, { align: "right" });
+      doc.text(`Insc. Mun.: ${inscricaoMunicipal || "Não Informada"}`, 195, 24, { align: "right" });
+      doc.text(`Telefone: ${telefonePrestador || "Não Informado"}`, 195, 30, { align: "right" });
+      doc.text(`Emitido em: ${new Date().toLocaleDateString("pt-BR")}`, 195, 36, { align: "right" });
       
       // Document title
       doc.setTextColor(15, 23, 42);
@@ -1083,8 +1117,8 @@ export default function App() {
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
       doc.setTextColor(148, 163, 184);
-      const shortRevId = userId.substring(0, 12).toUpperCase();
-      const shortKey = `MEIFLOW_${shortRevId}_REV_${Math.floor(Math.random() * 90000 + 10000)}`;
+      const randomRevId = Math.random().toString(36).substring(2, 8).toUpperCase();
+      const shortKey = `MEIFLOW_REV_${randomRevId}_${Math.floor(Math.random() * 90000 + 10000)}`;
       doc.text(`Chave: ${shortKey}`, 195, footerY + 10, { align: "right" });
       
       doc.save(`relatorio_faturamento_mei_flow.pdf`);
@@ -1214,7 +1248,8 @@ ${meiName}`;
       categoria: vendaCategoria,
       clienteId: selectedClient?.id,
       clienteNome: selectedClient?.nome || "Consumidor Geral",
-      clienteDocumento: selectedClient?.documento
+      clienteDocumento: selectedClient?.documento,
+      formaPagamento: vendaFormaPagamento
     };
 
     if (user) {
@@ -1237,6 +1272,7 @@ ${meiName}`;
     setVendaValor("");
     setVendaDescricao("");
     setVendaClienteId("");
+    setVendaFormaPagamento("Pix");
     setShowVendaModal(false);
   };
 
@@ -1253,7 +1289,8 @@ ${meiName}`;
       valor: valorNum,
       data: despesaData,
       descricao: despesaDescricao,
-      categoria: despesaCategoria
+      categoria: despesaCategoria,
+      formaPagamento: despesaFormaPagamento
     };
 
     if (user) {
@@ -1274,6 +1311,7 @@ ${meiName}`;
     // Reset formulário
     setDespesaValor("");
     setDespesaDescricao("");
+    setDespesaFormaPagamento("Pix");
     setShowDespesaModal(false);
   };
 
@@ -1822,22 +1860,6 @@ ${meiName}`;
               </p>
             </div>
 
-            {/* EXPLICATIVO CHAVE DE AUTENTICIDADE / ID MEI */}
-            <div className="bg-slate-50 border border-slate-200/60 rounded-3xl p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-blue-600 animate-pulse"></span>
-                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">O que é o ID de MEI no Relatório?</h4>
-                </div>
-                <p className="text-xs text-slate-500 leading-relaxed max-w-2xl">
-                  O <strong className="text-slate-700">ID de MEI ({userId})</strong> impresso no cabeçalho do PDF é o identificador exclusivo e oficial do seu livro caixa no sistema MEI Flow. Ele age como uma chave de segurança digital e selo de conformidade que certifica de forma rastreável a autenticidade dos dados sincronizados na nuvem em auditorias e declarações.
-                </p>
-              </div>
-              <div className="bg-white px-3 py-1.5 border border-slate-200 rounded-xl text-slate-500 font-mono text-[10px] select-all tracking-tight shrink-0">
-                CHAVE_CONFORMIDADE_ID: <span className="font-bold text-blue-600">{userId}</span>
-              </div>
-            </div>
-
             {/* SEÇÃO DA TABELA REAPROVEITADA */}
             <div className="bg-white rounded-3xl border border-slate-200/50 shadow-xs overflow-hidden pt-6">
               <div className="p-8 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -2253,6 +2275,23 @@ ${meiName}`;
                 </select>
               </div>
 
+              {/* Forma de Pagamento */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Forma de Pagamento</label>
+                <select
+                  value={vendaFormaPagamento}
+                  onChange={(e) => setVendaFormaPagamento(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl py-2.5 px-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                >
+                  <option value="Pix">Pix</option>
+                  <option value="Dinheiro">Dinheiro</option>
+                  <option value="Cartão de Crédito">Cartão de Crédito</option>
+                  <option value="Cartão de Débito">Cartão de Débito</option>
+                  <option value="Boleto Bancário">Boleto Bancário</option>
+                  <option value="Transferência">Transferência Bancária (TED/DOC)</option>
+                </select>
+              </div>
+
               {/* Footer Modal */}
               <div className="pt-4 border-t border-slate-100 flex gap-3">
                 <button
@@ -2353,6 +2392,23 @@ ${meiName}`;
                   <option value="Equipamentos">Equipamentos & Ferramentas</option>
                   <option value="Softwares">Softwares e Ferramentas</option>
                   <option value="Outros">Outros Encargos Financeiros</option>
+                </select>
+              </div>
+
+              {/* Forma de Pagamento */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Forma de Pagamento</label>
+                <select
+                  value={despesaFormaPagamento}
+                  onChange={(e) => setDespesaFormaPagamento(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl py-2.5 px-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                >
+                  <option value="Pix">Pix</option>
+                  <option value="Dinheiro">Dinheiro</option>
+                  <option value="Cartão de Crédito">Cartão de Crédito</option>
+                  <option value="Cartão de Débito">Cartão de Débito</option>
+                  <option value="Boleto Bancário">Boleto Bancário</option>
+                  <option value="Transferência">Transferência Bancária (TED/DOC)</option>
                 </select>
               </div>
 

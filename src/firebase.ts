@@ -260,7 +260,8 @@ export async function fetchTransacoesFromFirebase(meiUid: string): Promise<Trans
         categoria: data.categoria || 'Geral',
         clienteId: data.clienteId || undefined,
         clienteNome: data.clienteNome || undefined,
-        clienteDocumento: data.clienteDocumento || undefined
+        clienteDocumento: data.clienteDocumento || undefined,
+        formaPagamento: data.formaPagamento || 'Pix'
       } as Transacao;
     });
 
@@ -319,7 +320,8 @@ export async function saveTransacaoToFirebase(meiUid: string, tx: Transacao): Pr
       categoria: tx.categoria || 'Geral',
       clienteId: tx.clienteId || '',
       clienteNome: tx.clienteNome || '',
-      clienteDocumento: tx.clienteDocumento || ''
+      clienteDocumento: tx.clienteDocumento || '',
+      formaPagamento: tx.formaPagamento || 'Pix'
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
@@ -461,6 +463,7 @@ export async function saveVendaToFirebase(userId: string, tx: Transacao): Promis
       clienteId: tx.clienteId || '',
       clienteNome: tx.clienteNome || '',
       clienteDocumento: tx.clienteDocumento || '',
+      formaPagamento: tx.formaPagamento || 'Pix',
       createdAt: new Date().toISOString()
     });
   } catch (error) {
@@ -487,7 +490,8 @@ export async function fetchVendasFromFirebase(userId: string): Promise<Transacao
         categoria: data.categoria,
         clienteId: data.clienteId || undefined,
         clienteNome: data.clienteNome || undefined,
-        clienteDocumento: data.clienteDocumento || undefined
+        clienteDocumento: data.clienteDocumento || undefined,
+        formaPagamento: data.formaPagamento || 'Pix'
       } as Transacao;
     });
   } catch (error) {

@@ -77,8 +77,10 @@ export default function ReceiptModal({
       // Sub-heading right-aligned
       doc.setFontSize(8.5);
       doc.setTextColor(203, 213, 225); // slate-300
-      doc.text(`Identificação: ${meiUid.substring(0, 16)}`, 195, 18, { align: "right" });
-      doc.text(`Emissão: ${new Date().toLocaleDateString("pt-BR")} ${new Date().toLocaleTimeString("pt-BR")}`, 195, 24, { align: "right" });
+      doc.text(`Empresa: ${meiName || "Não Informada"}`, 195, 12, { align: "right" });
+      doc.text(`CNPJ: ${meiCnpj || "Não Informado"}`, 195, 18, { align: "right" });
+      doc.text(`Telefone: ${meiTelefone || "Não Informado"}`, 195, 24, { align: "right" });
+      doc.text(`Emissão: ${new Date().toLocaleDateString("pt-BR")} ${new Date().toLocaleTimeString("pt-BR")}`, 195, 30, { align: "right" });
 
       // Centered Title
       doc.setTextColor(15, 23, 42);
@@ -119,6 +121,7 @@ export default function ReceiptModal({
         ["Data da Operação", transaction.data],
         ["Descrição / Item", transaction.descricao],
         ["Categoria", transaction.categoria],
+        ["Forma de Pagamento", transaction.formaPagamento || "Pix"],
         ["Valor Consolidado", `R$ ${transaction.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`]
       ];
 
@@ -298,6 +301,10 @@ export default function ReceiptModal({
               <div className="flex justify-between py-1 border-b border-slate-100">
                 <span className="text-slate-400 font-medium">Categoria Fiscal:</span>
                 <span className="text-slate-800 font-semibold">{transaction.categoria}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-100">
+                <span className="text-slate-400 font-medium">Forma de Pagamento:</span>
+                <span className="text-slate-800 font-semibold">{transaction.formaPagamento || "Pix"}</span>
               </div>
             </div>
 

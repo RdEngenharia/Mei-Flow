@@ -22,6 +22,7 @@ export interface Transacao {
   clienteId?: string; // nulo para saídas/despesas genéricas
   clienteNome?: string; // guardado denormalizado para evitar joins pesados
   clienteDocumento?: string; // guardado denormalizado para o recibo rápido
+  formaPagamento?: string; // ex: "Dinheiro", "Pix", "Cartão de Crédito", "Cartão de Débito", "Boleto", etc.
 }
 
 export interface MEIProfile {
