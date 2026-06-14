@@ -330,7 +330,7 @@ export default function App() {
           setIsFirebaseSyncing(false);
         }
       } else {
-        // Sem usuário logado: carrega as sementes locais persistidas
+        // Sem usuário logado: carrega as sementes locais persistidas ou limpa o dashboard
         setUser(null);
         setUserId("user_49281");
         
@@ -346,10 +346,25 @@ export default function App() {
         setPlanType("free");
         setCompanyLogo("");
         
+        const defaultClientes = [
+          { id: "cli_1", nome: "Alice Martins", documento: "123.456.789-00", email: "alice@email.com", telefone: "(11) 98765-4321", createdAt: "2026-06-05T10:00:00Z" },
+          { id: "cli_2", nome: "Roberto C.", documento: "45.321.789/0001-01", email: "roberto@contato.com.br", telefone: "(21) 9988-1234", createdAt: "2026-06-06T12:00:00Z" },
+          { id: "cli_3", nome: "Julia Soares", documento: "88.112.554/0002-13", email: "julia@design.co", telefone: "(31) 98234-5566", createdAt: "2026-06-07T14:30:00Z" },
+          { id: "cli_4", nome: "Mecânica Luz", documento: "99.117.228/0001-44", email: "contato@mecanicaluz.com.br", telefone: "(11) 2235-9878", createdAt: "2026-06-08T09:15:00Z" },
+        ];
+
+        const defaultTransacoes = [
+          { id: "tx_1", tipo: "entrada", valor: 1200.00, data: "15/06/2026", descricao: "Consultoria UX", categoria: "Consultoria", clienteId: "cli_1", clienteNome: "Alice Martins", clienteDocumento: "123.456.789-00", formaPagamento: "Pix" },
+          { id: "tx_2", tipo: "saida", valor: 85.00, data: "12/06/2026", descricao: "Hospedagem AWS", categoria: "Infraestrutura", formaPagamento: "Cartão de Crédito" },
+          { id: "tx_3", tipo: "entrada", valor: 2400.00, data: "10/06/2026", descricao: "Protótipo App Mobile", categoria: "Desenvolvimento", clienteId: "cli_3", clienteNome: "Julia Soares", clienteDocumento: "88.112.554/0002-13", formaPagamento: "Pix" },
+          { id: "tx_4", tipo: "saida", valor: 72.00, data: "05/06/2026", descricao: "DAS (Imposto MEI)", categoria: "Impostos", formaPagamento: "Boleto" },
+        ];
+
         const savedClientes = localStorage.getItem("meiflow_clientes");
         const savedTransacoes = localStorage.getItem("meiflow_transacoes");
-        if (savedClientes) setClientes(JSON.parse(savedClientes));
-        if (savedTransacoes) setTransacoes(JSON.parse(savedTransacoes));
+        
+        setClientes(savedClientes ? JSON.parse(savedClientes) : defaultClientes);
+        setTransacoes(savedTransacoes ? JSON.parse(savedTransacoes) : defaultTransacoes);
       }
     });
 
