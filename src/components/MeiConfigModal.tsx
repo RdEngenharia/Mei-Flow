@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { X, Building, Check } from "lucide-react";
+import { X, Building, Check, Search, Sparkles } from "lucide-react";
 
 interface MeiConfigModalProps {
   currentName: string;
@@ -30,6 +30,8 @@ export default function MeiConfigModal({
   const [telefone, setTelefone] = useState(currentTelefone);
   const [logoBase64, setLogoBase64] = useState(companyLogo);
   const [loading, setLoading] = useState(false);
+  const [searchingCnpj, setSearchingCnpj] = useState(false);
+  const [searchError, setSearchError] = useState("");
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -48,6 +50,46 @@ export default function MeiConfigModal({
     }
   };
 
+  const handleLookupCnpj = async () => {
+    const cleaned = cnpj.replace(/\D/g, "");
+    if (cleaned.length !== 14) {
+      setSearchError("Por favor, digite um CNPJ válido com 14 dígitos.");
+      return;
+    }
+    setSearchingCnpj(true);
+    setSearchError("");
+
+    try {
+      const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cleaned}`);
+      if (!response.ok) {
+        throw new Error("CNPJ não encontrado na base de dados pública.");
+      }
+      const data = await response.json();
+      
+      if (data.razao_social || data.nome_fantasia) {
+        // Prefer Fantasia for MEIs as Razão Social is usually "NAME CPF-NUMBER"
+        const finalName = data.nome_fantasia || data.razao_social;
+        setName(finalName);
+        
+        if (data.ddd_telefone_1) {
+          const rawTel = data.ddd_telefone_1.replace(/\D/g, "");
+          if (rawTel.length >= 10) {
+            setTelefone(`(${rawTel.substring(0, 2)}) ${rawTel.substring(2, 6)}-${rawTel.substring(6)}`);
+          } else {
+            setTelefone(data.ddd_telefone_1);
+          }
+        }
+      } else {
+        setSearchError("Dados obtidos incompletos, preencha manualmente.");
+      }
+    } catch (err: any) {
+      console.error("Erro ao buscar CNPJ:", err);
+      setSearchError("Não foi possível buscar os dados automaticamente. Digite os dados manualmente.");
+    } finally {
+      setSearchingCnpj(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -62,7 +104,7 @@ export default function MeiConfigModal({
         <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Building className="w-4 h-4 text-blue-400" />
-            <h3 className="font-bold text-xs tracking-tight uppercase">Configurações da Empresa</h3>
+            <h3 className="font-bold text-xs tracking-tight uppercase">Configurações do MEI</h3>
           </div>
           <button
             onClick={onClose}
@@ -73,10 +115,51 @@ export default function MeiConfigModal({
         </div>
 
         {/* Content */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
           <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
-            Preencha os dados do seu MEI. Estas informações são utilizadas para emissão de recibos, preenchimento automático das notas fiscais (RPS) e relatórios oficiais.
+            Preencha os dados do seu CNPJ MEI. Estas informações são utilizadas para a identificação da sua atividade em recibos, relatórios e emissões de notas fiscais.
           </p>
+
+          {/* AUTO LOOKUP CNPJ PANEL */}
+          <div className="p-3 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-100/60 rounded-xl space-y-2">
+            <div className="flex items-center gap-1.5 text-blue-800 font-bold text-[10px] uppercase tracking-wide">
+              <Sparkles className="w-3.5 h-3.5 text-blue-600 animate-pulse" />
+              <span>Consulta de CNPJ Automática</span>
+            </div>
+            
+            <div className="flex gap-1.5">
+              <input
+                type="text"
+                value={cnpj}
+                onChange={(e) => setCnpj(e.target.value)}
+                placeholder="Digite o CNPJ"
+                className="flex-1 bg-white border border-blue-200 text-slate-800 rounded-lg px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none font-mono"
+              />
+              <button
+                type="button"
+                onClick={handleLookupCnpj}
+                disabled={searchingCnpj}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 rounded-lg text-xs flex items-center gap-1 transition-all disabled:opacity-50 cursor-pointer"
+              >
+                {searchingCnpj ? (
+                  <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <>
+                    <Search className="w-3 h-3" />
+                    <span>Buscar</span>
+                  </>
+                )}
+              </button>
+            </div>
+            
+            {searchError ? (
+              <p className="text-[9px] text-rose-500 font-bold leading-tight">{searchError}</p>
+            ) : (
+              <p className="text-[9px] text-slate-400 font-medium leading-tight">
+                Insira apenas números e clique em buscar para preencher Razão Social e Telefone de forma instantânea.
+              </p>
+            )}
+          </div>
 
           <div>
             <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
@@ -89,20 +172,6 @@ export default function MeiConfigModal({
               onChange={(e) => setName(e.target.value)}
               placeholder="Ex: João da Silva MEI"
               className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white"
-            />
-          </div>
-
-          <div>
-            <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
-              CNPJ do Emissor *
-            </label>
-            <input
-              type="text"
-              required
-              value={cnpj}
-              onChange={(e) => setCnpj(e.target.value)}
-              placeholder="Ex: 00.000.000/0001-00"
-              className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white font-mono"
             />
           </div>
 

@@ -18,6 +18,7 @@ interface ReceiptModalProps {
   meiTelefone?: string;
   planType?: "free" | "premium";
   companyLogo?: string;
+  isCpfEmissor?: boolean;
   onClose: () => void;
 }
 
@@ -30,9 +31,13 @@ export default function ReceiptModal({
   meiTelefone = "",
   planType = "free",
   companyLogo = "",
+  isCpfEmissor = false,
   onClose,
 }: ReceiptModalProps) {
   if (!transaction) return null;
+
+  const [formaPgto, setFormaPgto] = React.useState<string>(transaction.formaPagamento || "Pix");
+  const [parcelado, setParcelado] = React.useState<string>("Não (À vista)");
 
   const handlePrint = () => {
     try {
@@ -48,80 +53,85 @@ export default function ReceiptModal({
       const isEntrada = transaction.tipo === "entrada";
 
       // Header Banner
-      doc.setFillColor(15, 23, 42); // slate-900
-      doc.rect(0, 0, 210, 38, "F");
+      doc.setFillColor(15, 23, 42); // slate-900 (deep navy)
+      doc.rect(0, 0, 210, 42, "F");
 
       // App Title or Custom Premium Logo
       doc.setTextColor(255, 255, 255);
       if (planType === "premium" && companyLogo) {
         try {
-          doc.addImage(companyLogo, "PNG", 15, 4, 30, 30);
+          doc.addImage(companyLogo, "PNG", 15, 5, 32, 32);
         } catch (e) {
           console.error("Erro ao desenhar logotipo no PDF, fallback para texto:", e);
           doc.setFont("helvetica", "bold");
-          doc.setFontSize(22);
-          doc.text("MEI Flow", 15, 22);
+          doc.setFontSize(24);
+          doc.text("MEI Flow", 15, 24);
           doc.setFont("helvetica", "normal");
-          doc.setFontSize(9);
-          doc.text("Controle Tributário & Serviços de Apoio ao MEI", 15, 29);
+          doc.setFontSize(10);
+          doc.text("Controle Tributário & Serviços de Apoio ao MEI", 15, 32);
         }
       } else {
         doc.setFont("helvetica", "bold");
-        doc.setFontSize(22);
-        doc.text("MEI Flow", 15, 22);
+        doc.setFontSize(24);
+        doc.text("MEI Flow", 15, 24);
         doc.setFont("helvetica", "normal");
-        doc.setFontSize(9);
-        doc.text("Controle Tributário & Serviços de Apoio ao MEI", 15, 29);
+        doc.setFontSize(10);
+        doc.text("Controle Tributário & Serviços de Apoio ao MEI", 15, 32);
       }
 
-      // Sub-heading right-aligned
+      // Right aligned registered company info in header (identical to reports!)
       doc.setFontSize(8.5);
       doc.setTextColor(203, 213, 225); // slate-300
-      doc.text(`Empresa: ${meiName || "Não Informada"}`, 195, 12, { align: "right" });
-      doc.text(`CNPJ: ${meiCnpj || "Não Informado"}`, 195, 18, { align: "right" });
-      doc.text(`Telefone: ${meiTelefone || "Não Informado"}`, 195, 24, { align: "right" });
-      doc.text(`Emissão: ${new Date().toLocaleDateString("pt-BR")} ${new Date().toLocaleTimeString("pt-BR")}`, 195, 30, { align: "right" });
+      doc.text(`${isCpfEmissor ? "Emissor" : "Empresa"}: ${meiName || "Não Informada"}`, 195, 12, { align: "right" });
+      doc.text(`${isCpfEmissor ? "CPF" : "CNPJ"}: ${meiCnpj || "Não Informado"}`, 195, 18, { align: "right" });
+      if (!isCpfEmissor) {
+        doc.text(`Insc. Mun.: ${meiInscricao || "Não Informada"}`, 195, 24, { align: "right" });
+      } else {
+        doc.text(`Perfil: Usuário Pessoa Física`, 195, 24, { align: "right" });
+      }
+      doc.text(`Telefone: ${meiTelefone || "Não Informado"}`, 195, 30, { align: "right" });
+      doc.text(`Emitido em: ${new Date().toLocaleDateString("pt-BR")}`, 195, 36, { align: "right" });
 
       // Centered Title
       doc.setTextColor(15, 23, 42);
       doc.setFont("helvetica", "bold");
       doc.setFontSize(14);
-      doc.text("COMPROVANTE DE OPERAÇÃO - MEI FLOW", 105, 50, { align: "center" });
+      doc.text("RECIBO DE PAGAMENTO & COMPROVANTE FISCAL", 105, 52, { align: "center" });
 
       // Clean metadata table/rows
-      // 1. BLOC EMITENTE
+      // 1. BLOC TOMADOR / CLIENTE (Substitui o emitente, pois a empresa já está no cabeçalho dos relatórios)
       doc.setFontSize(11);
       doc.setFont("helvetica", "bold");
-      doc.text("1. DADOS DO EMITENTE MEI", 15, 62);
+      doc.text("1. DADOS DO TOMADOR DO SERVIÇO / CLIENTE", 15, 64);
       
       doc.setDrawColor(226, 232, 240); // slate-200
-      doc.line(15, 64, 195, 64);
+      doc.line(15, 66, 195, 66);
 
       doc.setFont("helvetica", "normal");
       doc.setFontSize(9.5);
-      doc.text(`Nome/Razão Social: ${meiName}`, 15, 71);
-      doc.text(`CNPJ Emitente: ${meiCnpj || "Não cadastrado"}`, 15, 77);
-      if (meiInscricao) {
-        doc.text(`Inscrição Municipal: ${meiInscricao}`, 15, 83);
-      }
-      if (meiTelefone) {
-        doc.text(`Telefone de Contato: ${meiTelefone}`, 115, 77);
+      if (isEntrada) {
+        doc.text(`Nome / Razão Social: ${transaction.clienteNome || "Consumidor Final"}`, 15, 73);
+        doc.text(`CNPJ / CPF do Tomador: ${transaction.clienteDocumento || "Não Informado"}`, 15, 79);
+      } else {
+        doc.text(`Fornecedor / Destinatário: ${transaction.clienteNome || "Fornecedor / Destinatário não especificado"}`, 15, 73);
+        if (transaction.clienteDocumento) {
+          doc.text(`CNPJ / CPF do Destinatário: ${transaction.clienteDocumento}`, 15, 79);
+        }
       }
 
       // 2. BLOC TRANSAÇÃO
-      const startTransacaoy = meiInscricao ? 93 : 87;
+      const startTransacaoy = 88;
       doc.setFont("helvetica", "bold");
       doc.setFontSize(11);
-      doc.text("2. INFORMAÇÕES DA TRANSAÇÃO", 15, startTransacaoy);
+      doc.text("2. INFORMAÇÕES DO LANÇAMENTO E PAGAMENTO", 15, startTransacaoy);
       doc.line(15, startTransacaoy + 2, 195, startTransacaoy + 2);
 
       const tableRows = [
-        ["Identificador", transaction.id],
-        ["Fluxo Financeiro", isEntrada ? "ENTRADA (Receita do MEI)" : "SAÍDA (Despesa Operacional)"],
         ["Data da Operação", transaction.data],
         ["Descrição / Item", transaction.descricao],
         ["Categoria", transaction.categoria],
-        ["Forma de Pagamento", transaction.formaPagamento || "Pix"],
+        ["Forma de Pagamento", formaPgto],
+        ["Parcelamento", parcelado],
         ["Valor Consolidado", `R$ ${transaction.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`]
       ];
 
@@ -145,27 +155,6 @@ export default function ReceiptModal({
       });
 
       let currentY = (doc as any).lastAutoTable.finalY + 12;
-
-      // 3. BLOC CLIENTE TOMADOR (Somente se for Entrada e tiver dados do cliente)
-      if (isEntrada && transaction.clienteNome) {
-        if (currentY > 240) {
-          doc.addPage();
-          currentY = 20;
-        }
-
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(11);
-        doc.text("3. DADOS DO CLIENTE TOMADOR", 15, currentY);
-        doc.line(15, currentY + 2, 195, currentY + 2);
-
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(9.5);
-        doc.text(`Nome / Razão Social: ${transaction.clienteNome}`, 15, currentY + 9);
-        if (transaction.clienteDocumento) {
-          doc.text(`Documento (CPF/CNPJ): ${transaction.clienteDocumento}`, 15, currentY + 15);
-        }
-        currentY += 22;
-      }
 
       // Check footer overflow
       if (currentY > 230) {
@@ -222,6 +211,41 @@ export default function ReceiptModal({
           </button>
         </div>
 
+        {/* Configurações do Recibo (Não saem na impressão/PDF, puramente interativas) */}
+        <div className="px-6 py-4 bg-blue-50/50 border-b border-slate-100 flex flex-col sm:flex-row gap-4">
+          <div className="flex-1">
+            <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Forma de Pagamento</label>
+            <select
+              value={formaPgto}
+              onChange={(e) => setFormaPgto(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer font-medium"
+            >
+              <option value="Dinheiro">Dinheiro</option>
+              <option value="Pix">Pix</option>
+              <option value="Cartão de Crédito">Cartão de Crédito</option>
+              <option value="Cartão de Débito">Cartão de Débito</option>
+              <option value="Boleto Bancário">Boleto Bancário</option>
+            </select>
+          </div>
+          <div className="flex-1">
+            <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Parcelado?</label>
+            <select
+              value={parcelado}
+              onChange={(e) => setParcelado(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer font-medium"
+            >
+              <option value="Não (À vista)">Não (À vista)</option>
+              <option value="Sim (2x Sem Juros)">Sim (2x)</option>
+              <option value="Sim (3x Sem Juros)">Sim (3x)</option>
+              <option value="Sim (4x Sem Juros)">Sim (4x)</option>
+              <option value="Sim (5x Sem Juros)">Sim (5x)</option>
+              <option value="Sim (6x Sem Juros)">Sim (6x)</option>
+              <option value="Sim (10x)">Sim (10x)</option>
+              <option value="Sim (12x)">Sim (12x)</option>
+            </select>
+          </div>
+        </div>
+
         {/* Modal Body / Recibo para Impressão */}
         <div className="p-8 overflow-y-auto flex-1 print-area" id="receipt-print-container">
           <style>
@@ -260,7 +284,7 @@ export default function ReceiptModal({
               </h2>
               {meiCnpj && (
                 <p className="text-[11px] text-slate-600 font-semibold font-mono mt-0.5">
-                  CNPJ: {meiCnpj} {meiInscricao ? `| IM: ${meiInscricao}` : ""}
+                  {isCpfEmissor ? "CPF" : "CNPJ"}: {meiCnpj} {!isCpfEmissor && meiInscricao ? `| IM: ${meiInscricao}` : ""}
                 </p>
               )}
               {meiTelefone && (
@@ -269,9 +293,9 @@ export default function ReceiptModal({
                 </p>
               )}
               <p className="text-[10px] text-slate-400 font-mono mt-0.5">
-                MEI Sincronizado - UID: {meiUid.substring(0, 15)}...
+                {isCpfEmissor ? "Perfil Autônomo Sincronizado" : "MEI Sincronizado"} - UID: {meiUid.substring(0, 15)}...
               </p>
-              <div className="mt-2 inline-block px-3 py-1 bg-white border border-slate-100 rounded-full text-xs font-semibold text-slate-600 shadow-sm">
+              <div className="mt-2 inline-block px-3 py-1 bg-white border border-slate-100 rounded-full text-xs font-semibold text-slate-600 shadow-sm font-mono">
                 Recibo de {isEntrada ? "Prestação de Serviço" : "Registro de Despesa"}
               </div>
             </div>
@@ -291,10 +315,6 @@ export default function ReceiptModal({
                 <span className="text-slate-800 font-semibold">{transaction.data}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-400 font-medium">Lançamento ID:</span>
-                <span className="text-slate-800 font-mono text-xs">{transaction.id}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-slate-100">
                 <span className="text-slate-400 font-medium font-sans">Descrição / Item:</span>
                 <span className="text-slate-800 font-semibold">{transaction.descricao}</span>
               </div>
@@ -304,28 +324,30 @@ export default function ReceiptModal({
               </div>
               <div className="flex justify-between py-1 border-b border-slate-100">
                 <span className="text-slate-400 font-medium">Forma de Pagamento:</span>
-                <span className="text-slate-800 font-semibold">{transaction.formaPagamento || "Pix"}</span>
+                <span className="text-slate-800 font-semibold">{formaPgto}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-100">
+                <span className="text-slate-400 font-medium font-sans">Parcelado?</span>
+                <span className="text-slate-800 font-semibold">{parcelado}</span>
               </div>
             </div>
 
-            {/* Detalhes do Cliente (Somente Entradas) */}
-            {isEntrada && transaction.clienteNome && (
-              <div className="pt-2">
-                <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-2">Dados do Cliente Tomador</p>
-                <div className="bg-white p-3 rounded-lg border border-slate-100 shadow-xs space-y-1 text-xs">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Nome/Razão:</span>
-                    <span className="text-slate-800 font-medium">{transaction.clienteNome}</span>
-                  </div>
-                  {transaction.clienteDocumento && (
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">CPF/CNPJ Do Tomador:</span>
-                      <span className="text-slate-800 font-mono">{transaction.clienteDocumento}</span>
-                    </div>
-                  )}
+            {/* Detalhes do Cliente (Somente Entradas) - Colocado onde estava a informação duplicada do MEI */}
+            <div className="pt-2">
+              <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-2">Dados do Tomador do Serviço / Cliente</p>
+              <div className="bg-white p-3 rounded-lg border border-slate-100 shadow-xs space-y-1 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Nome / Razão:</span>
+                  <span className="text-slate-800 font-bold">{isEntrada ? (transaction.clienteNome || "Consumidor Final") : (transaction.clienteNome || "Fornecedor / Destinatário")}</span>
                 </div>
+                {(transaction.clienteDocumento) && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">CNPJ / CPF do Tomador:</span>
+                    <span className="text-slate-800 font-mono font-bold">{transaction.clienteDocumento}</span>
+                  </div>
+                )}
               </div>
-            )}
+            </div>
 
             {/* Declaração Fiscal MEI */}
             <div className="p-3 bg-blue-50/50 rounded-lg text-[11px] text-slate-600 leading-relaxed text-center">

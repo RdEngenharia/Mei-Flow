@@ -82,6 +82,11 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
         {/* CONTENT CHANNELS */}
         {!success ? (
           <div className="p-6 md:p-8 space-y-6">
+            <div className="flex items-baseline gap-1.5 justify-center pb-2 border-b border-slate-100">
+              <span className="text-2xl font-extrabold text-slate-900">R$ 29,90</span>
+              <span className="text-xs text-slate-500 font-medium">/ mensal</span>
+            </div>
+
             <h4 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">Recursos Ativados imediatamente</h4>
 
             <div className="space-y-4">
@@ -90,9 +95,9 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                   <FileText className="w-4.5 h-4.5" />
                 </div>
                 <div className="space-y-0.5 min-w-0">
-                  <span className="text-xs font-bold text-slate-800 block">Emissão de NFS-e (Notas Fiscais)</span>
+                  <span className="text-xs font-bold text-slate-800 block">Emissão de NFS-e (Até 30 Notas/mês)</span>
                   <p className="text-[11px] text-slate-500 leading-normal">
-                    Emita notas fiscais eletrônicas de serviço diretamente pelo aplicativo através da integração oficial homologada.
+                    Emita suas notas fiscais de serviço de maneira simplificada diretamente no app, com limite de 30 emissões mensais.
                   </p>
                 </div>
               </div>
@@ -104,7 +109,7 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                 <div className="space-y-0.5 min-w-0">
                   <span className="text-xs font-bold text-slate-800 block">Identidade Visual (Logo Própria)</span>
                   <p className="text-[11px] text-slate-500 leading-normal">
-                    Adicione a identidade visual da sua marca e faça o upload de logotipo para customizar recibos em PDF e orçamentos da empresa.
+                    Adicione o logotipo da sua empresa em todos os recibos, PDF de vendas e no gerador de orçamentos profesionales.
                   </p>
                 </div>
               </div>
@@ -119,7 +124,7 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
             <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100/50 flex items-center gap-3">
               <div className="text-left leading-normal font-sans text-xs text-emerald-900">
                 <span className="font-extrabold text-emerald-950 block text-sm">Liberação Imediata</span>
-                Acesso total de administrador ativado para emissão fiscal, catálogo corporativo e relatórios estendidos.
+                Acesso total ativado para emissão de notas fiscais, catálogo inteligente, remoção de marcas d'água e relatórios mensais.
               </div>
             </div>
 
@@ -136,7 +141,7 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                   </>
                 ) : (
                   <>
-                    <span>Ativar Plano Premium Grátis</span>
+                    <span>Assinar Plano Premium - R$ 29,90/mês</span>
                     <ArrowRight className="w-4 h-4 text-emerald-400" />
                   </>
                 )}

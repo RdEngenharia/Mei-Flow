@@ -526,6 +526,7 @@ export async function saveUserProfileToFirebase(
     asaasAccessToken?: string;
     planType?: "free" | "premium";
     companyLogo?: string;
+    isCpfEmissor?: boolean;
   }
 ): Promise<void> {
   const path = `users/${userId}`;
@@ -538,6 +539,7 @@ export async function saveUserProfileToFirebase(
       planType: profileData.planType || 'free',
       logoUrl: profileData.companyLogo || '',
       updatedAt: new Date().toISOString(),
+      isCpfEmissor: profileData.isCpfEmissor || false,
       
       // campos compatibilidade antiga do App:
       meiName: profileData.meiName,
@@ -573,6 +575,7 @@ export async function fetchUserProfileFromFirebase(userId: string): Promise<{
   asaasAccessToken?: string;
   planType?: "free" | "premium";
   companyLogo?: string;
+  isCpfEmissor?: boolean;
 } | null> {
   const path = `users/${userId}`;
   try {
@@ -587,7 +590,8 @@ export async function fetchUserProfileFromFirebase(userId: string): Promise<{
         telefone: data.telefone || '',
         asaasAccessToken: data.asaasAccessToken || '',
         planType: data.planType || 'free',
-        companyLogo: data.logoUrl || data.companyLogo || ''
+        companyLogo: data.logoUrl || data.companyLogo || '',
+        isCpfEmissor: data.isCpfEmissor || false
       };
     }
     
@@ -603,7 +607,8 @@ export async function fetchUserProfileFromFirebase(userId: string): Promise<{
         telefone: data.telefone || '',
         asaasAccessToken: data.asaasAccessToken || '',
         planType: data.planType || 'free',
-        companyLogo: data.companyLogo || ''
+        companyLogo: data.companyLogo || '',
+        isCpfEmissor: data.isCpfEmissor || false
       };
     }
     

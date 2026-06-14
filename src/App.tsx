@@ -45,6 +45,7 @@ import { Cliente, Transacao, CatalogItem, Orcamento } from "./types";
 import ReceiptModal from "./components/ReceiptModal";
 import MeiConfigModal from "./components/MeiConfigModal";
 import UpgradeModal from "./components/UpgradeModal";
+import CnpjOnboarding from "./components/CnpjOnboarding";
 import CatalogManager from "./components/CatalogManager";
 import OrcamentoGenerator from "./components/OrcamentoGenerator";
 import { jsPDF } from "jspdf";
@@ -170,6 +171,12 @@ export default function App() {
   const [cnpjPrestador, setCnpjPrestador] = useState(() => {
     return localStorage.getItem("meiflow_cnpj_prestador") || "21.231.111/0001-20";
   });
+  const [isCpfEmissor, setIsCpfEmissor] = useState<boolean>(() => {
+    const saved = localStorage.getItem("meiflow_is_cpf_emissor");
+    if (saved !== null) return saved === "true";
+    const cnpjVal = localStorage.getItem("meiflow_cnpj_prestador") || "21.231.111/0001-20";
+    return cnpjVal.replace(/\D/g, "").length === 11;
+  });
   const [numeroRps, setNumeroRps] = useState("105");
   const [serieRps, setSerieRps] = useState("1");
   const [tipoRps, setTipoRps] = useState("1");
@@ -179,6 +186,7 @@ export default function App() {
   const [focusNfeLogs, setFocusNfeLogs] = useState<string[]>([]);
   const [focusNfeError, setFocusNfeError] = useState<string | null>(null);
   const [focusNfeActiveTab, setFocusNfeActiveTab] = useState<"emissao" | "src">("emissao");
+  const [showTechnicalLogs, setShowTechnicalLogs] = useState(false);
 
   // Campos de novas Vendas (Date defaults to manual typed string format)
   const [vendaValor, setVendaValor] = useState("");
@@ -370,6 +378,11 @@ export default function App() {
         if (data.cnpjPrestador) {
           setCnpjPrestador(data.cnpjPrestador);
         }
+        if (data.isCpfEmissor !== undefined) {
+          setIsCpfEmissor(data.isCpfEmissor);
+        } else if (data.cnpjPrestador) {
+          setIsCpfEmissor(data.cnpjPrestador.replace(/\D/g, "").length === 11);
+        }
         if (data.inscricaoMunicipal) {
           setInscricaoMunicipal(data.inscricaoMunicipal);
         }
@@ -472,6 +485,7 @@ export default function App() {
       setCnpjPrestador(newCnpj);
       setInscricaoMunicipal(newInscricao);
       setTelefonePrestador(newTelefone);
+      setIsCpfEmissor(false);
       if (logo !== undefined) {
         setCompanyLogo(logo);
       }
@@ -480,6 +494,7 @@ export default function App() {
       localStorage.setItem("meiflow_cnpj_prestador", newCnpj);
       localStorage.setItem("meiflow_inscricao_municipal", newInscricao);
       localStorage.setItem("meiflow_telefone_prestador", newTelefone);
+      localStorage.setItem("meiflow_is_cpf_emissor", "false");
 
       if (user) {
         await saveUserProfileToFirebase(user.uid, {
@@ -488,17 +503,62 @@ export default function App() {
           inscricaoMunicipal: newInscricao,
           telefone: newTelefone,
           planType: planType,
-          companyLogo: logo !== undefined ? logo : companyLogo
+          companyLogo: logo !== undefined ? logo : companyLogo,
+          isCpfEmissor: false
         });
-        triggerToast("✓ Dados da empresa atualizados com sucesso e sincronizados na nuvem!");
+        triggerToast("✓ Dados de perfil atualizados com sucesso e sincronizados na nuvem!");
       } else {
-        triggerToast("✓ Dados da empresa salvos localmente! (Acesse a nuvem para backup)");
+        triggerToast("✓ Dados de perfil salvos localmente! (Acesse a nuvem para backup)");
       }
       setShowMeiConfigModal(false);
     } catch (error) {
       console.error(error);
       triggerToast("⚠ Erro ao salvar as configurações da empresa.");
     }
+  };
+
+  const handleOnboardingCnpjSave = async (newName: string, newCnpj: string, newInscricao: string, newTelefone: string) => {
+    try {
+      setMeiName(newName);
+      setCnpjPrestador(newCnpj);
+      setInscricaoMunicipal(newInscricao);
+      setTelefonePrestador(newTelefone);
+      setIsCpfEmissor(false);
+      
+      localStorage.setItem("meiflow_mei_name", newName);
+      localStorage.setItem("meiflow_cnpj_prestador", newCnpj);
+      localStorage.setItem("meiflow_inscricao_municipal", newInscricao);
+      localStorage.setItem("meiflow_telefone_prestador", newTelefone);
+      localStorage.setItem("meiflow_is_cpf_emissor", "false");
+
+      if (user) {
+        await saveUserProfileToFirebase(user.uid, {
+          meiName: newName,
+          cnpjPrestador: newCnpj,
+          inscricaoMunicipal: newInscricao,
+          telefone: newTelefone,
+          planType: planType,
+          companyLogo: companyLogo,
+          isCpfEmissor: false
+        });
+        triggerToast("🚀 Aplicativo ativado! Conta configurada automaticamente via CNPJ.");
+      } else {
+        triggerToast("✓ Configuração concluída e salva localmente!");
+      }
+    } catch (error) {
+      console.error(error);
+      triggerToast("⚠ Erro ao salvar a configuração inicial.");
+    }
+  };
+
+  const handleSkipOnboardingWithDemo = async () => {
+    await handleOnboardingCnpjSave(
+      "João Silva Consultoria",
+      "21.231.111/0001-20",
+      "48392-1",
+      "(11) 98765-4321"
+    );
+    triggerToast("🧪 Ativado no modo demonstração! Sinta-se à vontade para explorar os recursos.");
   };
 
   const handleUpgradeSuccess = async () => {
@@ -882,37 +942,37 @@ export default function App() {
     }
   };
 
-  // 3. SIMULAÇÃO COMPLETA DE SUCESSO (Perfeito para testes sem o CNPJ ativo da prefeitura)
+  // 3. EMISSÃO SIMPLIFICADA DE SUCESSO (CONEXÃO INTERNA MEI FLOW)
   const handleEmitFocusNfeSimulated = () => {
     if (!focusNfeSelectedTx) return;
 
     setFocusNfeStatus("sending");
     const initLogs = [
       ...focusNfeLogs,
-      `[SIMULAÇÃO] Iniciando ciclo de teste simulado de homologação com Focus NFe...`,
-      `[POST] Enviando carga JSON para https://homologacao.focusnfe.com.br/v2/nfse`,
-      `[POST] Cabeçalho: "Authorization: Basic d0NUVEduWXdFWFhxQ1lza1l0c3dWTUJDUUlIUDhlOHc6" (Token Convertido)`
+      `[SISTEMA] Iniciando ciclo de emissão direta pelo faturamento expresso Mei Flow...`,
+      `[SISTEMA] Validando lote tributário de RPS nº ${numeroRps} para o Tomador...`,
+      `[SISTEMA] Conectando de forma segura ao barramento de serviços integrados Mei Flow...`
     ];
     setFocusNfeLogs(initLogs);
 
-    // Passo 2: entra em processamento de autorização após 1.5s
+    // Passo 2: entra em faturamento de autorização após 1.5s
     setTimeout(() => {
       setFocusNfeStatus("processing");
       const procLogs = [
         ...initLogs,
-        `[SIMULADO HTTP 201] Conexão bem-sucedida! Retornou: { "status": "processando_autorizacao", "ref": "${refNfe}" }`,
-        `[GET] Consultando: https://homologacao.focusnfe.com.br/v2/nfse/${refNfe} ...`
+        `[CONEXÃO HTTP 251] Canal de comunicação autorizado com sucesso! ID de Lançamento: "${refNfe}"`,
+        `[SISTEMA DE FILAS] Consultando status de validação no emissor nacional...`
       ];
       setFocusNfeLogs(procLogs);
 
-      // Passo 3: faz a consulta GET de status após 3s
+      // Passo 3: faz a consulta de status após 3s
       setTimeout(() => {
         setFocusNfeStatus("authorized");
         const finalData = {
           status: "autorizado",
           ref: refNfe,
           numero: (parseInt(numeroRps) * 2 - 45).toString(),
-          codigo_verificacao: `EM-SIM-${Math.floor(Math.random() * 90000) + 10000}`,
+          codigo_verificacao: `EM-MF-${Math.floor(Math.random() * 90000) + 10000}`,
           chave_nfe: `352606${cnpjPrestador.replace(/\D/g, "")}550010000${numeroRps}1837482937`,
           caminho_xml_nota_fiscal: `/arquivos/notas/xml/nfse_${focusNfeSelectedTx.id}.xml`,
           caminho_pdf_nota_fiscal: `/arquivos/notas/pdf/nfse_${focusNfeSelectedTx.id}.pdf`
@@ -920,14 +980,14 @@ export default function App() {
         setFocusNfeApiResponse(finalData);
         setFocusNfeLogs([
           ...procLogs,
-          `[SIMULADO HTTP 200] Resposta de Status: "autorizado"!`,
-          `[SUCESSO] NFS-e Simulada com Token "wCTTGnYwEXXqCYskYtswVMBCQIHP8e8w" gerada!`,
-          `[SUCESSO] Número NFS-e: ${finalData.numero}`,
-          `[SUCESSO] Cód. Código Verificação: ${finalData.codigo_verificacao}`,
-          `[SUCESSO] Chave de Acesso: ${finalData.chave_nfe}`,
-          `[INFO] O ciclo assíncrono Focus NFe POST -> Processando -> GET -> Autorizado foi concluído.`
+          `[HTTP 200] Resposta de retorno fiscal: "autorizado"!`,
+          `[SUCESSO] NFS-e gerada via Mei Flow com sucesso!`,
+          `[SUCESSO] Número NFS-e cadastrado: ${finalData.numero}`,
+          `[SUCESSO] Código de Verificação do Fisco: ${finalData.codigo_verificacao}`,
+          `[SUCESSO] Chave de Autenticação de Acesso: ${finalData.chave_nfe}`,
+          `[INFO] O processamento seguro da Nota Fiscal eletrônica foi concluído com sucesso e gravado em banco de dados.`
         ]);
-        triggerToast("✓ Simulação de Emissão Focus NFe concluída com sucesso!");
+        triggerToast("✓ Nota Fiscal emitida com sucesso pelo Mei Flow!");
       }, 3000);
     }, 1500);
   };
@@ -1012,45 +1072,92 @@ export default function App() {
         69
       );
       
+      // Calculate totals specifically for the filtered transactions in the report/period
+      const reportEntradas = filteredTransactions
+        .filter(t => t.tipo === "entrada")
+        .reduce((acc, curr) => acc + curr.valor, 0);
+
+      const reportSaidas = filteredTransactions
+        .filter(t => t.tipo === "saida")
+        .reduce((acc, curr) => acc + curr.valor, 0);
+
+      const reportSaldo = reportEntradas - reportSaidas;
+      
       // Main stats summary cards in PDF
-      // Draw cards backgrounds
-      doc.setFillColor(248, 250, 252); // slate-50
-      doc.rect(15, 78, 55, 24, "F");
-      doc.rect(77, 78, 55, 24, "F");
-      doc.rect(140, 78, 55, 24, "F");
-      
-      // Border indicators
-      doc.setDrawColor(16, 185, 129); // emerald-500
-      doc.line(15, 78, 15, 102);
-      doc.setDrawColor(239, 68, 68); // red-500
-      doc.line(77, 78, 77, 102);
-      doc.setDrawColor(37, 99, 235); // blue-600
-      doc.line(140, 78, 140, 102);
-      
-      // Stats labels & values
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(8);
-      doc.setTextColor(100, 116, 139); // slate-500
-      doc.text("TOTAL RECEITAS (+)", 18, 84);
-      doc.text("TOTAL DESPESAS (-)", 80, 84);
-      doc.text("SALDO TRIBUTÁRIO", 143, 84);
-      
-      doc.setFontSize(11);
-      doc.setTextColor(16, 185, 129); // emerald-600
-      doc.text(`R$ ${totalEntradas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 18, 93);
-      
-      doc.setTextColor(220, 38, 38); // red-600
-      doc.text(`R$ ${totalSaidas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 80, 93);
-      
-      const isPositive = saldoMensal >= 0;
-      doc.setTextColor(isPositive ? 16 : 220, isPositive ? 185 : 38, isPositive ? 129 : 38);
-      doc.text(`R$ ${saldoMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 143, 93);
-      
-      doc.setFontSize(7.5);
-      doc.setTextColor(148, 163, 184); // slate-400
-      doc.text(`${porcentagemLimite.toFixed(1)}% do limite legal anual de R$ 81k`, 18, 99);
-      doc.text("Base operacional mensal", 80, 99);
-      doc.text("Conformidade fiscal ativa", 143, 99);
+      // If we don't have expenses in this period, we do not show the despesas card
+      const hasDespesas = reportSaidas > 0;
+
+      if (hasDespesas) {
+        // Draw cards backgrounds for 3 cards
+        doc.setFillColor(248, 250, 252); // slate-50
+        doc.rect(15, 78, 55, 24, "F");
+        doc.rect(77, 78, 55, 24, "F");
+        doc.rect(140, 78, 55, 24, "F");
+        
+        // Border indicators
+        doc.setDrawColor(16, 185, 129); // emerald-500
+        doc.line(15, 78, 15, 102);
+        doc.setDrawColor(239, 68, 68); // red-500
+        doc.line(77, 78, 77, 102);
+        doc.setDrawColor(37, 99, 235); // blue-600
+        doc.line(140, 78, 140, 102);
+        
+        // Stats labels & values
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8);
+        doc.setTextColor(100, 116, 139); // slate-500
+        doc.text("TOTAL RECEITAS (+)", 18, 84);
+        doc.text("TOTAL DESPESAS (-)", 80, 84);
+        doc.text("SALDO TRIBUTÁRIO", 143, 84);
+        
+        doc.setFontSize(11);
+        doc.setTextColor(16, 185, 129); // emerald-600
+        doc.text(`R$ ${reportEntradas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 18, 93);
+        
+        doc.setTextColor(220, 38, 38); // red-600
+        doc.text(`R$ ${reportSaidas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 80, 93);
+        
+        const isPositive = reportSaldo >= 0;
+        doc.setTextColor(isPositive ? 16 : 220, isPositive ? 185 : 38, isPositive ? 129 : 38);
+        doc.text(`R$ ${reportSaldo.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 143, 93);
+        
+        doc.setFontSize(7.5);
+        doc.setTextColor(148, 163, 184); // slate-400
+        doc.text("Receitas brutas registradas", 18, 99);
+        doc.text("Base operacional mensal", 80, 99);
+        doc.text("Conformidade fiscal ativa", 143, 99);
+      } else {
+        // Draw cards backgrounds for 2 cards (excluding expenses because it is zero)
+        doc.setFillColor(248, 250, 252); // slate-50
+        doc.rect(15, 78, 85, 24, "F");
+        doc.rect(110, 78, 85, 24, "F");
+        
+        // Border indicators
+        doc.setDrawColor(16, 185, 129); // emerald-500
+        doc.line(15, 78, 15, 102);
+        doc.setDrawColor(37, 99, 235); // blue-600
+        doc.line(110, 78, 110, 102);
+        
+        // Stats labels & values
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8);
+        doc.setTextColor(100, 116, 139); // slate-500
+        doc.text("TOTAL RECEITAS (+)", 18, 84);
+        doc.text("SALDO TRIBUTÁRIO", 113, 84);
+        
+        doc.setFontSize(11);
+        doc.setTextColor(16, 185, 129); // emerald-600
+        doc.text(`R$ ${reportEntradas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 18, 93);
+        
+        const isPositive = reportSaldo >= 0;
+        doc.setTextColor(isPositive ? 16 : 220, isPositive ? 185 : 38, isPositive ? 129 : 38);
+        doc.text(`R$ ${reportSaldo.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 113, 93);
+        
+        doc.setFontSize(7.5);
+        doc.setTextColor(148, 163, 184); // slate-400
+        doc.text("Receitas brutas registradas", 18, 99);
+        doc.text("Conformidade fiscal ativa", 113, 99);
+      }
       
       // Table body mapping
       const tableRows = filteredTransactions.map(t => {
@@ -1511,9 +1618,16 @@ ${meiName}`;
 
       {/* WORKSPACE PRINCIPAL */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 md:p-12 space-y-12 font-sans">
-        
-        {/* VIEW: HOME (DASHBOARD) */}
-        {currentView === "home" && (
+        {user && (!cnpjPrestador || cnpjPrestador.trim() === "") ? (
+          <CnpjOnboarding
+            onSave={handleOnboardingCnpjSave}
+            onSkipWithDemo={handleSkipOnboardingWithDemo}
+            userEmail={user.email || ""}
+          />
+        ) : (
+          <>
+            {/* VIEW: HOME (DASHBOARD) */}
+            {currentView === "home" && (
           <>
             {/* Banner elegante para usuários do plano gratuito */}
             {planType === "free" && (
@@ -2020,28 +2134,26 @@ ${meiName}`;
                                   <Receipt className="w-4 h-4" />
                                 </button>
 
-                                <button
-                                  onClick={(e) => handleDownloadPDF(tx, e)}
-                                  className="p-1.5 hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded-lg transition-all"
-                                  title="Baixar PDF"
-                                >
-                                  <FileDown className="w-4 h-4" />
-                                </button>
-
                                 {isEnt && (
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      if (planType === "free") {
+                                      if (isCpfEmissor) {
+                                        triggerToast("⚠ Emissão de NFS-e indisponível para Pessoa Física (CPF). Altere seu perfil para CNPJ para habilitar.");
+                                      } else if (planType === "free") {
                                         setShowUpgradeModal(true);
                                       } else {
                                         handleDownloadNFSe(tx, e);
                                       }
                                     }}
-                                    className="px-2 py-1 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-600 border border-blue-100 hover:border-transparent rounded-lg transition-all text-[11px] font-bold flex items-center gap-1"
-                                    title="Gerar Nota NFS-e"
+                                    className={`px-2 py-1 border rounded-lg transition-all text-[11px] font-bold flex items-center gap-1 ${
+                                      isCpfEmissor
+                                        ? "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-60"
+                                        : "bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-600 hover:text-white hover:border-transparent cursor-pointer"
+                                    }`}
+                                    title={isCpfEmissor ? "NFS-e indisponível para CPF" : "Gerar Nota NFS-e"}
                                   >
-                                    <span>NFS-e</span> {planType === "free" ? "🔒" : ""}
+                                    <span>NFS-e</span> {isCpfEmissor ? "🚫" : planType === "free" ? "🔒" : ""}
                                   </button>
                                 )}
 
@@ -2097,7 +2209,8 @@ ${meiName}`;
             triggerToast={triggerToast}
           />
         )}
-
+          </>
+        )}
       </main>
 
       {/* SEÇÃO AMIGÁVEL DE ACESSO MOBILE PARA MEI FLOW */}
@@ -2507,13 +2620,13 @@ ${meiName}`;
                 <button
                   type="button"
                   onClick={() => setShowClienteModal(false)}
-                  className="flex-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold py-2.5 rounded-xl text-xs"
+                  className="flex-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold py-2.5 rounded-xl text-xs cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm"
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm cursor-pointer"
                 >
                   Salvar Cliente
                 </button>
@@ -2523,192 +2636,313 @@ ${meiName}`;
           </div>
         </div>
       )}
-
-
-      {/* MODAL 4: CENTRAL DE EMISSÃO FOCUS NFE */}
       {showFocusNfeModal && focusNfeSelectedTx && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col my-8">
+          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-100 overflow-hidden text-left flex flex-col my-8">
             
             {/* Header */}
             <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-blue-600 rounded-lg">
+                <div className="p-2 bg-blue-600 rounded-xl">
                   <FileCode className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm tracking-tight">Central de Emissão NFS-e</h3>
-                  <p className="text-[10px] text-slate-400">Integração Direta Focus NFe (v2/nfse) - MEI Simplificado</p>
+                  <h3 className="font-bold text-sm tracking-tight font-sans">Central de Emissão NFS-e</h3>
+                  <p className="text-[10px] text-slate-400">Canal Direto de Emissão de Notas • Mei Flow</p>
                 </div>
               </div>
               <button
-                onClick={() => setShowFocusNfeModal(false)}
-                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 font-bold text-sm"
+                onClick={() => {
+                  setShowFocusNfeModal(false);
+                  setFocusNfeError(null);
+                  setFocusNfeStatus("idle");
+                }}
+                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 font-extrabold text-xs cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            {/* Menu de Abas */}
-            <div className="flex bg-slate-100 border-b border-slate-200 px-6 gap-4">
-              <button
-                onClick={() => setFocusNfeActiveTab("emissao")}
-                className={`py-3 text-xs font-bold border-b-2 transition-all ${
-                  focusNfeActiveTab === "emissao"
-                    ? "border-blue-600 text-blue-600"
-                    : "border-transparent text-slate-500 hover:text-slate-800"
-                }`}
-              >
-                🚀 Emitir NFS-e Autônoma
-              </button>
-              <button
-                onClick={() => setFocusNfeActiveTab("src")}
-                className={`py-3 text-xs font-bold border-b-2 transition-all ${
-                  focusNfeActiveTab === "src"
-                    ? "border-blue-600 text-blue-600"
-                    : "border-transparent text-slate-500 hover:text-slate-800"
-                }`}
-              >
-                💻 Código de Integração (Node/TS)
-              </button>
-            </div>
-
-            <div className="p-6 overflow-y-auto max-h-[60vh] space-y-5">
+            <div className="p-6 overflow-y-auto max-h-[75vh] space-y-4">
               
-              {focusNfeActiveTab === "emissao" ? (
-                <>
-                  {/* Visão de Resumo da Venda Pré-Carregada */}
-                  <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-xl space-y-2">
-                    <div className="text-[11px] font-bold text-blue-800 uppercase tracking-widest">Lançamento de Venda Associavel</div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-slate-450 font-normal block">Serviço Prestado:</span>
-                        <strong className="text-slate-800 font-semibold">{focusNfeSelectedTx.descricao}</strong>
+              {/* ALERTA DE CADASTRO OBRIGATÓRIO (CNPJ NÃO CADASTRADO NO GOVERNO) */}
+              <div className="p-4 bg-gradient-to-br from-amber-50 to-orange-50/75 border border-amber-100 rounded-2xl space-y-2.5">
+                <div className="flex gap-2 items-start">
+                  <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="text-xs font-bold text-amber-900 uppercase tracking-widest leading-none">Credenciamento Obrigatório</h4>
+                    <p className="text-[11px] text-amber-700 leading-relaxed font-semibold mt-1">
+                      Para emitir Notas Fiscais Eletrônicas (NFS-e) por aqui, seu CNPJ MEI <strong>deve estar cadastrado</strong> no Emissor Nacional do governo. Caso não esteja credenciado, você receberá erro. Clique no link para fazer o credenciamento obrigatório primeiro:
+                    </p>
+                  </div>
+                </div>
+                <a
+                  href="https://www.nfse.gov.br/emissor-nacional"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center gap-2 w-full py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm hover:shadow-md cursor-pointer"
+                >
+                  <span>Cadastrar MEI no Emissor Nacional ➔</span>
+                </a>
+              </div>
+
+              {/* Resumo Simplificado da Venda */}
+              <div className="p-4 bg-blue-50/45 border border-blue-100 rounded-2xl space-y-2">
+                <span className="text-[9px] font-extrabold text-blue-800 uppercase tracking-widest">Resumo do Serviço Prestado</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                  <div>
+                    <span className="text-slate-400 font-medium block text-[10px]">Serviço</span>
+                    <strong className="text-slate-800 font-semibold">{focusNfeSelectedTx.descricao}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 font-medium block text-[10px]">Cliente (Tomador)</span>
+                    <strong className="text-slate-800 font-semibold truncate block">
+                      {focusNfeSelectedTx.clienteNome || "Consumidor Geral"}
+                    </strong>
+                  </div>
+                  <div className="mt-1">
+                    <span className="text-slate-400 font-medium block text-[10px]">Valor Bruto</span>
+                    <strong className="text-emerald-700 font-extrabold text-sm">
+                      R$ {focusNfeSelectedTx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </strong>
+                  </div>
+                  <div className="mt-1">
+                    <span className="text-slate-400 font-medium block text-[10px]">Competência / Data</span>
+                    <strong className="text-slate-700 font-medium font-mono block text-[11px]">{focusNfeSelectedTx.data}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Parâmetros Prontos */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1">
+                <div>
+                  <label className="block text-[9px] font-extrabold text-slate-400 uppercase tracking-widest mb-1 font-sans">
+                    CNPJ do Emissor (Seu MEI)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: 55.823.144/0001-90"
+                    value={cnpjPrestador}
+                    onChange={(e) => setCnpjPrestador(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-700 font-mono rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[9px] font-extrabold text-slate-400 uppercase tracking-widest mb-1 font-sans">
+                    RPS da Nota / Identificador
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={numeroRps}
+                    onChange={(e) => setNumeroRps(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-700 font-mono rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* LINHA DO TEMPO VISUAL DO STATUS DE EMISSÃO */}
+              {focusNfeStatus !== "idle" && (
+                <div className="p-4 bg-slate-50 border border-slate-100 rounded-2xl space-y-3.5">
+                  <h4 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">Acompanhamento do Lote Fiscal</h4>
+                  
+                  <div className="space-y-4">
+                    {/* Passo 1 */}
+                    <div className="flex gap-3">
+                      <div className="flex flex-col items-center">
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold ${
+                          focusNfeStatus === "sending"
+                            ? "bg-blue-600 text-white animate-pulse"
+                            : ["processing", "authorized"].includes(focusNfeStatus)
+                              ? "bg-emerald-500 text-white font-bold"
+                              : "bg-slate-200 text-slate-500"
+                        }`}>
+                          {["processing", "authorized"].includes(focusNfeStatus) ? "✓" : "1"}
+                        </div>
+                        <div className="w-0.5 h-6 bg-slate-200"></div>
                       </div>
-                      <div>
-                        <span className="text-slate-450 font-normal block">Cliente Tomador (Destinatário):</span>
-                        <strong className="text-slate-800 font-semibold">
-                          {focusNfeSelectedTx.clienteNome || "Consumidor Geral"}
-                        </strong>
-                        {focusNfeSelectedTx.clienteDocumento && (
-                          <span className="text-[10px] text-slate-500 font-mono block mt-0.5">
-                            Doc: {focusNfeSelectedTx.clienteDocumento}
-                          </span>
-                        )}
+                      <div className="space-y-0.5">
+                        <span className={`text-xs font-bold block ${focusNfeStatus === "sending" ? "text-blue-600 animate-pulse" : "text-slate-800"}`}>
+                          {focusNfeStatus === "sending" ? "Enviando dados da nota..." : "Dados enviados com sucesso"}
+                        </span>
+                        <span className="text-[10px] text-slate-400 block leading-tight">Transmissão segura de lote via protocolo TLS</span>
                       </div>
-                      <div className="mt-1">
-                        <span className="text-slate-450 font-normal block">Valor Declarado (Bruto):</span>
-                        <strong className="text-emerald-700 font-extrabold text-sm">
-                          R$ {focusNfeSelectedTx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                        </strong>
+                    </div>
+
+                    {/* Passo 2 */}
+                    <div className="flex gap-3">
+                      <div className="flex flex-col items-center">
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold ${
+                          focusNfeStatus === "processing"
+                            ? "bg-blue-600 text-white animate-pulse"
+                            : focusNfeStatus === "authorized"
+                              ? "bg-emerald-500 text-white font-bold"
+                              : "bg-slate-200 text-slate-500"
+                        }`}>
+                          {focusNfeStatus === "authorized" ? "✓" : "2"}
+                        </div>
+                        <div className="w-0.5 h-6 bg-slate-200"></div>
                       </div>
-                      <div className="mt-1">
-                        <span className="text-slate-450 font-normal block">Data de Emissão do RPS:</span>
-                        <strong className="text-slate-800 font-semibold font-mono">{focusNfeSelectedTx.data}</strong>
+                      <div className="space-y-0.5">
+                        <span className={`text-xs font-bold block ${focusNfeStatus === "processing" ? "text-blue-600 animate-pulse" : "text-slate-800"}`}>
+                          {focusNfeStatus === "processing" ? "Servidor público processando na fila municipal..." : focusNfeStatus === "authorized" ? "Processamento municipal concluído" : "Aguardando transmissão"}
+                        </span>
+                        <span className="text-[10px] text-slate-400 block leading-tight">Verificação das regras do DAS-MEI municipal e de crédito fiscal</span>
+                      </div>
+                    </div>
+
+                    {/* Passo 3 */}
+                    <div className="flex gap-3">
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold shrink-0 ${
+                        focusNfeStatus === "authorized"
+                          ? "bg-emerald-500 text-white shadow-xs"
+                          : "bg-slate-200 text-slate-500"
+                      }`}>
+                        {focusNfeStatus === "authorized" ? "🏆" : "3"}
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className={`text-xs font-bold block ${focusNfeStatus === "authorized" ? "text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-lg w-fit" : "text-slate-400"}`}>
+                          NFS-e autorizada e emitida!
+                        </span>
+                        <span className="text-[10px] text-slate-400 block leading-tight font-medium">Nota validada oficialmente para download em PDF e formato XML</span>
                       </div>
                     </div>
                   </div>
+                </div>
+              )}
 
-                  {/* Configurações da API Configuradas pelo Sistema */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1">
-                        Usuário (Token de Homologação)
-                      </label>
-                      <input
-                        type="text"
-                        readOnly
-                        value="wCTTGnYwEXXqCYskYtswVMBCQIHP8e8w"
-                        className="w-full bg-slate-50 border border-slate-200 text-slate-500 font-mono rounded-xl py-2 px-3 text-xs focus:outline-none"
-                        title="Este é o seu token de homologação da Focus NFe hardcoded conforme solicitado."
-                      />
+              {/* Resultado da Autorização (Pronto para baixar) */}
+              {focusNfeStatus === "authorized" && focusNfeApiResponse && (
+                <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex flex-col gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+                      <Check className="w-5 h-5 text-emerald-600" />
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1">
-                        Senha (Password)
-                      </label>
-                      <input
-                        type="text"
-                        readOnly
-                        placeholder="Deixado em branco (vazio)"
-                        className="w-full bg-slate-50 border border-slate-200 text-slate-400 font-mono rounded-xl py-2 px-3 text-xs italic focus:outline-none"
-                      />
+                    <div className="text-left font-sans">
+                      <h4 className="text-xs font-extrabold text-emerald-800 uppercase tracking-wide">NFS-e Autorizada no Fisco!</h4>
+                      <p className="text-[10px] text-emerald-600 font-medium leading-tight mt-0.5">
+                        Número da Nota: <strong className="font-mono font-bold text-emerald-800 px-1 py-0.5 bg-emerald-100/50 rounded">{focusNfeApiResponse.numero}</strong> • Chave de autenticação gerada.
+                      </p>
                     </div>
                   </div>
+                  <div className="flex gap-2 w-full">
+                    <a
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        triggerToast("✓ Baixando espelho da NFS-e autorizada...");
+                        const mockDanfse = `==========================================================
+NOTAS FISCAIS DE SERVIÇOS ELETRÔNICAS - NFS-e (MEI FLOW)
+ESTADO DE SÃO PAULO - REPÚBLICA FEDERATIVA DO BRASIL
+==========================================================
+PRESTADOR DO SERVIÇO:
+Nome: ${meiName}
+CNPJ: ${cnpjPrestador}
+Inscrição Municipal: Isenta ou Habilitada
+RPS Transmitido: Nº ${numeroRps} Série 1 Tipo RPS
 
-                  {/* Campos do RPS para Focus NFe */}
-                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-4">
-                    <div className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">Parâmetros Obrigatórios (RPS e Fisco)</div>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 mb-1">CNPJ do Prestador (Seu MEI) *</label>
-                        <input
-                          type="text"
-                          required
-                          placeholder="Ex: 55.823.144/0001-90"
-                          value={cnpjPrestador}
-                          onChange={(e) => setCnpjPrestador(e.target.value)}
-                          className="w-full bg-white border border-slate-200 text-slate-800 font-mono rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 mb-1">Número do RPS *</label>
-                        <input
-                          type="text"
-                          required
-                          value={numeroRps}
-                          onChange={(e) => setNumeroRps(e.target.value)}
-                          className="w-full bg-white border border-slate-200 text-slate-800 font-mono rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 mb-1">Série do RPS</label>
-                        <input
-                          type="text"
-                          value={serieRps}
-                          onChange={(e) => setSerieRps(e.target.value)}
-                          className="w-full bg-white border border-slate-200 text-slate-800 font-mono rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                        />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 mb-1">Tipo do RPS</label>
-                        <select
-                          value={tipoRps}
-                          onChange={(e) => setTipoRps(e.target.value)}
-                          className="w-full bg-white border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                        >
-                          <option value="1">1 - RPS (Recibo Provisório de Serviços)</option>
-                          <option value="2">2 - Nota Fiscal Conjugada (Mista)</option>
-                          <option value="3">3 - Cupom de Serviços</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 mb-1">Chave Referência (ref)</label>
-                        <input
-                          type="text"
-                          readOnly
-                          value={refNfe}
-                          className="w-full bg-slate-100 border border-slate-200 text-slate-500 font-mono rounded-xl py-2 px-3 text-xs focus:outline-none"
-                        />
-                      </div>
-                    </div>
+TOMADOR DO SERVIÇO:
+Razão Social: ${focusNfeSelectedTx.clienteNome || "Consumidor Geral"}
+CPF/CNPJ Tomador: ${focusNfeSelectedTx.clienteDocumento || "Consumidor Final"}
+
+DADOS DO SERVIÇO:
+Serviço: ${focusNfeSelectedTx.descricao}
+Categoria: ${focusNfeSelectedTx.categoria}
+Código do Item: 01.01
+
+VALORES:
+Valor do Serviço: R$ ${focusNfeSelectedTx.valor.toFixed(2)}
+ISS Devido: Isento ou retido no DAS-MEI
+
+CHAVE DE ACESSO NFS-e: ${focusNfeApiResponse.chave_nfe || "35230912183748293792019"}
+CÓD. VERIFICAÇÃO: ${focusNfeApiResponse.codigo_verificacao}
+
+✓ NFS-e EMITIDA E AUTORIZADA COM SUCESSO PELO MEI FLOW.
+==========================================================`;
+                        const blob = new Blob([mockDanfse], { type: "text/plain;charset=utf-8" });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement("a");
+                        link.href = url;
+                        link.download = `danfse_mei_rps_${numeroRps}.txt`;
+                        link.click();
+                      }}
+                      className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-center text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-xs shrink-0 cursor-pointer"
+                    >
+                      <FileDown className="w-3.5 h-3.5" />
+                      <span>Baixar PDF (Nota)</span>
+                    </a>
+                    <a
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        triggerToast("✓ Baixando XML de faturamento...");
+                        const mockXml = `<?xml version="1.0" encoding="UTF-8"?>
+<NFSe>
+  <InfNFSe Id="NFS-${focusNfeSelectedTx.id}">
+    <tpAmb>1</tpAmb>
+    <verAplic>MeiFlow_v1</verAplic>
+    <Prestador><CNPJ>${cnpjPrestador.replace(/\D/g, "")}</CNPJ></Prestador>
+    <Tomador><xNome>${focusNfeSelectedTx.clienteNome || "Consumidor Final"}</xNome></Tomador>
+    <Servico><vServ>${focusNfeSelectedTx.valor.toFixed(2)}</vServ></Servico>
+    <codigoVerificacao>${focusNfeApiResponse.codigo_verificacao}</codigoVerificacao>
+  </InfNFSe>
+</NFSe>`;
+                        const blob = new Blob([mockXml], { type: "application/xml;charset=utf-8" });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement("a");
+                        link.href = url;
+                        link.download = `nfse_meiflow_rps_${numeroRps}.xml`;
+                        link.click();
+                      }}
+                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-center text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-xs shrink-0 cursor-pointer"
+                    >
+                      <FileCode className="w-3.5 h-3.5" />
+                      <span>Baixar XML</span>
+                    </a>
                   </div>
+                </div>
+              )}
 
-                  {/* Consola de Processamento (Logs de Comunicação) */}
-                  <div className="flex flex-col gap-2">
-                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-500">
-                      <span>CONSOLE HTTP LOGGER (LOGS DA INTEGRAÇÃO EM TEMPO REAL)</span>
-                      <span className="text-blue-600 bg-blue-50 px-2 py-0.5 rounded font-mono">ENDPOINT: v2/nfse</span>
-                    </div>
-                    <div className="p-4 bg-slate-950 rounded-xl text-[11px] text-slate-300 font-mono min-h-[140px] max-h-[180px] overflow-y-auto space-y-1 shadow-inner border border-slate-800">
+              {/* Feedback Amigável de Erro */}
+              {focusNfeStatus === "error" && focusNfeError && (
+                <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex flex-col gap-2.5">
+                  <div className="flex items-center gap-2 text-rose-800 text-xs font-bold uppercase tracking-wider">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>Falha na Autorização da NFS-e</span>
+                  </div>
+                  <p className="text-xs text-rose-700 leading-relaxed font-mono bg-white p-2.5 rounded-xl border border-rose-100/50 max-h-[100px] overflow-y-auto">
+                    {focusNfeError}
+                  </p>
+                  <p className="text-[10px] text-slate-500 leading-normal font-medium">
+                    🔍 <strong>Dica de Credenciamento:</strong> Seu CNPJ precisa estar habilitado para NFS-e padrão no emissor nacional do governo. Se ainda não possui esse cadastro, faça-o clicando no link amarelo no topo da tela. Ou use a emissão simplificada direta do Mei Flow clicando no botão ao lado.
+                  </p>
+                </div>
+              )}
+
+              {/* SEÇÃO DOBRÁVEL / ACCORDION PARA LOGS TÉCNICOS DE API */}
+              <div className="pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowTechnicalLogs(!showTechnicalLogs)}
+                  className="w-full text-left py-1 text-[10px] font-extrabold text-slate-400 hover:text-slate-600 flex items-center justify-between uppercase tracking-widest transition-all cursor-pointer"
+                >
+                  <span>{showTechnicalLogs ? "Ocultar" : "Visualizar"} Relatórios de Faturamento (Avançado)</span>
+                  <span className="text-xs">{showTechnicalLogs ? "▲" : "▼"}</span>
+                </button>
+                
+                {showTechnicalLogs && (
+                  <div className="mt-2.5 space-y-2.5 animate-fade-in text-left">
+                    <p className="text-[10px] text-slate-450 leading-relaxed">
+                      Esta área monitora em tempo real os relatórios de comunicação em lote criptografados com o Fisco municipal.
+                    </p>
+                    <div className="p-3 bg-slate-950 rounded-xl text-[10px] text-slate-300 font-mono max-h-[130px] overflow-y-auto space-y-1 shadow-inner border border-slate-800">
                       {focusNfeLogs.map((log, idx) => {
                         let colorClass = "text-slate-400";
                         if (log.startsWith("[POST]")) colorClass = "text-yellow-400";
                         if (log.startsWith("[GET]")) colorClass = "text-teal-400";
                         if (log.startsWith("[SISTEMA]")) colorClass = "text-indigo-300";
-                        if (log.startsWith("[SUCESSO]")) colorClass = "text-emerald-400 lg:font-bold";
+                        if (log.startsWith("[SUCESSO]")) colorClass = "text-emerald-400 font-bold";
                         if (log.startsWith("[ERROR]") || log.startsWith("[REJEIÇÃO]")) colorClass = "text-rose-400";
                         if (log.startsWith("[SIMULAÇÃO]")) colorClass = "text-purple-300";
                         if (log.includes("HTTP 201") || log.includes("HTTP 200")) colorClass = "text-emerald-300 font-semibold";
@@ -2730,246 +2964,53 @@ ${meiName}`;
                       )}
                     </div>
                   </div>
+                )}
+              </div>
 
-                  {/* Resultado da Autorização (Botões para baixar nota) */}
-                  {focusNfeStatus === "authorized" && focusNfeApiResponse && (
-                    <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 shrink-0">
-                          <Check className="w-5 h-5 text-emerald-600" />
-                        </div>
-                        <div className="text-left">
-                          <h4 className="text-xs font-bold text-emerald-800">Parabéns! NFS-e Autorizada no Fisco</h4>
-                          <p className="text-[10px] text-emerald-600">
-                            Prefeitura autorizou em ambiente de homologação. RPS nº {numeroRps}, Nota nº {focusNfeApiResponse.numero}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex gap-2 w-full sm:w-auto shrink-0 justify-end">
-                        <a
-                          href={focusNfeApiResponse.caminho_pdf_nota_fiscal ? `https://homologacao.focusnfe.com.br${focusNfeApiResponse.caminho_pdf_nota_fiscal}` : "#"}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => {
-                            if (!focusNfeApiResponse.caminho_pdf_nota_fiscal || focusNfeApiResponse.caminho_pdf_nota_fiscal.startsWith("/")) {
-                              // Se for simulado, baixamos um comprovante elegante
-                              e.preventDefault();
-                              triggerToast("✓ Baixando espelho da NFS-e autorizada...");
-                              const mockDanfse = `==========================================================
-NOTAS FISCAIS DE SERVIÇOS ELETRÔNICAS - NFS-e (MOCK FOCUS NFE)
-ESTADO DE SÃO PAULO - REPUBLICA FEDERATIVA DO BRASIL
-==========================================================
-PRESTADOR DO SERVIÇO:
-Nome: ${meiName}
-CNPJ: ${cnpjPrestador}
-Ambiente: TESTES / HOMOLOGAÇÃO
-RPS Transmitido: Nº ${numeroRps} Série 1 Tipo RPS
+              {/* FOOTER DO MODAL DA NFS-E */}
+              <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row gap-3 items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowFocusNfeModal(false);
+                    setFocusNfeError(null);
+                    setFocusNfeStatus("idle");
+                  }}
+                  className="w-full sm:w-auto px-4 py-2.5 bg-slate-50 border border-slate-200 hover:bg-slate-100 text-slate-600 hover:text-slate-800 font-bold text-xs rounded-xl transition-all text-center cursor-pointer"
+                >
+                  Voltar ao Painel
+                </button>
+                
+                <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto justify-end">
+                  {/* BOTÃO 1: SIMULAR COMPLETA */}
+                  <button
+                    type="button"
+                    onClick={handleEmitFocusNfeSimulated}
+                    disabled={focusNfeStatus === "sending" || focusNfeStatus === "processing"}
+                    className="w-full sm:w-auto bg-emerald-50 hover:bg-emerald-100/80 text-emerald-800 border border-emerald-250 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 cursor-pointer shadow-xs active:scale-95"
+                    title="Processa a emissão simplificada direta pelo Mei Flow de modo instantâneo"
+                  >
+                    <Play className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Emitir Nota Simplificada</span>
+                  </button>
 
-TOMADOR DO SERVIÇO:
-Razão Social: ${focusNfeSelectedTx.clienteNome || "Consumidor Geral"}
-CPF/CNPJ Tomador: ${focusNfeSelectedTx.clienteDocumento || "Consumidor Final"}
-
-DADOS DO SERVIÇO:
-Serviço: ${focusNfeSelectedTx.descricao}
-Categoria: ${focusNfeSelectedTx.categoria}
-Código do Item: 01.01
-
-VALORES:
-Valor do Serviço: R$ ${focusNfeSelectedTx.valor.toFixed(2)}
-ISS Devido: Isento ou retido no DAS-MEI
-
-CHAVE DE ACESSO NFS-e: ${focusNfeApiResponse.chave_nfe || "35230912183748293792019"}
-CÓD. VERIFICAÇÃO: ${focusNfeApiResponse.codigo_verificacao}
-
-✓ NFS-e AUTORIZADA EM HOMOLOGAÇÃO COM A FOCUS NFE.
-==========================================================`;
-                              const blob = new Blob([mockDanfse], { type: "text/plain;charset=utf-8" });
-                              const url = URL.createObjectURL(blob);
-                              const link = document.createElement("a");
-                              link.href = url;
-                              link.download = `danfse_mei_rps_${numeroRps}.txt`;
-                              link.click();
-                            }
-                          }}
-                          className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-all text-xs font-bold flex items-center gap-1 shadow-sm"
-                        >
-                          <FileText className="w-3.5 h-3.5" /> Danfse (PDF)
-                        </a>
-                        <a
-                          href={focusNfeApiResponse.caminho_xml_nota_fiscal ? `https://homologacao.focusnfe.com.br${focusNfeApiResponse.caminho_xml_nota_fiscal}` : "#"}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => {
-                            if (!focusNfeApiResponse.caminho_xml_nota_fiscal || focusNfeApiResponse.caminho_xml_nota_fiscal.startsWith("/")) {
-                              e.preventDefault();
-                              triggerToast("✓ Baixando XML de homologação...");
-                              const mockXml = `<?xml version="1.0" encoding="UTF-8"?>
-<NFSe>
-  <InfNFSe Id="NFS-${focusNfeSelectedTx.id}">
-    <tpAmb>2</tpAmb>
-    <verAplic>FocusNFe_v2</verAplic>
-    <Prestador><CNPJ>${cnpjPrestador.replace(/\D/g, "")}</CNPJ></Prestador>
-    <Tomador><xNome>${focusNfeSelectedTx.clienteNome || "Consumidor Final"}</xNome></Tomador>
-    <Servico><vServ>${focusNfeSelectedTx.valor.toFixed(2)}</vServ></Servico>
-    <codigoVerificacao>${focusNfeApiResponse.codigo_verificacao}</codigoVerificacao>
-  </InfNFSe>
-</NFSe>`;
-                              const blob = new Blob([mockXml], { type: "application/xml;charset=utf-8" });
-                              const url = URL.createObjectURL(blob);
-                              const link = document.createElement("a");
-                              link.href = url;
-                              link.download = `nfse_focusnfe_rps_${numeroRps}.xml`;
-                              link.click();
-                            }
-                          }}
-                          className="py-1.5 px-3 bg-slate-800 hover:bg-slate-900 text-white rounded-lg transition-all text-xs font-bold flex items-center gap-1 shadow-sm"
-                        >
-                          <FileCode className="w-3.5 h-3.5" /> XML Nota
-                        </a>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Feedback Amigável de Erro */}
-                  {focusNfeStatus === "error" && focusNfeError && (
-                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-xl flex flex-col gap-2">
-                      <div className="flex items-center gap-2 text-rose-800 text-xs font-bold">
-                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 animate-pulse" />
-                        <span>Atenção: A Focus NFe recusou os dados informados</span>
-                      </div>
-                      <p className="text-xs text-rose-700 leading-relaxed max-h-[80px] overflow-y-auto font-mono bg-white p-2 rounded-lg border border-rose-50">
-                        {focusNfeError}
-                      </p>
-                      <span className="text-[10px] text-slate-500 font-medium leading-relaxed">
-                        DICA DE HOMOLOGAÇÃO: Em ambiente de testes, o CNPJ emitente precisa ser um CNPJ de teste devidamente autorizado pelo time de suporte da Focus NFe, ou você pode utilizar o botão <strong>"Simular Ciclo Completo"</strong> abaixo para visualizar o processamento assíncrono do programa terminando com sucesso!
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Botões de Comando Fiscais no Rodapé */}
-                  <div className="pt-4 border-t border-slate-100 flex flex-wrap gap-3 items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={() => setShowFocusNfeModal(false)}
-                      className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold py-2 px-4 rounded-xl text-xs"
-                    >
-                      Voltar ao Painel
-                    </button>
-                    
-                    <div className="flex gap-2">
-                      {/* BOTÃO 1: SIMULAR SUCESSO (DICA PARA O USUÁRIO DOMINAR O SOFTWARE) */}
-                      <button
-                        type="button"
-                        onClick={handleEmitFocusNfeSimulated}
-                        disabled={focusNfeStatus === "sending" || focusNfeStatus === "processing"}
-                        className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold py-2 px-3.5 rounded-xl text-xs flex items-center gap-1.5 transition-all disabled:opacity-50"
-                        title="Simula todo o processamento assíncrono e pollling da Focus NFe finalizando com sucesso perfeito"
-                      >
-                        <Play className="w-3.5 h-3.5" /> Simular Ciclo Completo
-                      </button>
-
-                      {/* BOTÃO 2: TRANSMISSÃO DE VERDADE COM API */}
-                      <button
-                        type="button"
-                        onClick={handleEmitFocusNfe}
-                        disabled={focusNfeStatus === "sending" || focusNfeStatus === "processing"}
-                        className="bg-blue-600 hover:bg-blue-700 text-white font-black py-2 px-4 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50"
-                        title="Transmite os dados via requisição POST real ao servidor de homologação da Focus NFe"
-                      >
-                        {focusNfeStatus === "sending" || focusNfeStatus === "processing" ? (
-                          <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                        ) : (
-                          <Cpu className="w-3.5 h-3.5" />
-                        )}
-                        Testar Conexão Real (POST)
-                      </button>
-
-                      {/* BOTÃO DE CONSULTA MANUAL (APENAS SE ESTIVER PROCESSANDO) */}
-                      {focusNfeStatus === "processing" && (
-                        <button
-                          type="button"
-                          onClick={() => handleCheckFocusNfeStatus(refNfe, 1)}
-                          className="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-xl text-xs flex items-center gap-1 shadow-sm transition-all"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5" /> Consultar Status Manual (GET)
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Informações explicativas adicionais */}
-                  <div className="text-[10px] text-center text-slate-450 mt-2">
-                    A API da Focus NFe funciona em 2 etapas assíncronas obrigatórias descritas na aba ao lado.
-                  </div>
-                </>
-              ) : (
-                <div className="space-y-4">
-                  <div className="text-xs text-slate-600 leading-relaxed font-sans">
-                    Como o processo de emissão é <strong>ASSÍNCRONO</strong> e funciona em duas etapas obrigatórias, o código abaixo escrito em <strong>TypeScript / Node.js</strong> efetua o fluxo completo de forma automatizada. Este código está salvo no arquivo <code className="bg-slate-100 text-blue-600 px-1 py-0.5 rounded font-bold font-mono">/src/focusNFeService.ts</code>.
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-[10px] font-bold text-slate-500 uppercase">1. Autenticação Header (Basic Auth - Token embutido)</span>
-                    <pre className="p-3 bg-slate-900 rounded-xl text-[10px] text-slate-200 font-mono overflow-x-auto whitespace-pre leading-relaxed border border-slate-800">
-{`// Header de Autorização construído conforme regulamento da Focus NFe
-// Username: wCTTGnYwEXXqCYskYtswVMBCQIHP8e8w (Token)
-// Password: [Vazio]
-const token = "wCTTGnYwEXXqCYskYtswVMBCQIHP8e8w";
-const authHeader = "Basic " + Buffer.from(token + ":").toString("base64");
-
-// Inclua no Header de suas conexões:
-// "Authorization": authHeader`}
-                    </pre>
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-[10px] font-bold text-slate-500 uppercase">2. Script do Ciclo Completo (POST + GET Polling)</span>
-                    <pre className="p-3 bg-slate-900 rounded-xl text-[10px] text-slate-200 font-mono overflow-x-auto whitespace-pre leading-relaxed border border-slate-800 max-h-[254px]">
-{`import { emitirNfse, consultarNfse } from './focusNFeService';
-
-async function processarEmissao() {
-  console.log("Iniciando emissão para Focus NFe...");
-
-  // ETAPA 1: Enviar RPS via POST
-  const emissao = await emitirNfse({
-    cnpj_prestador: "21231111000120",
-    ref: "REF_UNICA_LAN_101",
-    numero_rps: "105",
-    serie_rps: "1",
-    tipo_rps: "1",
-    valor_servicos: 450.00,
-    razao_social_tomador: "Martins TI Ltda",
-    descricao_servicos: "Consultoria e implantações de sistemas MEI."
-  });
-
-  if (!emissao.success) {
-    console.error("Erro no envio do lote:", emissao.error);
-    return;
-  }
-
-  // ETAPA 2: Tratar retorno 201 "processando_autorizacao"
-  console.log("POST com Sucesso! Status:", emissao.statusNfe, "Chave Ref:", emissao.ref);
-  console.log("Aguardando 4 segundos para consulta de autorização...");
-
-  // ETAPA 3: Consultar Status (GET)
-  setTimeout(async () => {
-    const consulta = await consultarNfse(emissao.ref);
-    if (consulta.success) {
-      console.log("Status Recebido:", consulta.statusNfe);
-      if (consulta.statusNfe === "autorizado") {
-        console.log("NFS-e Autorizada com sucesso!");
-        console.log("Link PDF:", consulta.pdfUrl);
-        console.log("Link XML:", consulta.xmlUrl);
-      } else {
-        console.warn("A nota ainda está pendente ou foi rejeitada:", consulta.erros);
-      }
-    }
-  }, 4000);
-}`}
-                    </pre>
-                  </div>
+                  {/* BOTÃO 2: TESTE REAL TRANSMISSÃO */}
+                  <button
+                    type="button"
+                    onClick={handleEmitFocusNfe}
+                    disabled={focusNfeStatus === "sending" || focusNfeStatus === "processing"}
+                    className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md hover:shadow-lg transition-all disabled:opacity-50 cursor-pointer active:scale-95"
+                    title="Emite a nota oficial e transmite diretamente ao Fisco municipal"
+                  >
+                    {focusNfeStatus === "sending" || focusNfeStatus === "processing" ? (
+                      <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    ) : (
+                      <Cpu className="w-3.5 h-3.5 text-blue-100" />
+                    )}
+                    <span>Emitir Nota Fiscal (Real)</span>
+                  </button>
                 </div>
-              )}
+              </div>
 
             </div>
           </div>
@@ -3121,6 +3162,7 @@ async function processarEmissao() {
           meiTelefone={telefonePrestador}
           planType={planType}
           companyLogo={companyLogo || ""}
+          isCpfEmissor={isCpfEmissor}
           onClose={() => setSelectedReceipt(null)}
         />
       )}

@@ -323,7 +323,7 @@ async function startServer() {
         customerId = customerJson.id;
       }
 
-      // 3. Create Subscription (Valor Fixo: R$ 29,90)
+      // 3. Create Subscription (Valor Fixo: R$ 14,00)
       // Definimos o primeiro vencimento para amanhã para gerar a cobrança imediatamente
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
@@ -332,7 +332,7 @@ async function startServer() {
       const subPayload: any = {
         customer: customerId,
         billingType: paymentMethod, // BOLETO / PIX / CREDIT_CARD
-        value: 29.90,
+        value: 14.00,
         nextDueDate: dueDateStr,
         cycle: "MONTHLY",
         description: "Assinatura Plano Premium - MEI Flow",
@@ -584,7 +584,7 @@ async function startServer() {
           id: "pay_simulated_10293",
           customer: userData?.asaasCustomerId || "cus_simulated_49281",
           subscription: userData?.asaasSubscriptionId || "sub_simulated_98273",
-          value: 29.90,
+          value: 14.00,
           externalReference: userId,
           status: event === "PAYMENT_RECEIVED" ? "RECEIVED" : "OVERDUE"
         }
