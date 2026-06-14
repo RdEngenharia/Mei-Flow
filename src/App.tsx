@@ -1545,24 +1545,26 @@ ${meiName}`;
 
         <div className="flex items-center gap-4">
           {/* PAINEL DE CONFIGURAÇÕES CADASTRAIS DO EMISSOR */}
-          <button
-            onClick={() => setShowMeiConfigModal(true)}
-            className="flex items-center gap-2 group text-left p-1.5 rounded-xl hover:bg-slate-50 transition-all border border-transparent hover:border-slate-200 cursor-pointer text-slate-800"
-            title="Clique para cadastrar ou modificar os dados de sua empresa MEI"
-          >
-            <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-all shadow-sm">
-              <Building className="w-4 h-4" />
-            </div>
-            <div className="hidden md:flex flex-col text-left">
-              <span className="text-xs font-bold text-slate-800 group-hover:text-blue-600 transition-all leading-tight">
-                {meiName}
-              </span>
-              <span className="text-[9px] text-slate-400 font-medium font-mono">
-                CNPJ: {cnpjPrestador || "Não cadastrado"}
-              </span>
-            </div>
-            <Settings className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 shrink-0 hidden sm:inline ml-1 margin-left-xs" />
-          </button>
+          {user && (
+            <button
+              onClick={() => setShowMeiConfigModal(true)}
+              className="flex items-center gap-2 group text-left p-1.5 rounded-xl hover:bg-slate-50 transition-all border border-transparent hover:border-slate-200 cursor-pointer text-slate-800"
+              title="Clique para cadastrar ou modificar os dados de sua empresa MEI"
+            >
+              <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-all shadow-sm">
+                <Building className="w-4 h-4" />
+              </div>
+              <div className="hidden md:flex flex-col text-left">
+                <span className="text-xs font-bold text-slate-800 group-hover:text-blue-600 transition-all leading-tight">
+                  {meiName}
+                </span>
+                <span className="text-[9px] text-slate-400 font-medium font-mono">
+                  CNPJ: {cnpjPrestador || "Não cadastrado"}
+                </span>
+              </div>
+              <Settings className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 shrink-0 hidden sm:inline ml-1 margin-left-xs" />
+            </button>
+          )}
 
           {/* CONTROLE DE LOGIN/AUTENTICAÇÃO FIREBASE */}
           {user ? (
