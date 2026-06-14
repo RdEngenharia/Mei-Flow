@@ -942,56 +942,6 @@ export default function App() {
     }
   };
 
-  // 3. EMISSÃO SIMPLIFICADA DE SUCESSO (CONEXÃO INTERNA MEI FLOW)
-  const handleEmitFocusNfeSimulated = () => {
-    if (!focusNfeSelectedTx) return;
-
-    setFocusNfeStatus("sending");
-    const initLogs = [
-      ...focusNfeLogs,
-      `[SISTEMA] Iniciando ciclo de emissão direta pelo faturamento expresso Mei Flow...`,
-      `[SISTEMA] Validando lote tributário de RPS nº ${numeroRps} para o Tomador...`,
-      `[SISTEMA] Conectando de forma segura ao barramento de serviços integrados Mei Flow...`
-    ];
-    setFocusNfeLogs(initLogs);
-
-    // Passo 2: entra em faturamento de autorização após 1.5s
-    setTimeout(() => {
-      setFocusNfeStatus("processing");
-      const procLogs = [
-        ...initLogs,
-        `[CONEXÃO HTTP 251] Canal de comunicação autorizado com sucesso! ID de Lançamento: "${refNfe}"`,
-        `[SISTEMA DE FILAS] Consultando status de validação no emissor nacional...`
-      ];
-      setFocusNfeLogs(procLogs);
-
-      // Passo 3: faz a consulta de status após 3s
-      setTimeout(() => {
-        setFocusNfeStatus("authorized");
-        const finalData = {
-          status: "autorizado",
-          ref: refNfe,
-          numero: (parseInt(numeroRps) * 2 - 45).toString(),
-          codigo_verificacao: `EM-MF-${Math.floor(Math.random() * 90000) + 10000}`,
-          chave_nfe: `352606${cnpjPrestador.replace(/\D/g, "")}550010000${numeroRps}1837482937`,
-          caminho_xml_nota_fiscal: `/arquivos/notas/xml/nfse_${focusNfeSelectedTx.id}.xml`,
-          caminho_pdf_nota_fiscal: `/arquivos/notas/pdf/nfse_${focusNfeSelectedTx.id}.pdf`
-        };
-        setFocusNfeApiResponse(finalData);
-        setFocusNfeLogs([
-          ...procLogs,
-          `[HTTP 200] Resposta de retorno fiscal: "autorizado"!`,
-          `[SUCESSO] NFS-e gerada via Mei Flow com sucesso!`,
-          `[SUCESSO] Número NFS-e cadastrado: ${finalData.numero}`,
-          `[SUCESSO] Código de Verificação do Fisco: ${finalData.codigo_verificacao}`,
-          `[SUCESSO] Chave de Autenticação de Acesso: ${finalData.chave_nfe}`,
-          `[INFO] O processamento seguro da Nota Fiscal eletrônica foi concluído com sucesso e gravado em banco de dados.`
-        ]);
-        triggerToast("✓ Nota Fiscal emitida com sucesso pelo Mei Flow!");
-      }, 3000);
-    }, 1500);
-  };
-
   // Exportar todas as transações para relatório PDF profissional consolidado do MEI
   const handleExportPDF = () => {
     try {
@@ -3045,7 +2995,7 @@ ${meiName}`;
                     {focusNfeError}
                   </p>
                   <p className="text-[10px] text-slate-500 leading-normal font-medium">
-                    🔍 <strong>Dica de Credenciamento:</strong> Seu CNPJ precisa estar habilitado para NFS-e padrão no emissor nacional do governo. Se ainda não possui esse cadastro, faça-o clicando no link amarelo no topo da tela. Ou use a emissão simplificada direta do Mei Flow clicando no botão ao lado.
+                    🔍 <strong>Dica de Credenciamento:</strong> Seu CNPJ precisa estar habilitado para NFS-e no emissor nacional do governo (Sefaz ou prefeitura de domicílio). Se ainda não possui esse cadastro, você deve realizá-lo para que a emissão de faturamento oficial funcione perfeitamente.
                   </p>
                 </div>
               )}
@@ -3112,19 +3062,7 @@ ${meiName}`;
                 </button>
                 
                 <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto justify-end">
-                  {/* BOTÃO 1: SIMULAR COMPLETA */}
-                  <button
-                    type="button"
-                    onClick={handleEmitFocusNfeSimulated}
-                    disabled={focusNfeStatus === "sending" || focusNfeStatus === "processing"}
-                    className="w-full sm:w-auto bg-emerald-50 hover:bg-emerald-100/80 text-emerald-800 border border-emerald-250 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 cursor-pointer shadow-xs active:scale-95"
-                    title="Processa a emissão simplificada direta pelo Mei Flow de modo instantâneo"
-                  >
-                    <Play className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Emitir Nota Simplificada</span>
-                  </button>
-
-                  {/* BOTÃO 2: TESTE REAL TRANSMISSÃO */}
+                  {/* BOTÃO DE TRANSMISSÃO OFICIAL */}
                   <button
                     type="button"
                     onClick={handleEmitFocusNfe}
