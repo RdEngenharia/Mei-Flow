@@ -90,6 +90,9 @@ export default function App() {
   const [telefonePrestador, setTelefonePrestador] = useState(() => {
     return localStorage.getItem("meiflow_telefone_prestador") || "(11) 98765-4321";
   });
+  const [asaasAccessToken, setAsaasAccessToken] = useState(() => {
+    return localStorage.getItem("meiflow_asaas_access_token") || "";
+  });
   const [showMeiConfigModal, setShowMeiConfigModal] = useState(false);
 
   // -------------------------------------------------------------------------
@@ -275,6 +278,13 @@ export default function App() {
             if (profile.telefone) {
               setTelefonePrestador(profile.telefone);
               localStorage.setItem("meiflow_telefone_prestador", profile.telefone);
+            }
+            if (profile.asaasAccessToken) {
+              setAsaasAccessToken(profile.asaasAccessToken);
+              localStorage.setItem("meiflow_asaas_access_token", profile.asaasAccessToken);
+            } else {
+              setAsaasAccessToken("");
+              localStorage.removeItem("meiflow_asaas_access_token");
             }
 
             if (profile.planType) {
@@ -494,12 +504,23 @@ export default function App() {
     }
   };
 
-  const handleSaveMeiProfile = async (newName: string, newCnpj: string, newInscricao: string, newTelefone: string, logo?: string) => {
+  const handleSaveMeiProfile = async (
+    newName: string, 
+    newCnpj: string, 
+    newInscricao: string, 
+    newTelefone: string, 
+    newAsaasToken?: string,
+    logo?: string
+  ) => {
     try {
       setMeiName(newName);
       setCnpjPrestador(newCnpj);
       setInscricaoMunicipal(newInscricao);
       setTelefonePrestador(newTelefone);
+      if (newAsaasToken !== undefined) {
+        setAsaasAccessToken(newAsaasToken);
+        localStorage.setItem("meiflow_asaas_access_token", newAsaasToken);
+      }
       setIsCpfEmissor(false);
       if (logo !== undefined) {
         setCompanyLogo(logo);
@@ -517,6 +538,7 @@ export default function App() {
           cnpjPrestador: newCnpj,
           inscricaoMunicipal: newInscricao,
           telefone: newTelefone,
+          asaasAccessToken: newAsaasToken !== undefined ? newAsaasToken : asaasAccessToken,
           planType: planType,
           companyLogo: logo !== undefined ? logo : companyLogo,
           isCpfEmissor: false
@@ -1583,7 +1605,106 @@ ${meiName}`;
 
       {/* WORKSPACE PRINCIPAL */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 md:p-12 space-y-12 font-sans">
-        {user && (!cnpjPrestador || cnpjPrestador.trim() === "") ? (
+        {!user ? (
+          <div className="space-y-12 animate-fade-in text-left" id="landing-presentation">
+            {/* GORGEOUS LANDING HERO SECTION */}
+            <div className="relative py-12 md:py-20 text-center max-w-3xl mx-auto space-y-6">
+              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-blue-50 text-blue-700 text-xs font-bold border border-blue-100 mx-auto justify-center">
+                <Sparkles className="w-3.5 h-3.5 text-yellow-500 animate-pulse" />
+                <span>MEI Flow Premium — Pronto para Decolar</span>
+              </div>
+
+              <h1 className="text-4xl sm:text-5xl md:text-6xl font-display font-black text-slate-950 tracking-tight leading-tight">
+                Emissão de Notas &<br />
+                <span className="text-blue-600 bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Cobrança Asaas</span> sem complicação.
+              </h1>
+
+              <p className="text-base sm:text-lg text-slate-600 max-w-2xl mx-auto leading-relaxed font-light">
+                O aplicativo financeiro feito sob medida para o MEI profissional. Controle vendas, gere orçamentos de alto padrão e emita NFS-e integrada sem chatices fiscais.
+              </p>
+
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowAuthModal(true)}
+                  className="w-full sm:w-auto px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-sm rounded-xl shadow-lg transition-all transform hover:-translate-y-0.5 flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Cloud className="w-4 h-4 text-blue-100" />
+                  <span>Acessar Conta Grátis</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowUpgradeModal(true)}
+                  className="w-full sm:w-auto px-8 py-4 bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 font-extrabold text-sm rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4 text-indigo-600" />
+                  <span>Conhecer Plano Premium</span>
+                </button>
+              </div>
+            </div>
+
+            {/* SEÇÃO BENTO GRID DE FACILIDADES / BENEFÍCIOS */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Card 1: Emissão Integrada */}
+              <div className="bg-white border border-slate-200/80 rounded-3xl p-8 hover:shadow-lg transition-all space-y-4 text-left">
+                <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center">
+                  <FileText className="w-6 h-6" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-900">Emissão de Notas NFS-e</h3>
+                <p className="text-xs text-slate-500 leading-relaxed font-medium">
+                  Com o plano Premium, você emite até <strong>30 notas fiscais por mês</strong> de forma totalmente integrada sem custos adicionais por nota. O aplicativo gerencia a comunicação com a API Focus NFe e com o emissor nacional em segundos.
+                </p>
+              </div>
+
+              {/* Card 2: Cobranças Asaas */}
+              <div className="bg-white border border-slate-200/80 rounded-3xl p-8 hover:shadow-lg transition-all space-y-4 text-left">
+                <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center animate-pulse">
+                  <Wallet className="w-6 h-6" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-900">Recebimentos & Cobranças</h3>
+                <p className="text-xs text-slate-500 leading-relaxed font-medium">
+                  Conecte seu token do <strong>Asaas</strong> e envie cobranças profissionais via Pix e Boleto. Seu cliente paga e o saldo cai direto na sua conta, com conciliação automática no seu fluxo financeiro.
+                </p>
+              </div>
+
+              {/* Card 3: Orçamentos & Catálogo */}
+              <div className="bg-white border border-slate-200/80 rounded-3xl p-8 hover:shadow-lg transition-all space-y-4 text-left">
+                <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center font-bold text-lg">
+                  📁
+                </div>
+                <h3 className="text-lg font-bold text-slate-900 font-display">Controle Completo MEI</h3>
+                <p className="text-xs text-slate-500 leading-relaxed font-medium">
+                  Cadastre clientes de forma ilimitada, gerencie seu portfólio de serviços e gere orçamentos profissionais em PDF com seu próprio logotipo. Acompanhe se está dentro do limite anual recomendado de R$ 81k.
+                </p>
+              </div>
+            </div>
+
+            {/* SEÇÃO DETALHADA DE ASSINATURA & CUSTO */}
+            <div className="bg-slate-900 text-white rounded-3xl p-8 md:p-12 border border-slate-800 flex flex-col md:flex-row items-center justify-between gap-8 text-left">
+              <div className="space-y-3 max-w-xl">
+                <span className="text-[10px] uppercase tracking-widest font-extrabold text-blue-400">Assinatura Premium MEI Flow</span>
+                <h3 className="text-2xl md:text-3xl font-bold tracking-tight text-white leading-tight">
+                  Tudo o que você precisa em uma única assinatura simples e previsível.
+                </h3>
+                <p className="text-xs text-slate-300 leading-relaxed font-light">
+                  Sem taxas extras surpresa por emissão. Um único investimento de <strong>R$ 29,90 por mês</strong> cobre as ferramentas de controle, o gerador de orçamentos, o catálogo e a cota mensal de emissão de NFS-e (até 30 notas/mês via nossa API de faturamento de alta velocidade).
+                </p>
+              </div>
+              <div className="bg-white/5 border border-white/10 p-6 rounded-2xl text-center min-w-[200px] shrink-0 space-y-2">
+                <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider">Investimento Mensal</div>
+                <div className="text-3xl font-black text-white">R$ 29,90</div>
+                <div className="text-[10px] text-blue-300 font-medium font-semibold">Carga fiscal de R$ 0,00 extra</div>
+                <button
+                  type="button"
+                  onClick={() => setShowUpgradeModal(true)}
+                  className="w-full mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] rounded-xl tracking-wider transition-all cursor-pointer uppercase"
+                >
+                  Assinar Premium
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : user && (!cnpjPrestador || cnpjPrestador.trim() === "") ? (
           <CnpjOnboarding
             onSave={handleOnboardingCnpjSave}
             onSkipWithDemo={handleSkipOnboardingWithDemo}
@@ -3257,6 +3378,7 @@ ${meiName}`;
           currentCnpj={cnpjPrestador}
           currentInscricao={inscricaoMunicipal}
           currentTelefone={telefonePrestador}
+          currentAsaasAccessToken={asaasAccessToken}
           planType={planType}
           companyLogo={companyLogo || ""}
           onClose={() => setShowMeiConfigModal(false)}

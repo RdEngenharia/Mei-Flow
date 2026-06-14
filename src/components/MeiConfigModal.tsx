@@ -6,10 +6,11 @@ interface MeiConfigModalProps {
   currentCnpj: string;
   currentInscricao: string;
   currentTelefone: string;
+  currentAsaasAccessToken?: string;
   planType: "free" | "premium";
   companyLogo: string;
   onClose: () => void;
-  onSave: (name: string, cnpj: string, inscricao: string, telefone: string, logo?: string) => Promise<void>;
+  onSave: (name: string, cnpj: string, inscricao: string, telefone: string, asaasToken?: string, logo?: string) => Promise<void>;
   onTriggerUpgrade: () => void;
 }
 
@@ -18,6 +19,7 @@ export default function MeiConfigModal({
   currentCnpj,
   currentInscricao,
   currentTelefone,
+  currentAsaasAccessToken = "",
   planType,
   companyLogo,
   onClose,
@@ -28,6 +30,7 @@ export default function MeiConfigModal({
   const [cnpj, setCnpj] = useState(currentCnpj);
   const [inscricao, setInscricao] = useState(currentInscricao);
   const [telefone, setTelefone] = useState(currentTelefone);
+  const [asaasToken, setAsaasToken] = useState(currentAsaasAccessToken);
   const [logoBase64, setLogoBase64] = useState(companyLogo);
   const [loading, setLoading] = useState(false);
   const [searchingCnpj, setSearchingCnpj] = useState(false);
@@ -93,7 +96,7 @@ export default function MeiConfigModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    await onSave(name, cnpj, inscricao, telefone, logoBase64);
+    await onSave(name, cnpj, inscricao, telefone, asaasToken, logoBase64);
     setLoading(false);
   };
 
@@ -199,6 +202,22 @@ export default function MeiConfigModal({
               placeholder="Ex: (11) 99999-9999"
               className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white font-mono"
             />
+          </div>
+
+          <div>
+            <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
+              Token de Acesso Asaas (API Key)
+            </label>
+            <input
+              type="password"
+              value={asaasToken}
+              onChange={(e) => setAsaasToken(e.target.value)}
+              placeholder="Token de Produção ou Sandbox do Asaas"
+              className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white font-mono"
+            />
+            <p className="text-[9px] text-slate-400 mt-1 leading-normal">
+              Usado para emitir cobranças reais via Pix/Boleto. Deixe vazio para usar a subconta de testes associada à rede sandbox.
+            </p>
           </div>
 
           {/* LOGOTIPO DA EMPRESA */}
