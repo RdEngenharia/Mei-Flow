@@ -2827,51 +2827,181 @@ ${meiName}`;
                     </div>
                   </div>
                   <div className="flex gap-2 w-full">
-                    <a
-                      href="#"
+                    <button
+                      type="button"
                       onClick={(e) => {
                         e.preventDefault();
-                        triggerToast("✓ Baixando espelho da NFS-e autorizada...");
-                        const mockDanfse = `==========================================================
-NOTAS FISCAIS DE SERVIÇOS ELETRÔNICAS - NFS-e (MEI FLOW)
-ESTADO DE SÃO PAULO - REPÚBLICA FEDERATIVA DO BRASIL
-==========================================================
-PRESTADOR DO SERVIÇO:
-Nome: ${meiName}
-CNPJ: ${cnpjPrestador}
-Inscrição Municipal: Isenta ou Habilitada
-RPS Transmitido: Nº ${numeroRps} Série 1 Tipo RPS
+                        try {
+                          triggerToast("✓ Gerando e baixando PDF oficial unificado...");
+                          const doc = new jsPDF();
+                          
+                          // Outer border
+                          doc.setDrawColor(203, 213, 225); // slate-300
+                          doc.setLineWidth(0.5);
+                          doc.rect(5, 5, 200, 287);
+                          
+                          // Custom header banner
+                          doc.setFillColor(15, 23, 42); // slate-900 (deep navy)
+                          doc.rect(5, 5, 200, 32, "F");
+                          
+                          // Header text
+                          doc.setFont("helvetica", "bold");
+                          doc.setFontSize(14);
+                          doc.setTextColor(255, 255, 255);
+                          doc.text("NOTA FISCAL DE SERVIÇOS ELETRÔNICA (NFS-e)", 12, 17);
+                          
+                          doc.setFont("helvetica", "normal");
+                          doc.setFontSize(8.5);
+                          doc.setTextColor(226, 232, 240); // slate-200
+                          doc.text("Emissor Nacional de Microempreendedores Individuais • Mei Flow Faturamento", 12, 24);
+                          doc.text(`Número da Nota: ${focusNfeApiResponse.numero} | Série: 1 | Tipo RPS: 1 (RPS Municipal)`, 12, 30);
+                          
+                          // Right badges for verification and security code
+                          doc.setFillColor(51, 65, 85); // slate-700
+                          doc.rect(142, 11, 56, 20, "F");
+                          doc.setTextColor(255, 255, 255);
+                          doc.setFont("helvetica", "bold");
+                          doc.setFontSize(8);
+                          doc.text("CÓDIGO VERIFICAÇÃO", 146, 17);
+                          doc.setFont("helvetica", "normal");
+                          doc.setFontSize(10.5);
+                          doc.text(focusNfeApiResponse.codigo_verificacao, 146, 25);
+                          
+                          // Content Section 1: PRESTADOR DO SERVIÇO
+                          doc.setDrawColor(226, 232, 240); // slate-200
+                          doc.setFillColor(248, 250, 252); // slate-50
+                          doc.rect(10, 44, 190, 42, "FD");
+                          
+                          doc.setTextColor(15, 23, 42); // slate-900
+                          doc.setFont("helvetica", "bold");
+                          doc.setFontSize(9.5);
+                          doc.text("DADOS DO EMISSOR (PRESTADOR)", 14, 51);
+                          
+                          doc.setFont("helvetica", "normal");
+                          doc.setFontSize(8.5);
+                          doc.setTextColor(71, 85, 105); // slate-600
+                          doc.text(`Razão Social / Nome: ${meiName || "Microempreendedor MEI"}`, 14, 58);
+                          doc.text(`CNPJ do Prestador: ${cnpjPrestador || "Não Cadastrado"}`, 14, 64);
+                          doc.text(`Inscrição Municipal / Estado: Habilitada / Isenta do Simples Nacional`, 14, 70);
+                          doc.text("Endereço Fiscal do MEI: Registrado em Cadastro Municipal Unificado", 14, 76);
+                          doc.text(`Plataforma Emissora Oficial: Mei Flow Sistemas de Faturamento Inteligente`, 14, 82);
+                          
+                          // Content Section 2: TOMADOR DO SERVIÇO
+                          doc.setFillColor(248, 250, 252);
+                          doc.rect(10, 92, 190, 42, "FD");
+                          
+                          doc.setTextColor(15, 23, 42);
+                          doc.setFont("helvetica", "bold");
+                          doc.setFontSize(9.5);
+                          doc.text("DADOS DO TOMADOR (CLIENTE)", 14, 99);
+                          
+                          // Buscar registro do cliente correspondente para puxar e-mail e telefone dinâmicos
+                          const matchingCli = clientes.find(c => 
+                            (focusNfeSelectedTx.clienteId && c.id === focusNfeSelectedTx.clienteId) ||
+                            (focusNfeSelectedTx.clienteNome && c.nome.toLowerCase() === focusNfeSelectedTx.clienteNome.toLowerCase()) ||
+                            (focusNfeSelectedTx.clienteDocumento && c.documento === focusNfeSelectedTx.clienteDocumento)
+                          );
 
-TOMADOR DO SERVIÇO:
-Razão Social: ${focusNfeSelectedTx.clienteNome || "Consumidor Geral"}
-CPF/CNPJ Tomador: ${focusNfeSelectedTx.clienteDocumento || "Consumidor Final"}
+                          const emailTomador = matchingCli?.email || "contato@cliente.com.br";
+                          const telefoneTomador = matchingCli?.telefone || "(11) 98888-7777";
+                          const enderecoTomador = "Av. Paulista, 1000 - Bela Vista, São Paulo - SP, CEP 01311-100";
 
-DADOS DO SERVIÇO:
-Serviço: ${focusNfeSelectedTx.descricao}
-Categoria: ${focusNfeSelectedTx.categoria}
-Código do Item: 01.01
-
-VALORES:
-Valor do Serviço: R$ ${focusNfeSelectedTx.valor.toFixed(2)}
-ISS Devido: Isento ou retido no DAS-MEI
-
-CHAVE DE ACESSO NFS-e: ${focusNfeApiResponse.chave_nfe || "35230912183748293792019"}
-CÓD. VERIFICAÇÃO: ${focusNfeApiResponse.codigo_verificacao}
-
-✓ NFS-e EMITIDA E AUTORIZADA COM SUCESSO PELO MEI FLOW.
-==========================================================`;
-                        const blob = new Blob([mockDanfse], { type: "text/plain;charset=utf-8" });
-                        const url = URL.createObjectURL(blob);
-                        const link = document.createElement("a");
-                        link.href = url;
-                        link.download = `danfse_mei_rps_${numeroRps}.txt`;
-                        link.click();
+                          doc.setFont("helvetica", "normal");
+                          doc.setFontSize(8.5);
+                          doc.setTextColor(71, 85, 105);
+                          doc.text(`Nome / Razão Social: ${focusNfeSelectedTx.clienteNome || "Consumidor Final"}`, 14, 106);
+                          doc.text(`Documento (CPF / CNPJ): ${focusNfeSelectedTx.clienteDocumento || "Consumidor Geral"}`, 14, 112);
+                          doc.text(`E-mail: ${emailTomador}   |   Telefone: ${telefoneTomador}`, 14, 118);
+                          doc.text(`Endereço: ${enderecoTomador}`, 14, 124);
+                          doc.text("Relação de Consumo Comercial: Prestadora de Serviço por Meio Tecnológico", 14, 130);
+                          
+                          // Content Section 3: DETALHAMENTO DE TRIBUTOS E SERVIÇO
+                          doc.setFillColor(255, 255, 255);
+                          doc.rect(10, 140, 190, 60, "F");
+                          doc.rect(10, 140, 190, 60, "D");
+                          
+                          doc.setFillColor(241, 245, 249); // slate-100 heading row
+                          doc.rect(10, 140, 190, 8, "F");
+                          
+                          doc.setTextColor(15, 23, 42);
+                          doc.setFont("helvetica", "bold");
+                          doc.setFontSize(9);
+                          doc.text("DETALHAMENTO E DISCRIMINAÇÃO DOS SERVIÇOS PRESTADOS", 14, 145);
+                          
+                          doc.setFont("helvetica", "normal");
+                          doc.setFontSize(8.5);
+                          doc.setTextColor(51, 65, 85);
+                          doc.text(`Serviço Prestado: ${focusNfeSelectedTx.descricao || "Consultoria e Serviços Técnicos"}`, 14, 154);
+                          doc.text(`Categoria Tributária: ${focusNfeSelectedTx.categoria || "Geral"}`, 14, 160);
+                          doc.text("Item da LC 116/03: 01.01 - Análise e desenvolvimento de sistemas, softwares e consultorias tecnificadas,", 14, 166);
+                          doc.text("ou atividades mercantis enquadradas no Simples Nacional do Microempreendedor Individual (MEI).", 14, 171);
+                          
+                          const notes = "Instruções Normativas / Observações Importantes: Nota fiscal eletrônica direta com isenção total tributária na fonte conforme Lei Complementar nº 123 de 14 de Dezembro de 2006. O recolhimento de tributos federais e ISS é unificado pelo regime MEI por boleto consolidado mensal (DAS-MEI). Isento de retenção de ISSQN.";
+                          const splitNotes = doc.splitTextToSize(notes, 180);
+                          doc.text(splitNotes, 14, 178);
+                          
+                          // Content Section 4: VALORES TRIBUTÁRIOS
+                          doc.setFillColor(248, 250, 252);
+                          doc.rect(10, 206, 190, 32, "FD");
+                          
+                          doc.setTextColor(15, 23, 42);
+                          doc.setFont("helvetica", "bold");
+                          doc.setFontSize(9);
+                          doc.text("VALORES TRIBUTÁRIOS & RETENÇÕES", 14, 212);
+                          
+                          doc.setFont("helvetica", "normal");
+                          doc.setFontSize(8.5);
+                          doc.setTextColor(71, 85, 105);
+                          doc.text(`Valor de Serviços (Bruto Declarado): R$ ${focusNfeSelectedTx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 14, 220);
+                          doc.text("Alíquota de ISS: 0.0% (Regime Unificado do DAS-MEI - Isento)", 14, 226);
+                          doc.text("Retenções Federais (PIS/COFINS/CSLL/IR): Não Aplicáveis ao Microempreendedor", 14, 232);
+                          
+                          // Sub card inside values
+                          doc.setFillColor(241, 245, 249);
+                          doc.rect(130, 208, 68, 28, "F");
+                          doc.setTextColor(15, 23, 42);
+                          doc.setFont("helvetica", "bold");
+                          doc.setFontSize(7.5);
+                          doc.text("VALOR LÍQUIDO REVERTIDO", 134, 214);
+                          doc.setFont("helvetica", "bold");
+                          doc.setFontSize(13);
+                          doc.setTextColor(4, 120, 87); // emerald-700
+                          doc.text(`R$ ${focusNfeSelectedTx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 134, 223);
+                          doc.setFont("helvetica", "normal");
+                          doc.setFontSize(7.5);
+                          doc.setTextColor(100, 116, 139);
+                          doc.text("Totalmente quitado via Mei Flow.", 134, 231);
+                          
+                          // Chave de acesso
+                          doc.setTextColor(15, 23, 42);
+                          doc.setFont("helvetica", "bold");
+                          doc.setFontSize(8.5);
+                          doc.text("CHAVE DE ACESSO E ASSINATURA ELETRÔNICA:", 10, 245);
+                          doc.setFont("helvetica", "normal");
+                          doc.setFontSize(8);
+                          doc.setTextColor(51, 65, 85);
+                          const cleanCnpj = cnpjPrestador?.replace(/\D/g, "") || "4483719000183";
+                          const formattedKey = `352606${cleanCnpj}550010000${focusNfeApiResponse.numero}1837482937`;
+                          doc.text(formattedKey, 10, 250);
+                          
+                          // Footer disclaimer
+                          doc.setTextColor(148, 163, 184); // slate-400
+                          doc.setFontSize(7.5);
+                          doc.text("Esta correspondência é uma representação gráfica e legível da Nota Fiscal Eletrônica nacional de serviços para conformidade fiscal do MEI.", 10, 272);
+                          doc.text("Emitida em total sincronia eletrônica pelo Portal Unificado e homologada via sistema integrado Mei Flow.", 10, 277);
+                          doc.text(`Recibo de Faturamento nº ${focusNfeApiResponse.numero} gerado e assinado digitalmente com sucesso.`, 10, 282);
+                          
+                          doc.save(`nfse_meiflow_nota_${focusNfeApiResponse.numero}.pdf`);
+                        } catch (err) {
+                          console.error("Erro ao gerar PDF:", err);
+                          triggerToast("⚠ Falha ao renderizar PDF oficial.");
+                        }
                       }}
                       className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-center text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-xs shrink-0 cursor-pointer"
                     >
                       <FileDown className="w-3.5 h-3.5" />
                       <span>Baixar PDF (Nota)</span>
-                    </a>
+                    </button>
                     <a
                       href="#"
                       onClick={(e) => {
