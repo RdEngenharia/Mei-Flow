@@ -329,13 +329,35 @@ export default function App() {
             triggerToast(`✓ Conexão estável! Lançamentos carregados remotamente via Firebase.`);
           } else {
             // Se cloud estiver vazia, realizamos o upload amigável das informações locais atuais para o Firebase (Facilita a transição)
-            if (clientes.length > 0) {
-              for (const c of clientes) {
+            // Para evitar colisões de ID de sementes compartilhadas (ex: cli_1, tx_1), mapeamos os IDs para incluir o UID do usuário.
+            const mappedClientes = clientes.map(c => {
+              const needsMapping = c.id.startsWith("cli_") && !c.id.includes(currentUser.uid);
+              return needsMapping ? { ...c, id: `${c.id}_${currentUser.uid}` } : c;
+            });
+
+            const mappedTransacoes = transacoes.map(tx => {
+              const txNeedsMapping = tx.id.startsWith("tx_") && !tx.id.includes(currentUser.uid);
+              const nextTxId = txNeedsMapping ? `${tx.id}_${currentUser.uid}` : tx.id;
+              
+              let nextClienteId = tx.clienteId;
+              if (tx.clienteId && tx.clienteId.startsWith("cli_") && !tx.clienteId.includes(currentUser.uid)) {
+                nextClienteId = `${tx.clienteId}_${currentUser.uid}`;
+              }
+              
+              return { ...tx, id: nextTxId, clienteId: nextClienteId };
+            });
+
+            // Atualiza o estado em tempo real para refletir os novos IDs que serão persistidos de forma segura
+            setClientes(mappedClientes);
+            setTransacoes(mappedTransacoes);
+
+            if (mappedClientes.length > 0) {
+              for (const c of mappedClientes) {
                 await saveClienteToFirebase(currentUser.uid, c);
               }
             }
-            if (transacoes.length > 0) {
-              for (const tx of transacoes) {
+            if (mappedTransacoes.length > 0) {
+              for (const tx of mappedTransacoes) {
                 if (tx.tipo === "entrada") {
                   await saveVendaToFirebase(currentUser.uid, tx);
                 } else {
