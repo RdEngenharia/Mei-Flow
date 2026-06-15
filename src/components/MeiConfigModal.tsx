@@ -45,7 +45,7 @@ export default function MeiConfigModal({
       if (response.ok && data.success) {
         setAsaasTestResult({
           success: true,
-          message: "Conexão com o Asaas realizada com sucesso! Chave válida."
+          message: "Conexão Master com Asaas: OK!"
         });
       } else {
         setAsaasTestResult({
