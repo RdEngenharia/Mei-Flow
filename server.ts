@@ -40,27 +40,16 @@ if (firebaseConfig.projectId) {
 
 const db = appInitialized ? getFirestore() : null;
 
-let cachedAsaasBaseUrl: string | null = null;
 async function getAsaasBaseUrl(token: string): Promise<string> {
   const cleanToken = token.replace(/^["']|["']$/g, "").trim();
-  if (cleanToken.toLowerCase().includes("sandbox") || cleanToken.toLowerCase().includes("test")) {
+  if (!cleanToken) {
     return "https://sandbox.asaas.com/v3";
   }
-  if (cachedAsaasBaseUrl) {
-    return cachedAsaasBaseUrl;
+  const isSandbox = cleanToken.startsWith("$aact_hm");
+  if (isSandbox) {
+    return "https://sandbox.asaas.com/v3";
   }
-  try {
-    const prodRes = await axios.get("https://api.asaas.com/v3/finance/balance", {
-      headers: { "access_token": cleanToken },
-      timeout: 3000
-    });
-    if (prodRes.status === 200) {
-      cachedAsaasBaseUrl = "https://api.asaas.com/v3";
-      return cachedAsaasBaseUrl;
-    }
-  } catch (err) {}
-  
-  return "https://sandbox.asaas.com/v3";
+  return "https://api.asaas.com/v3";
 }
 
 async function startServer() {
@@ -435,7 +424,7 @@ async function startServer() {
         customerId = customerJson.id;
       }
 
-      // 3. Create Subscription (Valor Fixo: R$ 14,00)
+      // 3. Create Subscription (Valor Fixo: R$ 29,90)
       // Definimos o primeiro vencimento para amanhã para gerar a cobrança imediatamente
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
@@ -444,7 +433,7 @@ async function startServer() {
       const subPayload: any = {
         customer: customerId,
         billingType: paymentMethod, // BOLETO / PIX / CREDIT_CARD
-        value: 14.00,
+        value: 29.90,
         nextDueDate: dueDateStr,
         cycle: "MONTHLY",
         description: "Assinatura Plano Premium - MEI Flow",
@@ -702,24 +691,37 @@ async function startServer() {
                 const cleanCnpj = (existingProfile?.cnpjPrestador || "").replace(/\D/g, "");
                 const cleanPhone = (existingProfile?.telefone || "").replace(/\D/g, "");
 
-                const generateRandomCNPJ = () => {
-                  const r = (n: number) => Math.floor(Math.random() * n);
-                  const n1 = r(10); const n2 = r(10); const n3 = r(10); const n4 = r(10);
-                  const n5 = r(10); const n6 = r(10); const n7 = r(10); const n8 = r(10);
-                  const n9 = 0; const n10 = 0; const n11 = 0; const n12 = 1;
-                  let d1 = n12*2+n11*3+n10*4+n9*5+n8*6+n7*7+n6*8+n5*9+n4*2+n3*3+n2*4+n1*5;
-                  d1 = 11 - (d1 % 11); if (d1 >= 10) d1 = 0;
-                  let d2 = d1*2+n12*3+n11*4+n10*5+n9*6+n8*7+n7*8+n6*9+n5*2+n4*3+n3*4+n2*5+n1*6;
-                  d2 = 11 - (d2 % 11); if (d2 >= 10) d2 = 0;
-                  return `${n1}${n2}${n3}${n4}${n5}${n6}${n7}${n8}0001${d1}${d2}`;
-                };
-
-                const cpfCnpjLimpo = cleanCnpj.length === 14 ? cleanCnpj : generateRandomCNPJ();
                 const systemToken = process.env.ASAAS_API_KEY;
                 const asaasToken = (systemToken || "").trim();
+                const isSandbox = asaasToken.startsWith("$aact_hm");
+
+                let cpfCnpjLimpo = cleanCnpj;
+
+                if (isSandbox) {
+                  const generateRandomCNPJ = () => {
+                    const r = (n: number) => Math.floor(Math.random() * n);
+                    const n1 = r(10); const n2 = r(10); const n3 = r(10); const n4 = r(10);
+                    const n5 = r(10); const n6 = r(10); const n7 = r(10); const n8 = r(10);
+                    const n9 = 0; const n10 = 0; const n11 = 0; const n12 = 1;
+                    let d1 = n12*2+n11*3+n10*4+n9*5+n8*6+n7*7+n6*8+n5*9+n4*2+n3*3+n2*4+n1*5;
+                    d1 = 11 - (d1 % 11); if (d1 >= 10) d1 = 0;
+                    let d2 = d1*2+n12*3+n11*4+n10*5+n9*6+n8*7+n7*8+n6*9+n5*2+n4*3+n3*4+n2*5+n1*6;
+                    d2 = 11 - (d2 % 11); if (d2 >= 10) d2 = 0;
+                    return `${n1}${n2}${n3}${n4}${n5}${n6}${n7}${n8}0001${d1}${d2}`;
+                  };
+
+                  if (cleanCnpj.length !== 14) {
+                    cpfCnpjLimpo = generateRandomCNPJ();
+                  }
+                } else {
+                  if (cleanCnpj.length < 14) {
+                    console.warn(`[Webhook-Asaas Warning]: CNPJ inválido ou menor que 14 dígitos (${cleanCnpj}) no ambiente Real (Produção) para o usuário ${userId}. Abortando criação da subconta.`);
+                    return;
+                  }
+                }
 
                 if (asaasToken) {
-                  const asaasBaseUrl = await getAsaasBaseUrl(asaasToken);
+                  const asaasBaseUrl = isSandbox ? "https://sandbox.asaas.com/v3" : "https://api.asaas.com/v3";
                   const payloadAsaas = {
                     name: (existingProfile?.name || existingProfile?.meiName || "MEI Flow Beneficiante").trim().substring(0, 80),
                     email: (existingProfile?.email || `mei_${userId}@meiflow.com`).trim(),
@@ -807,7 +809,12 @@ async function startServer() {
                 }
               };
 
-              const focusUrl = "https://homologacao.focusnfe.com.br/v2/nfse";
+              const isFocusTest = !process.env.FOCUS_NFE_KEY || 
+                                  process.env.FOCUS_NFE_KEY.toLowerCase().includes("test") || 
+                                  process.env.FOCUS_NFE_KEY.toLowerCase().includes("homolog") || 
+                                  process.env.FOCUS_NFE_KEY.toLowerCase().includes("development") ||
+                                  process.env.FOCUS_NFE_KEY.toLowerCase().includes("sandbox");
+              const focusUrl = isFocusTest ? "https://homologacao.focusnfe.com.br/v2/nfse" : "https://api.focusnfe.com.br/v2/nfse";
               const focusResponse = await axios.post(focusUrl, focusNfePayload, {
                 headers: {
                   "Content-Type": "application/json",
@@ -1045,33 +1052,50 @@ async function startServer() {
       const cleanCnpj = (existingProfile.cnpjPrestador || "").replace(/\D/g, "");
       const cleanPhone = (existingProfile.telefone || "").replace(/\D/g, "");
 
-      // Gerador de CNPJ válido para garantir sucesso total em Sandbox
-      function generateRandomCNPJ() {
-        const r = (n: number) => Math.floor(Math.random() * n);
-        const n1 = r(10);
-        const n2 = r(10);
-        const n3 = r(10);
-        const n4 = r(10);
-        const n5 = r(10);
-        const n6 = r(10);
-        const n7 = r(10);
-        const n8 = r(10);
-        const n9 = 0; // 0001
-        const n10 = 0;
-        const n11 = 0;
-        const n12 = 1;
-        let d1 = n12*2+n11*3+n10*4+n9*5+n8*6+n7*7+n6*8+n5*9+n4*2+n3*3+n2*4+n1*5;
-        d1 = 11 - (d1 % 11);
-        if (d1 >= 10) d1 = 0;
-        let d2 = d1*2+n12*3+n11*4+n10*5+n9*6+n8*7+n7*8+n6*9+n5*2+n4*3+n3*4+n2*5+n1*6;
-        d2 = 11 - (d2 % 11);
-        if (d2 >= 10) d2 = 0;
-        return `${n1}${n2}${n3}${n4}${n5}${n6}${n7}${n8}0001${d1}${d2}`;
-      }
-
-      const cpfCnpjLimpo = cleanCnpj.length === 14 ? cleanCnpj : generateRandomCNPJ();
       const systemToken = process.env.ASAAS_API_KEY;
       const asaasToken = (systemToken || "").trim();
+      const isSandbox = asaasToken.startsWith("$aact_hm");
+
+      let cpfCnpjLimpo = cleanCnpj;
+
+      if (isSandbox) {
+        // Gerador de CNPJ válido para garantir sucesso total em Sandbox
+        function generateRandomCNPJ() {
+          const r = (n: number) => Math.floor(Math.random() * n);
+          const n1 = r(10);
+          const n2 = r(10);
+          const n3 = r(10);
+          const n4 = r(10);
+          const n5 = r(10);
+          const n6 = r(10);
+          const n7 = r(10);
+          const n8 = r(10);
+          const n9 = 0; // 0001
+          const n10 = 0;
+          const n11 = 0;
+          const n12 = 1;
+          let d1 = n12*2+n11*3+n10*4+n9*5+n8*6+n7*7+n6*8+n5*9+n4*2+n3*3+n2*4+n1*5;
+          d1 = 11 - (d1 % 11);
+          if (d1 >= 10) d1 = 0;
+          let d2 = d1*2+n12*3+n11*4+n10*5+n9*6+n8*7+n7*8+n6*9+n5*2+n4*3+n3*4+n2*5+n1*6;
+          d2 = 11 - (d2 % 11);
+          if (d2 >= 10) d2 = 0;
+          return `${n1}${n2}${n3}${n4}${n5}${n6}${n7}${n8}0001${d1}${d2}`;
+        }
+
+        if (cleanCnpj.length !== 14) {
+          cpfCnpjLimpo = generateRandomCNPJ();
+        }
+      } else {
+        if (cleanCnpj.length < 14) {
+          console.warn(`[Auto-Create Subaccount Warning]: CNPJ inválido ou menor que 14 dígitos (${cleanCnpj}) no ambiente Real (Produção) para o usuário ${userId}. Abortando criação da subconta.`);
+          res.status(400).json({
+            success: false,
+            mensagem: `CNPJ inválido ou menor que 14 dígitos e não pode ser simulado no ambiente Real (Produção).`
+          });
+          return;
+        }
+      }
 
       if (!asaasToken) {
         res.status(500).json({

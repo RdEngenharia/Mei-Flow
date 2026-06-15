@@ -3502,6 +3502,10 @@ ${meiName}`;
           onClose={() => setShowUpgradeModal(false)}
           onUpgradeSuccess={handleUpgradeSuccess}
           userId={userId}
+          meiName={meiName}
+          cnpjPrestador={cnpjPrestador || localStorage.getItem("meiflow_cnpj_prestador") || ""}
+          email={user?.email || "contato@meiflow.com"}
+          planType={planType}
         />
       )}
 

@@ -14,24 +14,40 @@ import {
   QrCode, 
   Lock 
 } from "lucide-react";
-import { auth, db } from "../firebase";
-import { doc, setDoc } from "firebase/firestore";
+import { auth } from "../firebase";
 
 interface UpgradeModalProps {
   isOpen: boolean;
   onClose: () => void;
   onUpgradeSuccess: () => Promise<void>;
   userId?: string;
+  meiName?: string;
+  cnpjPrestador?: string;
+  email?: string;
+  planType?: string;
 }
 
 type CheckoutStep = "details" | "payment_method" | "pix" | "card";
 
-export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId: propUserId }: UpgradeModalProps) {
+export default function UpgradeModal({ 
+  isOpen, 
+  onClose, 
+  onUpgradeSuccess, 
+  userId: propUserId,
+  meiName,
+  cnpjPrestador,
+  email,
+  planType
+}: UpgradeModalProps) {
   const [checkoutStep, setCheckoutStep] = useState<CheckoutStep>("details");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState(false);
+  
+  // Real Asaas billing state
+  const [pixQrCodeBase64, setPixQrCodeBase64] = useState<string | null>(null);
+  const [pixPayload, setPixPayload] = useState<string | null>(null);
   
   // Credit Card Form States
   const [cardNumber, setCardNumber] = useState("");
@@ -40,6 +56,13 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
   const [cardCvv, setCardCvv] = useState("");
 
   const activeUserId = propUserId || auth.currentUser?.uid || "user_49281";
+
+  // Watch for premium activation in real-time from parent profile listener
+  useEffect(() => {
+    if (planType === "premium") {
+      setSuccess(true);
+    }
+  }, [planType]);
 
   if (!isOpen) return null;
 
@@ -66,97 +89,128 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
   };
 
   const handleCopyPix = () => {
-    const pixCode = "00020101021226830014br.gov.bcb.pix25610034meiflow_com_br_premium_2990_fatura520400005303986540529.905802BR5915MEI_FLOW_GESTAO6009SAO_PAULO62070503***6304ED2A";
-    navigator.clipboard.writeText(pixCode);
-    setIsCopied(true);
-    setTimeout(() => setIsCopied(false), 2500);
+    if (pixPayload) {
+      navigator.clipboard.writeText(pixPayload);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2500);
+    }
   };
 
-  const handleExecuteUpgrade = async () => {
-    setErrorMessage(null);
+  // 1. Fetch real Pix invoice from Asaas subscription endpoint
+  const handleGeneratePix = async () => {
     setIsSubmitting(true);
-
+    setErrorMessage(null);
     try {
-      if (auth.currentUser) {
-        const uid = auth.currentUser.uid;
-
-        // Persistir no Firestore diretamente para seguranca de multi-usuario ativa
-        const userDocRef = doc(db, "users", uid);
-        await setDoc(userDocRef, {
-          planType: "premium",
-          invoiceLimit: 30,
-          invoiceUsed: 0,
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-
-        const legacyDocRef = doc(db, "usuarios", uid);
-        await setDoc(legacyDocRef, {
-          planType: "premium",
-          invoiceLimit: 30,
-          invoiceUsed: 0,
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-
-        // Disparar o fluxo completo do Webhook Asaas de forma assíncrona/segura
-        try {
-          const simBody = {
-            event: "PAYMENT_RECEIVED",
-            payment: {
-              id: `pay_sim_${Math.floor(100000 + Math.random() * 900000)}`,
-              value: 29.90,
-              externalReference: uid
-            }
-          };
-
-          fetch("/api/webhook-asaas", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(simBody)
-          }).catch(err => console.warn("[Webhook Simulation Ignored]:", err));
-        } catch (simErr) {
-          console.warn("[Simulation Webhook Handled]:", simErr);
+      const response = await fetch("/api/asaas/subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: activeUserId,
+          name: meiName || "Microempreendedor MEI",
+          cpfCnpj: cnpjPrestador ? cnpjPrestador.replace(/\D/g, "") : "4483719000183",
+          email: email || "contato@meiflow.com",
+          paymentMethod: "PIX"
+        })
+      });
+      
+      const data = await response.json();
+      if (response.ok && data.success) {
+        if (data.pixQrCode) {
+          setPixQrCodeBase64(data.pixQrCode.encodedImage || null);
+          setPixPayload(data.pixQrCode.payload || null);
+        } else {
+          setErrorMessage("Chave master ativa, porém o Asaas não retornou os dados de pagamento Pix. Verifique se o Pix está ativo no seu painel Asaas.");
         }
       } else {
-        localStorage.setItem("meiflow_plan_type", "premium");
-        localStorage.setItem("meiflow_invoice_limit", "30");
-        localStorage.setItem("meiflow_invoice_used", "0");
+        setErrorMessage(data.mensagem || "Falha ao gerar cobrança Pix. Verifique as credenciais no servidor.");
       }
-
-      // Ativa sucesso no pai
-      await onUpgradeSuccess();
-      setSuccess(true);
     } catch (err: any) {
       console.error(err);
-      setErrorMessage("Erro ao salvar dados de assinatura na nuvem: " + err.message);
+      setErrorMessage("Erro técnico de rede ao tentar gerar o Pix com o Asaas.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleCardSubmit = (e: React.FormEvent) => {
+  // Generate Pix dynamically upon entering the step
+  useEffect(() => {
+    if (checkoutStep === "pix" && !pixQrCodeBase64) {
+      handleGeneratePix();
+    }
+  }, [checkoutStep]);
+
+  // 2. Real Payment via Credit Card
+  const handleCardSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMessage(null);
+    setIsSubmitting(true);
+
     if (cardNumber.length < 19) {
       setErrorMessage("Número de cartão de crédito incompleto ou inválido.");
+      setIsSubmitting(false);
       return;
     }
     if (!cardName.trim()) {
       setErrorMessage("Por favor, preencha o nome impresso no cartão.");
+      setIsSubmitting(false);
       return;
     }
     if (cardExpiry.length < 5) {
       setErrorMessage("Data de validade inválida (MM/AA requerido).");
+      setIsSubmitting(false);
       return;
     }
     if (cardCvv.length < 3) {
       setErrorMessage("Código de segurança (CVV) inválido.");
+      setIsSubmitting(false);
       return;
     }
 
-    handleExecuteUpgrade();
+    try {
+      const parts = cardExpiry.split("/");
+      const expiryMonth = parts[0];
+      const expiryYear = "20" + parts[1]; // MM/AA -> MM/20AA
+
+      const response = await fetch("/api/asaas/subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: activeUserId,
+          name: meiName || "Microempreendedor MEI",
+          cpfCnpj: cnpjPrestador ? cnpjPrestador.replace(/\D/g, "") : "4483719000183",
+          email: email || "contato@meiflow.com",
+          paymentMethod: "CREDIT_CARD",
+          creditCard: {
+            holderName: cardName.trim(),
+            number: cardNumber.replace(/\s/g, ""),
+            expiryMonth,
+            expiryYear,
+            ccv: cardCvv
+          }
+        })
+      });
+
+      const data = await response.json();
+      if (response.ok && data.success) {
+        if (data.planType === "premium" || data.status === "ACTIVE") {
+          setSuccess(true);
+          await onUpgradeSuccess();
+        } else {
+          setErrorMessage("Assinatura criada, porém o cartão está aguardando análise de risco ou ainda não foi debitado.");
+        }
+      } else {
+        setErrorMessage(data.mensagem || "Falha ao processar pagamento via cartão com o Asaas.");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage("Erro de rede ao conectar-se ao servidor de pagamentos.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+    <div className="fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto" id="upgrade-modal-overlay">
       <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col animate-scale-in">
         
         {/* Banner Superior Premium */}
@@ -167,6 +221,7 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
           <button
             onClick={onClose}
             className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-all cursor-pointer"
+            id="upgrade-modal-close-btn"
           >
             <X className="w-5 h-5" />
           </button>
@@ -188,7 +243,7 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
             
             {/* STEP 1: General Details */}
             {checkoutStep === "details" && (
-              <div className="space-y-6 animate-fade-in">
+              <div className="space-y-6 animate-fade-in" id="step-details">
                 <div className="flex items-baseline gap-1.5 justify-center pb-2 border-b border-slate-100">
                   <span className="text-2xl font-extrabold text-slate-900">R$ 29,90</span>
                   <span className="text-xs text-slate-500 font-medium">/ mensal</span>
@@ -224,8 +279,8 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
 
                 <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100/50 flex items-center gap-3">
                   <div className="text-left leading-normal font-sans text-xs text-emerald-900">
-                    <span className="font-extrabold text-emerald-950 block text-sm">Liberação Instantânea</span>
-                    Assinatura 100% livre de fidelidade. Você pode cancelar a qualquer momento em um único clique sem multas ou chatices.
+                    <span className="font-extrabold text-emerald-950 block text-sm">Liberação Automatizada</span>
+                    Assinatura 100% livre de fidelidade. Você pode cancelar a qualquer momento sem burocracia ou taxas de cancelamento.
                   </div>
                 </div>
 
@@ -233,6 +288,7 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                   <button
                     onClick={() => setCheckoutStep("payment_method")}
                     className="w-full bg-slate-900 hover:bg-slate-800 text-white font-extrabold py-3.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 border border-slate-950 shadow-lg transition-all cursor-pointer active:scale-95"
+                    id="upgrade-start-checkout-btn"
                   >
                     <span>Contratar Plano Premium - R$ 29,90/mês</span>
                     <ArrowRight className="w-4 h-4 text-emerald-400" />
@@ -241,6 +297,7 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                   <button
                     onClick={onClose}
                     className="w-full py-2.5 text-center text-slate-500 hover:text-slate-700 bg-slate-50 rounded-xl font-bold text-xs transition-all cursor-pointer block"
+                    id="upgrade-remain-free-btn"
                   >
                     Permanecer no Plano Gratuito
                   </button>
@@ -250,10 +307,11 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
 
             {/* STEP 2: Payment Method Selection */}
             {checkoutStep === "payment_method" && (
-              <div className="space-y-5 animate-fade-in">
+              <div className="space-y-5 animate-fade-in" id="step-payment-methods">
                 <button 
                   onClick={() => setCheckoutStep("details")} 
-                  className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition-all cursor-pointer"
+                  className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition-all cursor-pointer animate-fade-in"
+                  id="upgrade-back-to-details-btn"
                 >
                   <ArrowLeft className="w-3.5 h-3.5" /> Voltar
                 </button>
@@ -267,6 +325,7 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                   <button
                     onClick={() => setCheckoutStep("pix")}
                     className="w-full p-4 border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/20 rounded-2xl flex items-center justify-between text-left transition-all cursor-pointer group"
+                    id="select-pix-payment"
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center font-bold text-lg shrink-0">
@@ -283,6 +342,7 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                   <button
                     onClick={() => setCheckoutStep("card")}
                     className="w-full p-4 border border-slate-200 hover:border-blue-500 hover:bg-blue-50/20 rounded-2xl flex items-center justify-between text-left transition-all cursor-pointer group"
+                    id="select-card-payment"
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center shrink-0">
@@ -290,7 +350,7 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                       </div>
                       <div>
                         <span className="text-xs font-black text-slate-800 block">Cartão de Crédito</span>
-                        <span className="text-[10px] text-blue-600 font-bold block">Renovação mensal segura</span>
+                        <span className="text-[10px] text-blue-600 font-bold block">Renovação segura e mensal</span>
                       </div>
                     </div>
                     <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-blue-500 transition-all" />
@@ -298,18 +358,19 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                 </div>
 
                 <div className="flex items-center justify-center gap-1 text-slate-400 text-[10px] font-bold uppercase tracking-wider justify-center pt-2">
-                  <Lock className="w-3.5 h-3.5" />
-                  <span>Ambiente Protetivo & Integrado</span>
+                  <Lock className="w-3.5 h-3.5 text-blue-500" />
+                  <span>Ambiente Seguro & Integrado com Asaas</span>
                 </div>
               </div>
             )}
 
-            {/* STEP 3: Pix QR-Code Simulated Payment */}
+            {/* STEP 3: Pix QR-Code */}
             {checkoutStep === "pix" && (
-              <div className="space-y-5 animate-fade-in text-center">
+              <div className="space-y-5 animate-fade-in text-center" id="step-pix-checkout">
                 <button 
                   onClick={() => setCheckoutStep("payment_method")} 
                   className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition-all cursor-pointer"
+                  id="pix-back-btn"
                 >
                   <ArrowLeft className="w-3.5 h-3.5" /> Voltar
                 </button>
@@ -317,70 +378,88 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                 <div className="space-y-1">
                   <h4 className="text-sm font-black text-slate-900">Pagamento via Pix</h4>
                   <p className="text-xs text-slate-500 leading-normal max-w-xs mx-auto">
-                    Escaneie o QR Code abaixo pelo aplicativo do seu banco ou use a chave "Copia e Cola".
+                    Escaneie o QR Code abaixo com seu aplicativo bancário ou use Pix Copia e Cola.
                   </p>
                 </div>
 
-                {/* Simulated QR Code representation */}
-                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl max-w-[200px] mx-auto space-y-3 relative">
-                  <div className="bg-white p-2 rounded-xl border border-slate-100 flex items-center justify-center">
-                    <QrCode className="w-36 h-36 text-slate-900 animate-pulse" />
+                {isSubmitting ? (
+                  <div className="py-8 space-y-3 flex flex-col items-center justify-center" id="pix-loading-spinner-box">
+                    <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+                    <span className="text-xs text-slate-500 font-bold">Gerando Pix oficial no Asaas...</span>
                   </div>
-                  <div className="text-[10px] font-bold text-slate-700 bg-slate-200/50 py-1 px-2 rounded-md">
-                    Valor: <strong className="text-emerald-700">R$ 29,90</strong>
+                ) : errorMessage ? (
+                  <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl space-y-2.5" id="pix-error-box">
+                    <p className="text-xs text-rose-800 font-semibold leading-normal">{errorMessage}</p>
+                    <button
+                      onClick={handleGeneratePix}
+                      className="inline-flex py-2 px-4 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg cursor-pointer shadow-sm transition-all uppercase tracking-wider"
+                    >
+                      Tentar Novamente
+                    </button>
                   </div>
-                </div>
+                ) : (
+                  <>
+                    {/* Visual QR Code representation */}
+                    <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl max-w-[200px] mx-auto space-y-3 relative">
+                      <div className="bg-white p-2.5 rounded-xl border border-slate-100 flex items-center justify-center">
+                        {pixQrCodeBase64 ? (
+                          <img 
+                            src={pixQrCodeBase64.startsWith("data:") ? pixQrCodeBase64 : `data:image/png;base64,${pixQrCodeBase64}`} 
+                            className="w-36 h-36" 
+                            alt="QR Code Pix" 
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <QrCode className="w-36 h-36 text-slate-300" />
+                        )}
+                      </div>
+                      <div className="text-[10px] font-bold text-slate-700 bg-slate-250/50 py-1 px-2 rounded-md">
+                        Valor: <strong className="text-emerald-700">R$ 29,90 Por Mês</strong>
+                      </div>
+                    </div>
 
-                {/* Copia e Cola box */}
-                <div className="space-y-2">
-                  <button
-                    onClick={handleCopyPix}
-                    className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer border border-slate-200/50"
-                  >
-                    <Clipboard className="w-4 h-4 text-slate-600" />
-                    <span>{isCopied ? "Pix Copiado com Sucesso!" : "Copiar Chave Copia e Cola"}</span>
-                  </button>
-                </div>
+                    {/* Copia e Cola box */}
+                    <div className="space-y-2">
+                      <button
+                        onClick={handleCopyPix}
+                        disabled={!pixPayload}
+                        className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-slate-800 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer border border-slate-200/50"
+                        id="copy-pix-payload-btn"
+                      >
+                        <Clipboard className="w-4 h-4 text-slate-600" />
+                        <span>{isCopied ? "Pix Copiado!" : "Copiar Código Copia e Cola"}</span>
+                      </button>
+                    </div>
 
-                <div className="py-2 border-t border-slate-100">
-                  <button
-                    onClick={handleExecuteUpgrade}
-                    disabled={isSubmitting}
-                    className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-350 text-white font-extrabold py-3.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer uppercase tracking-wider disabled:cursor-not-allowed"
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Validando Transação Pix...
-                      </>
-                    ) : (
-                      <>
-                        <span>Confirmar Pagamento Realizado</span>
-                        <CheckCircle className="w-4 h-4 text-emerald-100" />
-                      </>
-                    )}
-                  </button>
-                </div>
+                    <div className="py-3 px-4 bg-amber-50/50 border border-amber-200/60 rounded-2xl flex items-center justify-center gap-2">
+                      <div className="w-2.5 h-2.5 bg-amber-500 rounded-full animate-ping shrink-0" />
+                      <span className="text-[11px] text-amber-900 font-bold">
+                        Aguardando sinalização bancária do Asaas...
+                      </span>
+                    </div>
 
-                <div className="text-[10px] text-slate-400 font-medium leading-normal">
-                  Seu banco informará o processamento em poucos segundos de forma corporativa.
-                </div>
+                    <p className="text-[10px] text-slate-400 font-medium">
+                      O plano Premium será liberado automaticamente em tela assim que o pagamento for detectado pelo webhook.
+                    </p>
+                  </>
+                )}
               </div>
             )}
 
-            {/* STEP 4: Credit Card simulated Form */}
+            {/* STEP 4: Credit Card Form */}
             {checkoutStep === "card" && (
-              <div className="space-y-4 animate-fade-in">
+              <div className="space-y-4 animate-fade-in" id="step-card-checkout">
                 <button 
                   onClick={() => setCheckoutStep("payment_method")} 
                   className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition-all cursor-pointer"
+                  id="card-back-btn"
                 >
                   <ArrowLeft className="w-3.5 h-3.5" /> Voltar
                 </button>
 
                 <div className="space-y-1 text-center">
                   <h4 className="text-sm font-black text-slate-900">Cadastro de Cartão</h4>
-                  <p className="text-xs text-slate-500">Transação de R$ 29,90 em ambiente blindado e seguro.</p>
+                  <p className="text-xs text-slate-500">Transação recorrente de R$ 29,90 em ambiente protegido.</p>
                 </div>
 
                 <form onSubmit={handleCardSubmit} className="space-y-3.5">
@@ -396,6 +475,7 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                         placeholder="0000 0000 0000 0000"
                         className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 pl-9 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white font-mono"
                         required
+                        id="card-number-input"
                       />
                       <CreditCard className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                     </div>
@@ -412,6 +492,7 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                       placeholder="NOME COMPLETO DO TITULAR"
                       className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white uppercase"
                       required
+                      id="card-holder-name-input"
                     />
                   </div>
 
@@ -427,6 +508,7 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                         placeholder="MM/AA"
                         className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white font-mono"
                         required
+                        id="card-expiry-input"
                       />
                     </div>
                     <div>
@@ -440,12 +522,13 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                         placeholder="000"
                         className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white font-mono"
                         required
+                        id="card-cvv-input"
                       />
                     </div>
                   </div>
 
                   {errorMessage && (
-                    <div className="p-2.5 bg-red-50 border border-red-200 rounded-xl text-red-750 text-[11px] text-center leading-normal">
+                    <div className="p-2.5 bg-red-50 border border-red-200 rounded-xl text-red-800 text-[11px] text-center leading-normal" id="card-error-display">
                       {errorMessage}
                     </div>
                   )}
@@ -455,15 +538,16 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
                       type="submit"
                       disabled={isSubmitting}
                       className="w-full bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white font-extrabold py-3.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer active:scale-95 uppercase tracking-wider disabled:cursor-not-allowed"
+                      id="submit-card-payment-btn"
                     >
                       {isSubmitting ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin text-white" />
-                          Processando Pagamento Privado...
+                          Processando Pagamento...
                         </>
                       ) : (
                         <>
-                          <span>Efetuar Pagamento — R$ 29,90</span>
+                          <span>Efetuar Assinatura — R$ 29,90</span>
                           <ShieldCheck className="w-4 h-4 text-emerald-400" />
                         </>
                       )}
@@ -480,20 +564,21 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
 
           </div>
         ) : (
-          <div className="p-6 md:p-8 space-y-6 text-center">
+          <div className="p-6 md:p-8 space-y-6 text-center" id="upgrade-success-view">
             <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600 border border-emerald-100/50 mx-auto">
               <CheckCircle className="w-6 h-6 shrink-0 animate-bounce" />
             </div>
             <div className="space-y-1 max-w-xs mx-auto">
               <h4 className="text-base font-extrabold text-slate-800 tracking-tight">Premium Ativado com Sucesso!</h4>
               <p className="text-xs text-slate-500 leading-normal">
-                Parabéns! Sua assinatura foi confirmada e todos os privilégios e recursos extras já estão ativos na sua conta MEI Flow.
+                Parabéns! Sua assinatura foi confirmada através do sistema integrado e todos os privilégios e recursos extras do MEI Flow já estão ativos na sua conta.
               </p>
             </div>
 
             <button
               onClick={onClose}
               className="w-full py-3 bg-slate-900 hover:bg-slate-850 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer text-center block uppercase tracking-wider"
+              id="success-modal-exit-btn"
             >
               Começar a Usar Recursos Premium ➔
             </button>
