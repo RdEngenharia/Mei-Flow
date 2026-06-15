@@ -230,11 +230,38 @@ export default async function handler(req: any, res: any) {
 
     try {
       console.log(`[Asaas Pix Integration]: Fetching payments for subscription ${subscriptionId}`);
-      const paymentsJson = await fetchAsaas(`${asaasBaseUrl}/subscriptions/${subscriptionId}/payments`, {
-        headers: { "access_token": asaasToken }
-      });
-      if (paymentsJson && paymentsJson.data && paymentsJson.data.length > 0) {
-        firstPayment = paymentsJson.data[0];
+      let paymentsJson: any = null;
+      
+      // Method A: Direct subscriptions/{id}/payments
+      try {
+        paymentsJson = await fetchAsaas(`${asaasBaseUrl}/subscriptions/${subscriptionId}/payments`, {
+          headers: { "access_token": asaasToken }
+        });
+        if (paymentsJson && paymentsJson.data && paymentsJson.data.length > 0) {
+          firstPayment = paymentsJson.data[0];
+          console.log(`[Asaas Pix Integration - Method A]: Found initial payment ${firstPayment.id}`);
+        }
+      } catch (methodAErr: any) {
+        console.warn("[Asaas Pix Integration]: Method A (subscriptions/{id}/payments) failed:", methodAErr.response?.data || methodAErr.message);
+      }
+
+      // Method B: Filter payments?subscription={id}
+      if (!firstPayment) {
+        try {
+          console.log(`[Asaas Pix Integration]: Falling back to Method B (payments?subscription=${subscriptionId})`);
+          paymentsJson = await fetchAsaas(`${asaasBaseUrl}/payments?subscription=${subscriptionId}`, {
+            headers: { "access_token": asaasToken }
+          });
+          if (paymentsJson && paymentsJson.data && paymentsJson.data.length > 0) {
+            firstPayment = paymentsJson.data[0];
+            console.log(`[Asaas Pix Integration - Method B]: Found initial payment ${firstPayment.id}`);
+          }
+        } catch (methodBErr: any) {
+          console.error("[Asaas Pix Integration]: Method B (payments?subscription) failed:", methodBErr.response?.data || methodBErr.message);
+        }
+      }
+
+      if (firstPayment) {
         console.log(`[Asaas Pix Integration]: Found initial payment ${firstPayment.id} with status ${firstPayment.status}`);
         
         if (firstPayment.id && paymentMethod === "PIX") {
@@ -243,13 +270,13 @@ export default async function handler(req: any, res: any) {
             pixQrCodeResult = await fetchAsaas(`${asaasBaseUrl}/payments/${firstPayment.id}/pixQrCode`, {
               headers: { "access_token": asaasToken }
             });
-            console.log(`[Asaas Pix Integration]: Successfully fetched Pix QR Code.`);
+            console.log(`[Asaas Pix Integration]: Successfully fetched Pix QR Code.`, pixQrCodeResult);
           } catch (pixErr: any) {
             console.error("Asaas fetch Pix QR Code warning:", pixErr.response?.data || pixErr.message);
           }
         }
       } else {
-        console.warn(`[Asaas Pix Integration]: No payments found linked to subscription ${subscriptionId}`);
+        console.warn(`[Asaas Pix Integration]: No payments found linked to subscription ${subscriptionId} via both methods.`);
       }
     } catch (payLinkErr: any) {
       console.error("Warning: Could not fetch serverless sub payments:", payLinkErr.response?.data || payLinkErr.message);

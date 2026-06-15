@@ -238,12 +238,12 @@ export default function UpgradeModal({
         </div>
 
         {/* CONTENT CHANNELS */}
-        {!success ? (
-          <div className="p-6 md:p-8 space-y-6">
+        {!success && (
+          <div key="checkout-form-container" className="p-6 md:p-8 space-y-6">
             
             {/* STEP 1: General Details */}
             {checkoutStep === "details" && (
-              <div className="space-y-6 animate-fade-in" id="step-details">
+              <div key="step-details" className="space-y-6 animate-fade-in" id="step-details">
                 <div className="flex items-baseline gap-1.5 justify-center pb-2 border-b border-slate-100">
                   <span className="text-2xl font-extrabold text-slate-900">R$ 29,90</span>
                   <span className="text-xs text-slate-500 font-medium">/ mensal</span>
@@ -278,7 +278,7 @@ export default function UpgradeModal({
                 </div>
 
                 <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100/50 flex items-center gap-3">
-                  <div className="text-left leading-normal font-sans text-xs text-emerald-900">
+                  <div className="text-left leading-normal font-sans text-xs text-emerald-950">
                     <span className="font-extrabold text-emerald-950 block text-sm">Liberação Automatizada</span>
                     Assinatura 100% livre de fidelidade. Você pode cancelar a qualquer momento sem burocracia ou taxas de cancelamento.
                   </div>
@@ -307,7 +307,7 @@ export default function UpgradeModal({
 
             {/* STEP 2: Payment Method Selection */}
             {checkoutStep === "payment_method" && (
-              <div className="space-y-5 animate-fade-in" id="step-payment-methods">
+              <div key="step-payment-methods" className="space-y-5 animate-fade-in" id="step-payment-methods">
                 <button 
                   onClick={() => setCheckoutStep("details")} 
                   className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition-all cursor-pointer animate-fade-in"
@@ -366,7 +366,7 @@ export default function UpgradeModal({
 
             {/* STEP 3: Pix QR-Code */}
             {checkoutStep === "pix" && (
-              <div className="space-y-5 animate-fade-in text-center" id="step-pix-checkout">
+              <div key="step-pix-checkout" className="space-y-5 animate-fade-in text-center" id="step-pix-checkout">
                 <button 
                   onClick={() => setCheckoutStep("payment_method")} 
                   className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition-all cursor-pointer"
@@ -383,12 +383,12 @@ export default function UpgradeModal({
                 </div>
 
                 {isSubmitting ? (
-                  <div className="py-8 space-y-3 flex flex-col items-center justify-center" id="pix-loading-spinner-box">
+                  <div key="pix-loading-spinner-box" className="py-8 space-y-3 flex flex-col items-center justify-center" id="pix-loading-spinner-box">
                     <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
                     <span className="text-xs text-slate-500 font-bold">Gerando Pix oficial no Asaas...</span>
                   </div>
                 ) : errorMessage ? (
-                  <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl space-y-2.5" id="pix-error-box">
+                  <div key="pix-error-box" className="p-4 bg-rose-50 border border-rose-200 rounded-xl space-y-2.5" id="pix-error-box">
                     <p className="text-xs text-rose-800 font-semibold leading-normal">{errorMessage}</p>
                     <button
                       onClick={handleGeneratePix}
@@ -398,7 +398,7 @@ export default function UpgradeModal({
                     </button>
                   </div>
                 ) : (
-                  <>
+                  <div key="pix-details-content" className="space-y-4">
                     {/* Visual QR Code representation */}
                     <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl max-w-[200px] mx-auto space-y-3 relative">
                       <div className="bg-white p-2.5 rounded-xl border border-slate-100 flex items-center justify-center">
@@ -441,14 +441,14 @@ export default function UpgradeModal({
                     <p className="text-[10px] text-slate-400 font-medium">
                       O plano Premium será liberado automaticamente em tela assim que o pagamento for detectado pelo webhook.
                     </p>
-                  </>
+                  </div>
                 )}
               </div>
             )}
 
             {/* STEP 4: Credit Card Form */}
             {checkoutStep === "card" && (
-              <div className="space-y-4 animate-fade-in" id="step-card-checkout">
+              <div key="step-card-checkout" className="space-y-4 animate-fade-in" id="step-card-checkout">
                 <button 
                   onClick={() => setCheckoutStep("payment_method")} 
                   className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition-all cursor-pointer"
@@ -528,7 +528,7 @@ export default function UpgradeModal({
                   </div>
 
                   {errorMessage && (
-                    <div className="p-2.5 bg-red-50 border border-red-200 rounded-xl text-red-800 text-[11px] text-center leading-normal" id="card-error-display">
+                    <div key="card-error-display" className="p-2.5 bg-red-50 border border-red-200 rounded-xl text-red-800 text-[11px] text-center leading-normal" id="card-error-display">
                       {errorMessage}
                     </div>
                   )}
@@ -541,15 +541,15 @@ export default function UpgradeModal({
                       id="submit-card-payment-btn"
                     >
                       {isSubmitting ? (
-                        <>
+                        <span key="loading-label" className="flex items-center gap-2">
                           <Loader2 className="w-4 h-4 animate-spin text-white" />
-                          Processando Pagamento...
-                        </>
+                          <span>Processando Pagamento...</span>
+                        </span>
                       ) : (
-                        <>
+                        <span key="normal-label" className="flex items-center gap-2">
                           <span>Efetuar Assinatura — R$ 29,90</span>
                           <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                        </>
+                        </span>
                       )}
                     </button>
                   </div>
@@ -563,8 +563,10 @@ export default function UpgradeModal({
             )}
 
           </div>
-        ) : (
-          <div className="p-6 md:p-8 space-y-6 text-center" id="upgrade-success-view">
+        )}
+
+        {success && (
+          <div key="checkout-success-container" className="p-6 md:p-8 space-y-6 text-center" id="upgrade-success-view">
             <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600 border border-emerald-100/50 mx-auto">
               <CheckCircle className="w-6 h-6 shrink-0 animate-bounce" />
             </div>
