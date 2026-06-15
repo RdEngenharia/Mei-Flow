@@ -229,21 +229,27 @@ export default async function handler(req: any, res: any) {
     let pixQrCodeResult: any = null;
 
     try {
-      const paymentsJson = await fetchAsaas(`${asaasBaseUrl}/payments?subscription=${subscriptionId}`, {
+      console.log(`[Asaas Pix Integration]: Fetching payments for subscription ${subscriptionId}`);
+      const paymentsJson = await fetchAsaas(`${asaasBaseUrl}/subscriptions/${subscriptionId}/payments`, {
         headers: { "access_token": asaasToken }
       });
       if (paymentsJson && paymentsJson.data && paymentsJson.data.length > 0) {
         firstPayment = paymentsJson.data[0];
+        console.log(`[Asaas Pix Integration]: Found initial payment ${firstPayment.id} with status ${firstPayment.status}`);
         
         if (firstPayment.id && paymentMethod === "PIX") {
           try {
+            console.log(`[Asaas Pix Integration]: Requesting Pix QR Code for payment ${firstPayment.id}`);
             pixQrCodeResult = await fetchAsaas(`${asaasBaseUrl}/payments/${firstPayment.id}/pixQrCode`, {
               headers: { "access_token": asaasToken }
             });
+            console.log(`[Asaas Pix Integration]: Successfully fetched Pix QR Code.`);
           } catch (pixErr: any) {
             console.error("Asaas fetch Pix QR Code warning:", pixErr.response?.data || pixErr.message);
           }
         }
+      } else {
+        console.warn(`[Asaas Pix Integration]: No payments found linked to subscription ${subscriptionId}`);
       }
     } catch (payLinkErr: any) {
       console.error("Warning: Could not fetch serverless sub payments:", payLinkErr.response?.data || payLinkErr.message);
