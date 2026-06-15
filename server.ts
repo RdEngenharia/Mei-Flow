@@ -40,6 +40,29 @@ if (firebaseConfig.projectId) {
 
 const db = appInitialized ? getFirestore() : null;
 
+let cachedAsaasBaseUrl: string | null = null;
+async function getAsaasBaseUrl(token: string): Promise<string> {
+  const cleanToken = token.replace(/^["']|["']$/g, "").trim();
+  if (cleanToken.toLowerCase().includes("sandbox") || cleanToken.toLowerCase().includes("test")) {
+    return "https://sandbox.asaas.com/v3";
+  }
+  if (cachedAsaasBaseUrl) {
+    return cachedAsaasBaseUrl;
+  }
+  try {
+    const prodRes = await axios.get("https://api.asaas.com/v3/finance/balance", {
+      headers: { "access_token": cleanToken },
+      timeout: 3000
+    });
+    if (prodRes.status === 200) {
+      cachedAsaasBaseUrl = "https://api.asaas.com/v3";
+      return cachedAsaasBaseUrl;
+    }
+  } catch (err) {}
+  
+  return "https://sandbox.asaas.com/v3";
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -107,39 +130,76 @@ async function startServer() {
         return;
       }
 
-      const isProd = !asaasToken.startsWith("$") && !asaasToken.toLowerCase().includes("sandbox") && !asaasToken.toLowerCase().includes("test");
-      const asaasBaseUrl = isProd ? "https://api.asaas.com/v3" : "https://sandbox.asaas.com/v3";
+      const cleanToken = asaasToken.replace(/^["']|["']$/g, "").trim();
 
-      console.log(`[Asaas Connection Test]: Checking connection via ${asaasBaseUrl}/finance/balance`);
+      let asaasBaseUrl = "https://sandbox.asaas.com/v3";
+      let balance = 0;
+      let success = false;
+      let detectedEnv = "Sandbox";
 
-      const testRes = await fetch(`${asaasBaseUrl}/finance/balance`, {
-        method: "GET",
-        headers: {
-          "access_token": asaasToken
+      // 1. Try Production first, unless it specifically contains sandbox or test keywords
+      if (!cleanToken.toLowerCase().includes("sandbox") && !cleanToken.toLowerCase().includes("test")) {
+        try {
+          console.log("[Asaas Connection Test]: Probing Production endpoint...");
+          const prodResponse = await fetch("https://api.asaas.com/v3/finance/balance", {
+            method: "GET",
+            headers: { "access_token": cleanToken }
+          });
+          if (prodResponse.status === 200) {
+            const balanceData: any = await prodResponse.json();
+            balance = balanceData.balance || 0;
+            success = true;
+            asaasBaseUrl = "https://api.asaas.com/v3";
+            detectedEnv = "Produção";
+            console.log("[Asaas Connection Test]: Production connection successful!");
+          }
+        } catch (prodErr: any) {
+          console.log(`[Asaas Connection Test]: Production probe failed (${prodErr.message}), trying Sandbox...`);
         }
-      });
-
-      if (!testRes.ok) {
-        const errText = await testRes.text();
-        console.error(`[Asaas Connection Test Error]: Status ${testRes.status}. Output: ${errText}`);
-        res.status(401).json({
-          success: false,
-          mensagem: "Erro de Conexão: Verifique se a chave na Vercel está correta."
-        });
-        return;
       }
 
-      const balanceData: any = await testRes.json();
+      // 2. Fallback to Sandbox if not already successful
+      if (!success) {
+        try {
+          console.log(`[Asaas Connection Test]: Pulling from Sandbox: ${asaasBaseUrl}/finance/balance`);
+          const sandboxResponse = await fetch(`${asaasBaseUrl}/finance/balance`, {
+            method: "GET",
+            headers: { "access_token": cleanToken }
+          });
+          if (sandboxResponse.ok) {
+            const balanceData: any = await sandboxResponse.json();
+            balance = balanceData.balance || 0;
+            success = true;
+            detectedEnv = "Sandbox";
+          } else {
+            const errText = await sandboxResponse.text();
+            console.error("[Asaas Connection Test SandBox Fail]:", errText);
+            res.status(401).json({
+              success: false,
+              mensagem: "Erro de Conexão: Chave de API inválida tanto em Produção quanto em Sandbox. Verifique sua chave no painel do Asaas."
+            });
+            return;
+          }
+        } catch (sandboxErr: any) {
+          console.error("[Asaas Connection Test SandBox Catch]:", sandboxErr.message);
+          res.status(401).json({
+            success: false,
+            mensagem: "Erro de Conexão: Falha física ao contatar os servidores do Asaas."
+          });
+          return;
+        }
+      }
+
       res.status(200).json({
         success: true,
-        balance: balanceData.balance || 0,
-        mensagem: "Conexão com o Asaas realizada com sucesso! Chave válida."
+        balance,
+        mensagem: `Conexão Master com Asaas: OK! Ambiente detectado: ${detectedEnv}.`
       });
     } catch (err: any) {
       console.error("[Asaas Connection Test Crash]:", err.message);
       res.status(500).json({
         success: false,
-        mensagem: "Erro inesperado na conexão: " + err.message
+        mensagem: "Erro inesperado ao realizar teste de conexão: " + err.message
       });
     }
   });
@@ -170,8 +230,7 @@ async function startServer() {
         return;
       }
 
-      const isProd = !asaasToken.startsWith("$") && !asaasToken.toLowerCase().includes("sandbox") && !asaasToken.toLowerCase().includes("test");
-      const asaasBaseUrl = isProd ? "https://api.asaas.com/v3" : "https://sandbox.asaas.com/v3";
+      const asaasBaseUrl = await getAsaasBaseUrl(asaasToken);
       const cleanDoc = (customerCpfCnpj || "").replace(/\D/g, "");
 
       // 1. Search Customer by Doc
@@ -323,8 +382,7 @@ async function startServer() {
         return;
       }
 
-      const isProd = !asaasToken.startsWith("$") && !asaasToken.toLowerCase().includes("sandbox") && !asaasToken.toLowerCase().includes("test");
-      const asaasBaseUrl = isProd ? "https://api.asaas.com/v3" : "https://sandbox.asaas.com/v3";
+      const asaasBaseUrl = await getAsaasBaseUrl(asaasToken);
       const cleanDoc = cpfCnpj.replace(/\D/g, "");
 
       console.log(`[Asaas Subscription]: Creating Premium subscription for ${name} (${cleanDoc})`);
@@ -661,7 +719,7 @@ async function startServer() {
                 const asaasToken = (systemToken || "").trim();
 
                 if (asaasToken) {
-                  const asaasBaseUrl = "https://sandbox.asaas.com/v3";
+                  const asaasBaseUrl = await getAsaasBaseUrl(asaasToken);
                   const payloadAsaas = {
                     name: (existingProfile?.name || existingProfile?.meiName || "MEI Flow Beneficiante").trim().substring(0, 80),
                     email: (existingProfile?.email || `mei_${userId}@meiflow.com`).trim(),
@@ -1023,7 +1081,7 @@ async function startServer() {
         return;
       }
 
-      const asaasBaseUrl = "https://sandbox.asaas.com/v3";
+      const asaasBaseUrl = await getAsaasBaseUrl(asaasToken);
 
       const payloadAsaas = {
         name: (existingProfile.name || existingProfile.meiName || name || "MEI Flow Beneficiante").trim().substring(0, 80),
