@@ -4,22 +4,30 @@ import path from "path";
 import fs from "fs";
 
 // Securely initialize Firebase Admin in serverless environment
-const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-let firebaseConfig: any = {};
-if (fs.existsSync(configPath)) {
-  try {
-    firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  } catch (err) {
-    console.error("Error reading firebase-applet-config.json in subscription API:", err);
+const getFirebaseProjectId = () => {
+  if (process.env.FIREBASE_PROJECT_ID) {
+    return process.env.FIREBASE_PROJECT_ID;
   }
-}
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      return config.projectId;
+    } catch (err) {
+      console.error("Error reading firebase-applet-config.json in subscription API:", err);
+    }
+  }
+  return "mei-flow-692d9"; // fallback
+};
 
+const projId = getFirebaseProjectId();
 let appInitialized = false;
-if (firebaseConfig.projectId) {
+
+if (projId) {
   try {
     if (getApps().length === 0) {
       initializeApp({
-        projectId: firebaseConfig.projectId,
+        projectId: projId,
       });
     }
     appInitialized = true;
@@ -29,6 +37,38 @@ if (firebaseConfig.projectId) {
 }
 
 const db = appInitialized ? getFirestore() : null;
+
+// Helper function to safely fetch from Asaas API with robust try-catch and specific error formatting
+async function fetchAsaas(url: string, options: any) {
+  try {
+    const res = await fetch(url, options);
+    const text = await res.text();
+    let data: any = null;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      // Not JSON (could be raw string or HTML <!DOCTYPE...)
+      if (!res.ok) {
+        const err: any = new Error(`Asaas API responded with status ${res.status}`);
+        err.response = { data: text };
+        throw err;
+      }
+      data = text;
+    }
+
+    if (!res.ok) {
+      const err: any = new Error(`Asaas API responded with status ${res.status}`);
+      err.response = { data: data };
+      throw err;
+    }
+
+    return data;
+  } catch (error: any) {
+    // Requirements: Se a requisição der erro, faça o código dar um console.error('Erro detalhado do Asaas:', error.response?.data || error.message)
+    console.error('Erro detalhado do Asaas:', error.response?.data || error.message);
+    throw error;
+  }
+}
 
 export default async function handler(req: any, res: any) {
   if (req.method !== "POST") {
@@ -71,49 +111,41 @@ export default async function handler(req: any, res: any) {
     // 1. Search Customer by Doc
     let customerId = "";
     try {
-      const searchRes = await fetch(`${asaasBaseUrl}/customers?cpfCnpj=${cleanDoc}`, {
+      const searchRes = await fetchAsaas(`${asaasBaseUrl}/customers?cpfCnpj=${cleanDoc}`, {
         headers: { "access_token": asaasToken }
       });
-      if (searchRes.ok) {
-        const searchJson: any = await searchRes.json();
-        if (searchJson.data && searchJson.data.length > 0) {
-          customerId = searchJson.data[0].id;
-        }
+      if (searchRes && searchRes.data && searchRes.data.length > 0) {
+        customerId = searchRes.data[0].id;
       }
-    } catch (err) {
-      console.error("Asaas customer search warning during serverless subscription:", err);
+    } catch (err: any) {
+      console.warn("Asaas customer search warning during serverless subscription:", err.response?.data || err.message);
     }
 
     // 2. Create customer if not found
     if (!customerId) {
-      const createCustomerRes = await fetch(`${asaasBaseUrl}/customers`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "access_token": asaasToken
-        },
-        body: JSON.stringify({
-          name,
-          cpfCnpj: cleanDoc,
-          email,
-          notificationDisabled: true
-        })
-      });
-
-      if (!createCustomerRes.ok) {
-        const errText = await createCustomerRes.text();
-        let parsedErr: any = {};
-        try { parsedErr = JSON.parse(errText); } catch (e) {}
-        const asaasDesc = parsedErr?.errors?.[0]?.description || errText;
+      try {
+        const customerJson = await fetchAsaas(`${asaasBaseUrl}/customers`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "access_token": asaasToken
+          },
+          body: JSON.stringify({
+            name,
+            cpfCnpj: cleanDoc,
+            email,
+            notificationDisabled: true
+          })
+        });
+        customerId = customerJson.id;
+      } catch (err: any) {
+        const errorMsg = err.response?.data?.errors?.[0]?.description || JSON.stringify(err.response?.data) || err.message;
         res.status(400).json({
           success: false,
-          mensagem: `Asaas: Falha ao cadastrar cliente: ${asaasDesc}`
+          mensagem: `Asaas: Falha ao cadastrar cliente: ${errorMsg}`
         });
         return;
       }
-
-      const customerJson: any = await createCustomerRes.json();
-      customerId = customerJson.id;
     }
 
     // 3. Create Subscription (Valor Fixo: R$ 29,90)
@@ -149,28 +181,25 @@ export default async function handler(req: any, res: any) {
       };
     }
 
-    const createSubRes = await fetch(`${asaasBaseUrl}/subscriptions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "access_token": asaasToken
-      },
-      body: JSON.stringify(subPayload)
-    });
-
-    if (!createSubRes.ok) {
-      const errText = await createSubRes.text();
-      let parsedErr: any = {};
-      try { parsedErr = JSON.parse(errText); } catch (e) {}
-      const asaasDesc = parsedErr?.errors?.[0]?.description || errText;
+    let subJson: any;
+    try {
+      subJson = await fetchAsaas(`${asaasBaseUrl}/subscriptions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "access_token": asaasToken
+        },
+        body: JSON.stringify(subPayload)
+      });
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.errors?.[0]?.description || JSON.stringify(err.response?.data) || err.message;
       res.status(400).json({
         success: false,
-        mensagem: `Asaas: Falha ao criar assinatura: ${asaasDesc}`
+        mensagem: `Asaas: Falha ao criar assinatura: ${errorMsg}`
       });
       return;
     }
 
-    const subJson: any = await createSubRes.json();
     const subscriptionId = subJson.id;
 
     // 4. Salva a relação no Firestore
@@ -200,26 +229,24 @@ export default async function handler(req: any, res: any) {
     let pixQrCodeResult: any = null;
 
     try {
-      const paymentsRes = await fetch(`${asaasBaseUrl}/payments?subscription=${subscriptionId}`, {
+      const paymentsJson = await fetchAsaas(`${asaasBaseUrl}/payments?subscription=${subscriptionId}`, {
         headers: { "access_token": asaasToken }
       });
-      if (paymentsRes.ok) {
-        const paymentsJson: any = await paymentsRes.json();
-        if (paymentsJson.data && paymentsJson.data.length > 0) {
-          firstPayment = paymentsJson.data[0];
-          
-          if (firstPayment.id && paymentMethod === "PIX") {
-            const pixRes = await fetch(`${asaasBaseUrl}/payments/${firstPayment.id}/pixQrCode`, {
+      if (paymentsJson && paymentsJson.data && paymentsJson.data.length > 0) {
+        firstPayment = paymentsJson.data[0];
+        
+        if (firstPayment.id && paymentMethod === "PIX") {
+          try {
+            pixQrCodeResult = await fetchAsaas(`${asaasBaseUrl}/payments/${firstPayment.id}/pixQrCode`, {
               headers: { "access_token": asaasToken }
             });
-            if (pixRes.ok) {
-              pixQrCodeResult = await pixRes.json();
-            }
+          } catch (pixErr: any) {
+            console.error("Asaas fetch Pix QR Code warning:", pixErr.response?.data || pixErr.message);
           }
         }
       }
-    } catch (payLinkErr) {
-      console.error("Warning: Could not fetch serverless sub payments:", payLinkErr);
+    } catch (payLinkErr: any) {
+      console.error("Warning: Could not fetch serverless sub payments:", payLinkErr.response?.data || payLinkErr.message);
     }
 
     res.status(201).json({
@@ -235,7 +262,7 @@ export default async function handler(req: any, res: any) {
     });
 
   } catch (err: any) {
-    console.error("[Asaas Create Subscription Serverless Error]:", err.message);
+    console.error("[Asaas Create Subscription Serverless Error]:", err.response?.data || err.message);
     res.status(500).json({ success: false, mensagem: "Erro interno no servidor ao processar assinatura: " + err.message });
   }
 }
