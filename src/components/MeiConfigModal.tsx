@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { X, Building, Check, Search, Sparkles } from "lucide-react";
+import { X, Building, Check, Search, Sparkles, Activity } from "lucide-react";
 
 interface MeiConfigModalProps {
   currentName: string;
@@ -32,6 +32,36 @@ export default function MeiConfigModal({
   const [loading, setLoading] = useState(false);
   const [searchingCnpj, setSearchingCnpj] = useState(false);
   const [searchError, setSearchError] = useState("");
+
+  const [testingAsaas, setTestingAsaas] = useState(false);
+  const [asaasTestResult, setAsaasTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const handleTestAsaasConnection = async () => {
+    setTestingAsaas(true);
+    setAsaasTestResult(null);
+    try {
+      const response = await fetch("/api/asaas/test-connection");
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setAsaasTestResult({
+          success: true,
+          message: "Conexão com o Asaas realizada com sucesso! Chave válida."
+        });
+      } else {
+        setAsaasTestResult({
+          success: false,
+          message: data.mensagem || "Erro de Conexão: Verifique se a chave na Vercel está correta."
+        });
+      }
+    } catch (err: any) {
+      setAsaasTestResult({
+        success: false,
+        message: "Erro de Conexão: Verifique se a chave na Vercel está correta."
+      });
+    } finally {
+      setTestingAsaas(false);
+    }
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -250,6 +280,52 @@ export default function MeiConfigModal({
                 )}
               </div>
             )}
+          </div>
+
+          {/* TESTE DE INTEGRAÇÃO ASAAS */}
+          <div className="pt-3 border-t border-slate-100 space-y-2">
+            <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
+              Testar Integração Asaas
+            </label>
+            <div className="bg-slate-50 rounded-xl p-3 border border-slate-200/60 space-y-2">
+              <p className="text-[10px] text-slate-500 leading-normal font-medium">
+                Verifique se sua chave master (ASAAS_API_KEY) está ativa e configurada corretamente no servidor.
+              </p>
+              
+              <button
+                type="button"
+                onClick={handleTestAsaasConnection}
+                disabled={testingAsaas}
+                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-1.5 px-3 rounded-lg text-[10px] flex items-center justify-center gap-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                id="btn-test-asaas"
+              >
+                {testingAsaas ? (
+                  <>
+                    <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Testando Conexão...</span>
+                  </>
+                ) : (
+                  <>
+                    <Activity className="w-3 h-3.5 text-blue-400" />
+                    <span>Testar Integração Asaas</span>
+                  </>
+                )}
+              </button>
+
+              {asaasTestResult && (
+                <div 
+                  className={`p-2 rounded-lg text-[10px] font-bold leading-normal border ${
+                    asaasTestResult.success 
+                      ? "bg-emerald-50 border-emerald-100 text-emerald-800" 
+                      : "bg-rose-50 border-rose-100 text-rose-800"
+                  }`}
+                  id="asaas-test-status-box"
+                >
+                  {asaasTestResult.success ? "✓ " : "⚠ "}
+                  {asaasTestResult.message}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex gap-2 pt-2">

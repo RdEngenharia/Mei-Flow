@@ -576,6 +576,8 @@ export async function fetchUserProfileFromFirebase(userId: string): Promise<{
   planType?: "free" | "premium";
   companyLogo?: string;
   isCpfEmissor?: boolean;
+  invoiceLimit?: number;
+  invoiceUsed?: number;
 } | null> {
   const path = `users/${userId}`;
   try {
@@ -591,7 +593,9 @@ export async function fetchUserProfileFromFirebase(userId: string): Promise<{
         asaasAccessToken: data.asaasAccessToken || '',
         planType: data.planType || 'free',
         companyLogo: data.logoUrl || data.companyLogo || '',
-        isCpfEmissor: data.isCpfEmissor || false
+        isCpfEmissor: data.isCpfEmissor || false,
+        invoiceLimit: data.invoiceLimit !== undefined ? data.invoiceLimit : 30,
+        invoiceUsed: data.invoiceUsed !== undefined ? data.invoiceUsed : 0
       };
     }
     
@@ -608,7 +612,9 @@ export async function fetchUserProfileFromFirebase(userId: string): Promise<{
         asaasAccessToken: data.asaasAccessToken || '',
         planType: data.planType || 'free',
         companyLogo: data.companyLogo || '',
-        isCpfEmissor: data.isCpfEmissor || false
+        isCpfEmissor: data.isCpfEmissor || false,
+        invoiceLimit: data.invoiceLimit !== undefined ? data.invoiceLimit : 30,
+        invoiceUsed: data.invoiceUsed !== undefined ? data.invoiceUsed : 0
       };
     }
     

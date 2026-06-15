@@ -91,6 +91,60 @@ async function startServer() {
   });
 
 
+  // ==========================================
+  // TEST ASAAS INTEGRATION CONNECTIVITY
+  // ==========================================
+  app.get("/api/asaas/test-connection", async (req, res) => {
+    try {
+      const systemToken = process.env.ASAAS_API_KEY;
+      const asaasToken = (systemToken || "").trim();
+
+      if (!asaasToken) {
+        res.status(401).json({
+          success: false,
+          mensagem: "Erro de Conexão: Chave de API do Asaas (ASAAS_API_KEY) não configurada no servidor Vercel."
+        });
+        return;
+      }
+
+      const isProd = !asaasToken.startsWith("$") && !asaasToken.toLowerCase().includes("sandbox") && !asaasToken.toLowerCase().includes("test");
+      const asaasBaseUrl = isProd ? "https://api.asaas.com/v3" : "https://sandbox.asaas.com/v3";
+
+      console.log(`[Asaas Connection Test]: Checking connection via ${asaasBaseUrl}/finance/balance`);
+
+      const testRes = await fetch(`${asaasBaseUrl}/finance/balance`, {
+        method: "GET",
+        headers: {
+          "access_token": asaasToken
+        }
+      });
+
+      if (!testRes.ok) {
+        const errText = await testRes.text();
+        console.error(`[Asaas Connection Test Error]: Status ${testRes.status}. Output: ${errText}`);
+        res.status(401).json({
+          success: false,
+          mensagem: "Erro de Conexão: Verifique se a chave na Vercel está correta."
+        });
+        return;
+      }
+
+      const balanceData: any = await testRes.json();
+      res.status(200).json({
+        success: true,
+        balance: balanceData.balance || 0,
+        mensagem: "Conexão com o Asaas realizada com sucesso! Chave válida."
+      });
+    } catch (err: any) {
+      console.error("[Asaas Connection Test Crash]:", err.message);
+      res.status(500).json({
+        success: false,
+        mensagem: "Erro inesperado na conexão: " + err.message
+      });
+    }
+  });
+
+
   app.post("/api/asaas/cobranca", async (req, res) => {
     try {
       const {
@@ -449,6 +503,274 @@ async function startServer() {
     } catch (err: any) {
       console.error("[Asaas Create Subscription Server Error]:", err.message);
       res.status(500).json({ success: false, mensagem: "Erro interno ao processar assinatura: " + err.message });
+    }
+  });
+
+  // ==========================================
+  // PREMIUM UPGRADE WEBHOOK (ASAAS R$ 29,90 PAYMENT APPROVED)
+  // ==========================================
+  app.post("/api/webhook-asaas", async (req, res) => {
+    try {
+      const { event, payment, subscription } = req.body;
+
+      console.log(`[Premium Webhook Asaas Received]: Event: ${event}`);
+      console.log("[Webhook Details]:", JSON.stringify({
+        event,
+        paymentId: payment?.id,
+        subscriptionId: payment?.subscription || subscription?.id,
+        customerId: payment?.customer || subscription?.customer,
+        externalReference: payment?.externalReference || subscription?.externalReference,
+        value: payment?.value
+      }));
+
+      // Validar webhook token do Asaas (process.env.ASAAS_WEBHOOK_TOKEN)
+      const webhookToken = process.env.ASAAS_WEBHOOK_TOKEN;
+      const receivedToken = req.headers["asaas-access-token"] || req.headers["asaas-token"] || req.headers["access-token"] || req.headers["authorization"];
+      
+      if (webhookToken) {
+        const cleanReceived = String(receivedToken || "").trim();
+        const cleanExpected = String(webhookToken).trim();
+        if (cleanReceived !== cleanExpected) {
+          console.warn("[Webhook Warning]: Token de webhook inválido ou ausente.");
+          res.status(401).json({ success: false, erro: "Não autorizado: Token de webhook inválido." });
+          return;
+        }
+      }
+
+      // Identifica o userId do Firebase
+      let userId = payment?.externalReference || subscription?.externalReference;
+      const customerId = payment?.customer || subscription?.customer;
+      const subId = payment?.subscription || subscription?.id;
+
+      if (!db) {
+        console.error("[Webhook Error]: Firebase Admin Firestore is not initialized.");
+        res.status(500).json({ erro: "Firestore não disponível" });
+        return;
+      }
+
+      // Se userId estiver nulo na externalReference, vamos pesquisar nas coleções por e-mail ou dados de sub/cliente
+      if (!userId && db) {
+        try {
+          const emailCandidate = req.body.email || payment?.email || req.body.payment?.customerShow?.email || req.body.payment?.customerDetail?.email;
+          if (emailCandidate) {
+            console.log(`[Webhook Lookup]: Buscando usuário por e-mail: ${emailCandidate}`);
+            const usersEmailQuery = await db.collection("users").where("email", "==", emailCandidate.trim()).get();
+            if (!usersEmailQuery.empty) {
+              userId = usersEmailQuery.docs[0].id;
+              console.log(`[Webhook Lookup]: Encontrado via email: ${userId}`);
+            } else {
+              const legEmailQuery = await db.collection("usuarios").where("email", "==", emailCandidate.trim()).get();
+              if (!legEmailQuery.empty) {
+                userId = legEmailQuery.docs[0].id;
+                console.log(`[Webhook Lookup]: Encontrado na coleção antiga via email: ${userId}`);
+              }
+            }
+          }
+
+          if (!userId) {
+            console.log(`[Webhook Lookup]: ID de referência ausente. Buscando cliente no banco: ${customerId} ou ${subId}`);
+            
+            if (subId) {
+              const usersSubQuery = await db.collection("users").where("asaasSubscriptionId", "==", subId).get();
+              if (!usersSubQuery.empty) {
+                userId = usersSubQuery.docs[0].id;
+                console.log(`[Webhook Lookup]: Encontrado via asaasSubscriptionId: ${userId}`);
+              }
+            }
+
+            if (!userId && customerId) {
+              const usersCustQuery = await db.collection("users").where("asaasCustomerId", "==", customerId).get();
+              if (!usersCustQuery.empty) {
+                userId = usersCustQuery.docs[0].id;
+                console.log(`[Webhook Lookup]: Encontrado via asaasCustomerId: ${userId}`);
+              }
+            }
+
+            // Se ainda assim não achar, pesquisa na coleção legada 'usuarios'
+            if (!userId && subId) {
+              const legQuery = await db.collection("usuarios").where("asaasSubscriptionId", "==", subId).get();
+              if (!legQuery.empty) {
+                userId = legQuery.docs[0].id;
+                console.log(`[Webhook Lookup]: Encontrado na coleção antiga via subscription: ${userId}`);
+              }
+            }
+          }
+        } catch (lookupErr: any) {
+          console.error("[Webhook Database Lookup Error]:", lookupErr.message);
+        }
+      }
+
+      if (!userId) {
+        console.warn("[Webhook Warning]: Não foi possível determinar o userId para esta notificação.");
+        res.status(200).json({ status: "ignored_no_user" });
+        return;
+      }
+
+      if (event === "PAYMENT_RECEIVED" || event === "PAYMENT_CONFIRMED") {
+        console.log(`[Webhook-Asaas Approved]: Processing Premium Upgrade for user ${userId}`);
+
+        // Fetch User profile
+        const userDocRef = db.collection("users").doc(userId);
+        const userDoc = await userDocRef.get();
+        const existingProfile = userDoc.exists ? userDoc.data() : {};
+
+        // 1. UPDATE USER TO PREMIUM CONTROLS
+        const premiumUpdate = {
+          planType: "premium",
+          invoiceLimit: 30,
+          invoiceUsed: 0,
+          updatedAt: new Date().toISOString()
+        };
+
+        await db.collection("users").doc(userId).set(premiumUpdate, { merge: true });
+        await db.collection("usuarios").doc(userId).set(premiumUpdate, { merge: true });
+        console.log(`[Webhook-Asaas]: Updated user profile in Firestore to premium / limits set!`);
+
+        // 2. CREATE SUBACCOUNT ON ASAAS
+        const currentWalletId = existingProfile?.walletId || existingProfile?.asaasWalletId || existingProfile?.wallet_id;
+        const currentApiKey = existingProfile?.apiKey || existingProfile?.asaasApiKey || existingProfile?.asaasAccessToken;
+
+        let walletId = currentWalletId;
+        let apiKey = currentApiKey;
+
+        if (!walletId || !apiKey) {
+          try {
+            console.log(`[Webhook-Asaas Account Creation]: Creating account for user ${userId}`);
+            const cleanCnpj = (existingProfile?.cnpjPrestador || "").replace(/\D/g, "");
+            const cleanPhone = (existingProfile?.telefone || "").replace(/\D/g, "");
+
+            function generateRandomCNPJ() {
+              const r = (n: number) => Math.floor(Math.random() * n);
+              const n1 = r(10); const n2 = r(10); const n3 = r(10); const n4 = r(10);
+              const n5 = r(10); const n6 = r(10); const n7 = r(10); const n8 = r(10);
+              const n9 = 0; const n10 = 0; const n11 = 0; const n12 = 1;
+              let d1 = n12*2+n11*3+n10*4+n9*5+n8*6+n7*7+n6*8+n5*9+n4*2+n3*3+n2*4+n1*5;
+              d1 = 11 - (d1 % 11); if (d1 >= 10) d1 = 0;
+              let d2 = d1*2+n12*3+n11*4+n10*5+n9*6+n8*7+n7*8+n6*9+n5*2+n4*3+n3*4+n2*5+n1*6;
+              d2 = 11 - (d2 % 11); if (d2 >= 10) d2 = 0;
+              return `${n1}${n2}${n3}${n4}${n5}${n6}${n7}${n8}0001${d1}${d2}`;
+            }
+
+            const cpfCnpjLimpo = cleanCnpj.length === 14 ? cleanCnpj : generateRandomCNPJ();
+            const systemToken = process.env.ASAAS_API_KEY;
+            const asaasToken = (systemToken || "").trim();
+
+            if (asaasToken) {
+              const asaasBaseUrl = "https://sandbox.asaas.com/v3";
+              const payloadAsaas = {
+                name: (existingProfile?.name || existingProfile?.meiName || "MEI Flow Beneficiante").trim().substring(0, 80),
+                email: (existingProfile?.email || `mei_${userId}@meiflow.com`).trim(),
+                loginEmail: (existingProfile?.email || `mei_${userId}@meiflow.com`).trim(),
+                cpfCnpj: cpfCnpjLimpo,
+                companyType: "MEI",
+                phone: cleanPhone || "11999999999",
+                mobilePhone: cleanPhone || "11999999999",
+                postalCode: "01001000",
+                address: "Avenida Paulista",
+                addressNumber: "1000",
+                province: "Bela Vista",
+              };
+
+              const accountResponse = await axios.post(`${asaasBaseUrl}/accounts`, payloadAsaas, {
+                headers: {
+                  "Content-Type": "application/json",
+                  "access_token": asaasToken
+                },
+                timeout: 10000
+              });
+
+              if (accountResponse.data?.id && accountResponse.data?.apiKey) {
+                walletId = accountResponse.data.id;
+                apiKey = accountResponse.data.apiKey;
+
+                const walletObj = {
+                  asaasWalletId: walletId,
+                  asaasApiKey: apiKey,
+                  asaasAccessToken: apiKey,
+                  walletId: walletId,
+                  apiKey: apiKey,
+                  updatedAt: new Date().toISOString()
+                };
+
+                await db.collection("users").doc(userId).set(walletObj, { merge: true });
+                await db.collection("usuarios").doc(userId).set(walletObj, { merge: true });
+                console.log(`[Webhook-Asaas]: Account created successfully! WalletId: ${walletId}`);
+              }
+            }
+          } catch (accountErr: any) {
+            console.error("[Webhook-Asaas Account Creation Error]:", accountErr.response?.data?.errors?.[0]?.description || accountErr.message);
+          }
+        }
+
+        // 3. EMIT NOTA FISCAL (FOCUS NFE) FOR R$ 29,90 PREMIUM PAYMENT
+        try {
+          console.log(`[Webhook-Asaas FocusNFe]: Triggering subscription invoice emission for user ${userId}`);
+          const tokenToUse = process.env.FOCUS_NFE_KEY || "wCTTGnYwEXXqCYskYtswVMBCQIHP8e8w";
+          const focusAuthHeader = "Basic " + Buffer.from(`${tokenToUse}:`).toString("base64");
+          
+          const focusRef = `premium_${userId}_${Date.now()}`;
+          const randomRps = Math.floor(100000 + Math.random() * 900000).toString();
+
+          const docToEmit = (existingProfile?.cnpjPrestador || "").replace(/\D/g, "");
+          const cleanEmail = existingProfile?.email || "tomador@meiflow.com";
+          const cleanName = existingProfile?.name || existingProfile?.meiName || "Assinante MEI Flow";
+
+          // If doc is formatted as CNPJ, use CNPJ. Else fallback/test document
+          const tomadorBody: any = {};
+          if (docToEmit.length === 14) {
+            tomadorBody.cnpj = docToEmit;
+          } else if (docToEmit.length === 11) {
+            tomadorBody.cpf = docToEmit;
+          } else {
+            tomadorBody.cnpj = "4483719000183"; // Mock fallback CNPJ
+          }
+
+          const focusNfePayload = {
+            cnpj_prestador: "4483719000183", // Representative CNPJ of MEI Flow as Service Provider
+            ref: focusRef,
+            numero_rps: randomRps,
+            serie_rps: "1",
+            tipo_rps: "1",
+            valor_servicos: 29.90,
+            tomador: {
+              ...tomadorBody,
+              razao_social: cleanName,
+              email: cleanEmail,
+            },
+            servico: {
+              aliquota: 0,
+              discriminacao: `Assinatura de Softwares e Serviços Premium MEI Flow - Faturamento Integrado Mensal. Referente ao pagamento aprovado de R$ 29,90.`,
+              codigo_municipio: "3550308", // IBGE São Paulo
+              item_lista_servico: "01.01" // Análise e desenvolvimento de sistemas / Software de gestão
+            }
+          };
+
+          const focusUrl = "https://homologacao.focusnfe.com.br/v2/nfse";
+          const focusResponse = await axios.post(focusUrl, focusNfePayload, {
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": focusAuthHeader
+            },
+            timeout: 10000
+          });
+
+          if (focusResponse.status === 201 || focusResponse.status === 200) {
+            console.log(`[Webhook-Asaas FocusNFe Success]: Invoice processing ref: ${focusRef}`);
+            await db.collection("users").doc(userId).set({
+              premiumInvoiceRef: focusRef,
+              premiumInvoiceStatus: "processando_autorizacao",
+              updatedAt: new Date().toISOString()
+            }, { merge: true });
+          }
+        } catch (focusErr: any) {
+          console.error("[Webhook-Asaas FocusNFe Error]:", focusErr.response?.data?.mensagem || focusErr.message);
+        }
+      }
+
+      res.status(200).json({ status: "success", userId });
+    } catch (err: any) {
+      console.error("[Asaas Premium Webhook Global Error]:", err.message);
+      res.status(500).json({ success: false, erro: err.message });
     }
   });
 

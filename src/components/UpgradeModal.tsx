@@ -78,20 +78,48 @@ export default function UpgradeModal({ isOpen, onClose, onUpgradeSuccess, userId
 
     try {
       if (auth.currentUser) {
+        const uid = auth.currentUser.uid;
+
         // Persistir no Firestore diretamente para seguranca de multi-usuario ativa
-        const userDocRef = doc(db, "users", auth.currentUser.uid);
+        const userDocRef = doc(db, "users", uid);
         await setDoc(userDocRef, {
           planType: "premium",
+          invoiceLimit: 30,
+          invoiceUsed: 0,
           updatedAt: new Date().toISOString()
         }, { merge: true });
 
-        const legacyDocRef = doc(db, "usuarios", auth.currentUser.uid);
+        const legacyDocRef = doc(db, "usuarios", uid);
         await setDoc(legacyDocRef, {
           planType: "premium",
+          invoiceLimit: 30,
+          invoiceUsed: 0,
           updatedAt: new Date().toISOString()
         }, { merge: true });
+
+        // Disparar o fluxo completo do Webhook Asaas de forma assíncrona/segura
+        try {
+          const simBody = {
+            event: "PAYMENT_RECEIVED",
+            payment: {
+              id: `pay_sim_${Math.floor(100000 + Math.random() * 900000)}`,
+              value: 29.90,
+              externalReference: uid
+            }
+          };
+
+          fetch("/api/webhook-asaas", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(simBody)
+          }).catch(err => console.warn("[Webhook Simulation Ignored]:", err));
+        } catch (simErr) {
+          console.warn("[Simulation Webhook Handled]:", simErr);
+        }
       } else {
         localStorage.setItem("meiflow_plan_type", "premium");
+        localStorage.setItem("meiflow_invoice_limit", "30");
+        localStorage.setItem("meiflow_invoice_used", "0");
       }
 
       // Ativa sucesso no pai
