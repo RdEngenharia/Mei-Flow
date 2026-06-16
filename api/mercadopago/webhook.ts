@@ -173,7 +173,7 @@ export default async function handler(req: any, res: any) {
 
         // Fetch official payment from Mercado Pago
         const systemToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
-        const mpToken = (systemToken || "").trim();
+        const mpToken = (systemToken || "").replace(/^["']|["']$/g, "").trim();
 
         if (!mpToken) {
           console.error("[MP Webhook Error]: Token MERCADO_PAGO_ACCESS_TOKEN is missing in environment.");

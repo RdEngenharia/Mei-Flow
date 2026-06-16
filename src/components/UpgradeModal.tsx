@@ -107,17 +107,34 @@ export default function UpgradeModal({
         body: JSON.stringify({
           userId: activeUserId,
           name: meiName || "Microempreendedor MEI",
-          cpfCnpj: cnpjPrestador ? cnpjPrestador.replace(/\D/g, "") : "4483719000183",
+          cpfCnpj: cnpjPrestador ? cnpjPrestador.replace(/\D/g, "") : "44837190000183",
           email: email || "contato@meiflow.com",
           paymentMethod: "PIX"
         })
       });
       
       const data = await response.json();
-      if (response.ok && data.success) {
-        if (data.pixQrCode) {
-          setPixQrCodeBase64(data.pixQrCode.encodedImage || null);
-          setPixPayload(data.pixQrCode.payload || null);
+      if (response.ok && (data.success || data.id || data.status === "pending")) {
+        // Clear any previous error messages explicitly
+        setErrorMessage(null);
+
+        // Attempt to extract the QR Code Image Base64 from multiple possible formats
+        const qrCodeBase64 = data.pixQrCode?.encodedImage || 
+                             data.point_of_interaction?.transaction_data?.qr_code_base64 || 
+                             data.transaction_data?.qr_code_base64 || 
+                             data.qr_code_base64 ||
+                             null;
+
+        // Attempt to extract the Pix Copia e Cola Payload from multiple structures
+        const qrCodePayload = data.pixQrCode?.payload || 
+                              data.point_of_interaction?.transaction_data?.qr_code || 
+                              data.qr_code || 
+                              data.payload ||
+                              null;
+
+        if (qrCodeBase64 || qrCodePayload) {
+          setPixQrCodeBase64(qrCodeBase64);
+          setPixPayload(qrCodePayload);
         } else {
           setErrorMessage("Credenciais ativas, porém o Mercado Pago não retornou os dados de pagamento Pix. Verifique as configurações de Pix no seu painel do Mercado Pago.");
         }
@@ -177,7 +194,7 @@ export default function UpgradeModal({
         body: JSON.stringify({
           userId: activeUserId,
           name: meiName || "Microempreendedor MEI",
-          cpfCnpj: cnpjPrestador ? cnpjPrestador.replace(/\D/g, "") : "4483719000183",
+          cpfCnpj: cnpjPrestador ? cnpjPrestador.replace(/\D/g, "") : "44837190000183",
           email: email || "contato@meiflow.com",
           paymentMethod: "CREDIT_CARD",
           creditCard: {

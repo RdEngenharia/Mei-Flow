@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import axios from "axios";
+import { MercadoPagoConfig, Payment, CardToken } from "mercadopago";
 
 // Load environment variables
 dotenv.config();
@@ -38,7 +39,15 @@ if (firebaseConfig.projectId) {
   console.warn("[Firebase Admin Warning]: No projectId found in firebase-applet-config.json. Firestore syncing will fail.");
 }
 
-const db = appInitialized ? getFirestore() : null;
+let db: any = null;
+if (appInitialized) {
+  try {
+    db = getFirestore();
+  } catch (dbInitErr: any) {
+    console.warn("[Firebase Admin Server Init Warning]: Google ADC is not configured. Firestore operations are disabled in this server instance:", dbInitErr.message);
+    db = null;
+  }
+}
 
 async function getAsaasBaseUrl(token: string): Promise<string> {
   const cleanToken = token.replace(/^["']|["']$/g, "").trim();
@@ -504,7 +513,7 @@ async function startServer() {
       }
 
       const systemToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
-      const mpToken = (systemToken || "").trim();
+      const mpToken = (systemToken || "").replace(/^["']|["']$/g, "").trim();
 
       if (!mpToken) {
         res.status(500).json({
@@ -516,10 +525,35 @@ async function startServer() {
 
       console.log(`[MP Checkout Router]: Processing checkout for ${name} using ${paymentMethod}`);
       const cleanDoc = cpfCnpj.replace(/\D/g, "");
-      const docType = cleanDoc.length === 14 ? "CNPJ" : "CPF";
+      if (cleanDoc.length !== 14) {
+        res.status(400).json({
+          success: false,
+          mensagem: `Documento CNPJ inválido (${cpfCnpj}). O CNPJ deve conter exatamente 14 dígitos.`
+        });
+        return;
+      }
+      const docType = "CNPJ";
       
       const payersFirstName = name.split(" ")[0] || "MEI";
       const payersLastName = name.split(" ").slice(1).join(" ") || "Flow";
+
+      const sysIntegrator = process.env.MERCADO_PAGO_INTEGRATOR_ID;
+      const integratorId = (sysIntegrator || "").replace(/^["']|["']$/g, "").trim();
+
+      const mpConfigOptions: any = {
+        timeout: 5000,
+      };
+      if (integratorId) {
+        mpConfigOptions.integratorId = integratorId;
+      }
+
+      const mpClient = new MercadoPagoConfig({
+        accessToken: mpToken,
+        options: mpConfigOptions,
+      });
+
+      const paymentSdk = new Payment(mpClient);
+      const cardTokenSdk = new CardToken(mpClient);
 
       if (paymentMethod === "PIX") {
         const pixPayload = {
@@ -538,34 +572,32 @@ async function startServer() {
           external_reference: userId
         };
 
-        const pixHeaders: Record<string, string> = {
-          "Authorization": `Bearer ${mpToken}`,
-          "Content-Type": "application/json",
-          "X-Idempotency-Key": `pix_${userId}_${Date.now()}`
-        };
-        if (process.env.MERCADO_PAGO_INTEGRATOR_ID) {
-          pixHeaders["X-Integrator-Id"] = process.env.MERCADO_PAGO_INTEGRATOR_ID;
-        }
-        const response = await axios.post("https://api.mercadopago.com/v1/payments", pixPayload, {
-          headers: pixHeaders,
-          timeout: 10000
+        console.log(`[MP Checkout Router]: Sending payout creation to MP via official SDK`);
+        const paymentData = await paymentSdk.create({
+          body: pixPayload,
+          requestOptions: {
+            idempotencyKey: `pix_${userId}_${Date.now()}`
+          }
         });
 
-        const paymentData = response.data;
         const paymentId = paymentData.id;
 
         if (db) {
-          const syncUpdate = {
-            mercadoPagoPaymentId: paymentId,
-            mercadoPagoStatus: paymentData.status,
-            planType: paymentData.status === "approved" ? "premium" : "free",
-            updatedAt: new Date().toISOString()
-          };
-          await db.collection("users").doc(userId).set(syncUpdate, { merge: true });
-          await db.collection("usuarios").doc(userId).set(syncUpdate, { merge: true });
-          
-          if (paymentData.status === "approved") {
-            await handleMercadoPagoApproved(userId);
+          try {
+            const syncUpdate = {
+              mercadoPagoPaymentId: paymentId,
+              mercadoPagoStatus: paymentData.status,
+              planType: paymentData.status === "approved" ? "premium" : "free",
+              updatedAt: new Date().toISOString()
+            };
+            await db.collection("users").doc(userId).set(syncUpdate, { merge: true });
+            await db.collection("usuarios").doc(userId).set(syncUpdate, { merge: true });
+            
+            if (paymentData.status === "approved") {
+              await handleMercadoPagoApproved(userId);
+            }
+          } catch (dbErr: any) {
+            console.error("[MP Checkout Router DB Sync Error (Pix)]:", dbErr.message);
           }
         }
 
@@ -591,8 +623,8 @@ async function startServer() {
 
         const cardTokenPayload = {
           card_number: creditCard.number.replace(/\s/g, ""),
-          expiration_month: parseInt(creditCard.expiryMonth),
-          expiration_year: parseInt(creditCard.expiryYear),
+          expiration_month: String(creditCard.expiryMonth),
+          expiration_year: String(creditCard.expiryYear),
           security_code: creditCard.ccv,
           cardholder: {
             name: creditCard.holderName,
@@ -603,29 +635,22 @@ async function startServer() {
           }
         };
 
+        console.log(`[MP Checkout Router]: Tokenizing card via SDK...`);
         let tokenResp: any;
         try {
-          const tokenHeaders: Record<string, string> = {
-            "Authorization": `Bearer ${mpToken}`,
-            "Content-Type": "application/json"
-          };
-          if (process.env.MERCADO_PAGO_INTEGRATOR_ID) {
-            tokenHeaders["X-Integrator-Id"] = process.env.MERCADO_PAGO_INTEGRATOR_ID;
-          }
-          tokenResp = await axios.post("https://api.mercadopago.com/v1/card_tokens", cardTokenPayload, {
-            headers: tokenHeaders,
-            timeout: 10000
+          tokenResp = await cardTokenSdk.create({
+            body: cardTokenPayload
           });
         } catch (tokenErr: any) {
-          console.error("[MP Tokenization Error inside Router]:", tokenErr.response?.data || tokenErr.message);
-          const errDetails = tokenErr.response?.data?.cause?.[0]?.description || "Verifique os dados informados.";
+          console.error("[MP Tokenization Error inside Router]:", tokenErr);
+          const errDetails = tokenErr.message || "Verifique os dados informados.";
           return res.status(400).json({
             success: false,
             mensagem: `Mercado Pago (Cartão recusado/inválido): ${errDetails}`
           });
         }
 
-        const cardTokenId = tokenResp.data.id;
+        const cardTokenId = tokenResp.id;
         const detectedBrand = getPaymentMethodId(creditCard.number);
 
         const cardPayload = {
@@ -646,20 +671,14 @@ async function startServer() {
           external_reference: userId
         };
 
-        const cardHeaders: Record<string, string> = {
-          "Authorization": `Bearer ${mpToken}`,
-          "Content-Type": "application/json",
-          "X-Idempotency-Key": `card_${userId}_${Date.now()}`
-        };
-        if (process.env.MERCADO_PAGO_INTEGRATOR_ID) {
-          cardHeaders["X-Integrator-Id"] = process.env.MERCADO_PAGO_INTEGRATOR_ID;
-        }
-        const paymentResp = await axios.post("https://api.mercadopago.com/v1/payments", cardPayload, {
-          headers: cardHeaders,
-          timeout: 10000
+        console.log(`[MP Checkout Router]: Creating card payment via SDK...`);
+        const paymentData = await paymentSdk.create({
+          body: cardPayload,
+          requestOptions: {
+            idempotencyKey: `card_${userId}_${Date.now()}`
+          }
         });
 
-        const paymentData = paymentResp.data;
         const isApproved = paymentData.status === "approved";
         const paymentId = paymentData.id;
 
@@ -669,17 +688,21 @@ async function startServer() {
         }
 
         if (db) {
-          const syncUpdate = {
-            mercadoPagoPaymentId: paymentId,
-            mercadoPagoStatus: paymentData.status,
-            planType,
-            updatedAt: new Date().toISOString()
-          };
-          await db.collection("users").doc(userId).set(syncUpdate, { merge: true });
-          await db.collection("usuarios").doc(userId).set(syncUpdate, { merge: true });
+          try {
+            const syncUpdate = {
+              mercadoPagoPaymentId: paymentId,
+              mercadoPagoStatus: paymentData.status,
+              planType,
+              updatedAt: new Date().toISOString()
+            };
+            await db.collection("users").doc(userId).set(syncUpdate, { merge: true });
+            await db.collection("usuarios").doc(userId).set(syncUpdate, { merge: true });
 
-          if (isApproved) {
-            await handleMercadoPagoApproved(userId);
+            if (isApproved) {
+              await handleMercadoPagoApproved(userId);
+            }
+          } catch (dbErr: any) {
+            console.error("[MP Checkout Router DB Sync Error (Credit Card)]:", dbErr.message);
           }
         }
 
@@ -702,8 +725,17 @@ async function startServer() {
       res.status(400).json({ success: false, mensagem: "Forma de pagamento não suportada pelo checkout." });
     } catch (err: any) {
       console.error("[MP Checkout API Router Error]:", err.response?.data || err.message);
-      const apiError = err.response?.data?.message || err.message;
-      res.status(500).json({ success: false, mensagem: `Erro na integração com Mercado Pago: ${apiError}` });
+      let errorMessage = "Erro na integração com Mercado Pago.";
+      if (err.response?.data) {
+        const data = err.response.data;
+        const details = data.cause && Array.isArray(data.cause)
+          ? data.cause.map((c: any) => `${c.description || c.code} (${c.data || ""})`).join(", ")
+          : data.message;
+        errorMessage = `Erro de Validação do Mercado Pago: ${details || JSON.stringify(data)}`;
+      } else {
+        errorMessage = `Erro de Conexão com Mercado Pago: ${err.message}`;
+      }
+      res.status(400).json({ success: false, mensagem: errorMessage });
     }
   });
 
@@ -734,7 +766,7 @@ async function startServer() {
           if (!paymentId) return;
 
           const systemToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
-          const mpToken = (systemToken || "").trim();
+          const mpToken = (systemToken || "").replace(/^["']|["']$/g, "").trim();
           if (!mpToken) return;
 
           const mpPaymentRes = await axios.get(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
