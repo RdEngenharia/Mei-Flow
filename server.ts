@@ -374,9 +374,120 @@ async function startServer() {
   });
 
   // ==========================================
-  // 3. INTEGRATION: CREATE SUBSCRIPTION (PREMIUM)
+  // 3. INTEGRATION: MERCADO PAGO CHECKOUT
   // ==========================================
-  app.post("/api/asaas/subscription", async (req, res) => {
+  function getPaymentMethodId(cardNumber: string): string {
+    const clean = cardNumber.replace(/\D/g, "");
+    if (clean.startsWith("4")) return "visa";
+    if (/^(5[1-5]|2[2-7])/.test(clean)) return "master";
+    if (/^(34|37)/.test(clean)) return "amex";
+    if (/^(4011|4389|5041|5067|5090|6278|6363|6362)/.test(clean)) return "elo";
+    if (/^(3841|6062|60)/.test(clean)) return "hipercard";
+    if (/^(6011|622|64|65)/.test(clean)) return "discover";
+    if (/^(30[0-5]|36|38)/.test(clean)) return "diners";
+    return "master";
+  }
+
+  async function handleMercadoPagoApproved(userId: string) {
+    if (!db) return;
+    try {
+      console.log(`[MP Webhook Approved]: Processing Premium Upgrade for user ${userId}`);
+
+      const userDocRef = db.collection("users").doc(userId);
+      const userDoc = await userDocRef.get();
+      const existingProfile = userDoc.exists ? userDoc.data() : {};
+
+      const premiumUpdate = {
+        planType: "premium",
+        invoiceLimit: 30,
+        invoiceUsed: 0,
+        updatedAt: new Date().toISOString()
+      };
+
+      await db.collection("users").doc(userId).set(premiumUpdate, { merge: true });
+      await db.collection("usuarios").doc(userId).set(premiumUpdate, { merge: true });
+      console.log(`[MP Webhook]: Updated user profile in Firestore to premium / limits set!`);
+
+      try {
+        console.log(`[MP Webhook FocusNFe]: Triggering subscription invoice emission for user ${userId}`);
+        const tokenToUse = process.env.FOCUS_NFE_KEY || "wCTTGnYwEXXqCYskYtswVMBCQIHP8e8w";
+        const focusAuthHeader = "Basic " + Buffer.from(`${tokenToUse}:`).toString("base64");
+        
+        const focusRef = `premium_${userId}_${Date.now()}`;
+        const randomRps = Math.floor(100000 + Math.random() * 900000).toString();
+
+        const docToEmit = (existingProfile?.cnpjPrestador || existingProfile?.cnpj || "").replace(/\D/g, "");
+        const cleanEmail = existingProfile?.email || "tomador@meiflow.com";
+        const cleanName = existingProfile?.name || existingProfile?.meiName || "Assinante MEI Flow";
+
+        const tomadorBody: any = {};
+        if (docToEmit.length === 14) {
+          tomadorBody.cnpj = docToEmit;
+        } else if (docToEmit.length === 11) {
+          tomadorBody.cpf = docToEmit;
+        } else {
+          tomadorBody.cnpj = "4483719000183";
+        }
+
+        const focusNfePayload = {
+          cnpj_prestador: "4483719000183",
+          ref: focusRef,
+          numero_rps: randomRps,
+          serie_rps: "1",
+          tipo_rps: "1",
+          valor_servicos: 29.90,
+          tomador: {
+            ...tomadorBody,
+            razao_social: cleanName,
+            email: cleanEmail,
+          },
+          servico: {
+            aliquota: 0,
+            discriminacao: `Assinatura de Softwares e Serviços Premium MEI Flow - Faturamento Integrado Mensal. Referente ao pagamento aprovado de R$ 29,90.`,
+            codigo_municipio: "3550308",
+            item_lista_servico: "01.01"
+          }
+        };
+
+        const isFocusTest = !process.env.FOCUS_NFE_KEY || 
+                            process.env.FOCUS_NFE_KEY.toLowerCase().includes("test") || 
+                            process.env.FOCUS_NFE_KEY.toLowerCase().includes("homolog") || 
+                            process.env.FOCUS_NFE_KEY.toLowerCase().includes("development") ||
+                            process.env.FOCUS_NFE_KEY.toLowerCase().includes("sandbox");
+        const focusUrl = isFocusTest ? "https://homologacao.focusnfe.com.br/v2/nfse" : "https://api.focusnfe.com.br/v2/nfse";
+        
+        const focusResponse = await axios.post(focusUrl, focusNfePayload, {
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": focusAuthHeader
+          },
+          timeout: 10000
+        });
+
+        if (focusResponse.status === 201 || focusResponse.status === 200) {
+          console.log(`[MP Webhook FocusNFe Success]: Invoice processing ref: ${focusRef}`);
+          await db.collection("users").doc(userId).set({
+            premiumInvoiceRef: focusRef,
+            premiumInvoiceStatus: "processando_autorizacao",
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+        }
+      } catch (focusErr: any) {
+        console.error("[MP Webhook FocusNFe Error]:", focusErr.response?.data?.mensagem || focusErr.message);
+      }
+    } catch (err: any) {
+      console.error("[handleMercadoPagoApproved Error]:", err.message);
+    }
+  }
+
+  app.get("/api/mercadopago/config", (req, res) => {
+    res.json({
+      publicKey: process.env.NEXT_PUBLIC_MP_PUBLIC_KEY || "",
+      integratorId: process.env.MERCADO_PAGO_INTEGRATOR_ID || ""
+    });
+  });
+
+  app.post("/api/mercadopago/checkout", async (req, res) => {
     try {
       const {
         userId,
@@ -388,222 +499,278 @@ async function startServer() {
       } = req.body;
 
       if (!userId || !name || !cpfCnpj || !email) {
-        res.status(400).json({ success: false, mensagem: "Parâmetros obrigatórios ausentes para assinatura." });
+        res.status(400).json({ success: false, mensagem: "Parâmetros obrigatórios ausentes para o checkout." });
         return;
       }
 
-      const systemToken = process.env.ASAAS_API_KEY;
-      const asaasToken = (systemToken || "").trim();
+      const systemToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
+      const mpToken = (systemToken || "").trim();
 
-      if (!asaasToken) {
+      if (!mpToken) {
         res.status(500).json({
           success: false,
-          mensagem: "Erro de Servidor: Chave master ASAAS_API_KEY não foi configurada."
+          mensagem: "Erro de Servidor: Credencial de Produção MERCADO_PAGO_ACCESS_TOKEN não configurada no ambiente."
         });
         return;
       }
 
-      const asaasBaseUrl = await getAsaasBaseUrl(asaasToken);
+      console.log(`[MP Checkout Router]: Processing checkout for ${name} using ${paymentMethod}`);
       const cleanDoc = cpfCnpj.replace(/\D/g, "");
+      const docType = cleanDoc.length === 14 ? "CNPJ" : "CPF";
+      
+      const payersFirstName = name.split(" ")[0] || "MEI";
+      const payersLastName = name.split(" ").slice(1).join(" ") || "Flow";
 
-      console.log(`[Asaas Subscription]: Creating Premium subscription for ${name} (${cleanDoc}) using ${asaasBaseUrl}`);
-
-      // 1. Search Customer by Doc
-      let customerId = "";
-      try {
-        const searchRes = await fetchAsaas(`${asaasBaseUrl}/customers?cpfCnpj=${cleanDoc}`, {
-          headers: { "access_token": asaasToken }
-        });
-        if (searchRes && searchRes.data && searchRes.data.length > 0) {
-          customerId = searchRes.data[0].id;
-        }
-      } catch (err: any) {
-        console.warn("Asaas customer search warning during subscription:", err.response?.data || err.message);
-      }
-
-      // 2. Create customer if not found
-      if (!customerId) {
-        try {
-          const customerJson = await fetchAsaas(`${asaasBaseUrl}/customers`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "access_token": asaasToken
-            },
-            body: JSON.stringify({
-              name,
-              cpfCnpj: cleanDoc,
-              email,
-              notificationDisabled: true
-            })
-          });
-          customerId = customerJson.id;
-        } catch (err: any) {
-          const errorMsg = err.response?.data?.errors?.[0]?.description || JSON.stringify(err.response?.data) || err.message;
-          res.status(400).json({
-            success: false,
-            mensagem: `Asaas: Falha ao cadastrar cliente: ${errorMsg}`
-          });
-          return;
-        }
-      }
-
-      // 3. Create Subscription (Valor Fixo: R$ 29,90)
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const dueDateStr = tomorrow.toISOString().split("T")[0];
-
-      const subPayload: any = {
-        customer: customerId,
-        billingType: paymentMethod, // BOLETO / PIX / CREDIT_CARD
-        value: 29.90,
-        nextDueDate: dueDateStr,
-        cycle: "MONTHLY",
-        description: "Assinatura Plano Premium - MEI Flow",
-        externalReference: userId
-      };
-
-      if (paymentMethod === "CREDIT_CARD" && creditCard) {
-        subPayload.creditCard = {
-          holderName: creditCard.holderName,
-          number: creditCard.number,
-          expiryMonth: creditCard.expiryMonth,
-          expiryYear: creditCard.expiryYear,
-          ccv: creditCard.ccv
-        };
-        subPayload.creditCardHolderInfo = {
-          name: name,
-          email: email,
-          cpfCnpj: cleanDoc,
-          postalCode: "01001000",
-          addressNumber: "123",
-          phone: "11999999999"
-        };
-      }
-
-      let subJson: any;
-      try {
-        subJson = await fetchAsaas(`${asaasBaseUrl}/subscriptions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "access_token": asaasToken
+      if (paymentMethod === "PIX") {
+        const pixPayload = {
+          transaction_amount: 29.90,
+          description: "Plano Premium - MEI Flow",
+          payment_method_id: "pix",
+          payer: {
+            email: email,
+            first_name: payersFirstName,
+            last_name: payersLastName,
+            identification: {
+              type: docType,
+              number: cleanDoc
+            }
           },
-          body: JSON.stringify(subPayload)
+          external_reference: userId
+        };
+
+        const pixHeaders: Record<string, string> = {
+          "Authorization": `Bearer ${mpToken}`,
+          "Content-Type": "application/json",
+          "X-Idempotency-Key": `pix_${userId}_${Date.now()}`
+        };
+        if (process.env.MERCADO_PAGO_INTEGRATOR_ID) {
+          pixHeaders["X-Integrator-Id"] = process.env.MERCADO_PAGO_INTEGRATOR_ID;
+        }
+        const response = await axios.post("https://api.mercadopago.com/v1/payments", pixPayload, {
+          headers: pixHeaders,
+          timeout: 10000
         });
-      } catch (err: any) {
-        const errorMsg = err.response?.data?.errors?.[0]?.description || JSON.stringify(err.response?.data) || err.message;
-        res.status(400).json({
-          success: false,
-          mensagem: `Asaas: Falha ao criar assinatura: ${errorMsg}`
-        });
-        return;
-      }
 
-      const subscriptionId = subJson.id;
+        const paymentData = response.data;
+        const paymentId = paymentData.id;
 
-      // 4. Salva a relação no Firestore com status pendente
-      let planType: "free" | "premium" = "free";
-      if (paymentMethod === "CREDIT_CARD" && subJson.status === "ACTIVE") {
-        planType = "premium";
-      }
-
-      if (db) {
-        try {
-          const userUpdate = {
-            asaasCustomerId: customerId,
-            asaasSubscriptionId: subscriptionId,
-            planType: planType,
+        if (db) {
+          const syncUpdate = {
+            mercadoPagoPaymentId: paymentId,
+            mercadoPagoStatus: paymentData.status,
+            planType: paymentData.status === "approved" ? "premium" : "free",
             updatedAt: new Date().toISOString()
           };
-          await db.collection("users").doc(userId).set(userUpdate, { merge: true });
-          await db.collection("usuarios").doc(userId).set(userUpdate, { merge: true });
-          console.log(`[Firestore Sync]: Linked subscriber ${userId} with subId ${subscriptionId}`);
-        } catch (dbErr: any) {
-          console.error("[Firestore Sync Error]:", dbErr.message);
-        }
-      }
-
-      // 5. Busca cobrança gerada para a assinatura para disponibilizar formas de pagamento (como Pix/Boleto Link)
-      let firstPayment: any = null;
-      let pixQrCodeResult: any = null;
-
-      try {
-        console.log(`[Asaas Pix Integration]: Fetching payments for subscription ${subscriptionId}`);
-        let paymentsJson: any = null;
-        
-        // Method A: Direct subscriptions/{id}/payments
-        try {
-          paymentsJson = await fetchAsaas(`${asaasBaseUrl}/subscriptions/${subscriptionId}/payments`, {
-            headers: { "access_token": asaasToken }
-          });
-          if (paymentsJson && paymentsJson.data && paymentsJson.data.length > 0) {
-            firstPayment = paymentsJson.data[0];
-            console.log(`[Asaas Pix Integration - Method A]: Found initial payment ${firstPayment.id}`);
-          }
-        } catch (methodAErr: any) {
-          console.warn("[Asaas Pix Integration]: Method A (subscriptions/{id}/payments) failed:", methodAErr.response?.data || methodAErr.message);
-        }
-
-        // Method B: Filter payments?subscription={id}
-        if (!firstPayment) {
-          try {
-            console.log(`[Asaas Pix Integration]: Falling back to Method B (payments?subscription=${subscriptionId})`);
-            paymentsJson = await fetchAsaas(`${asaasBaseUrl}/payments?subscription=${subscriptionId}`, {
-              headers: { "access_token": asaasToken }
-            });
-            if (paymentsJson && paymentsJson.data && paymentsJson.data.length > 0) {
-              firstPayment = paymentsJson.data[0];
-              console.log(`[Asaas Pix Integration - Method B]: Found initial payment ${firstPayment.id}`);
-            }
-          } catch (methodBErr: any) {
-            console.error("[Asaas Pix Integration]: Method B (payments?subscription) failed:", methodBErr.response?.data || methodBErr.message);
-          }
-        }
-
-        if (firstPayment) {
-          console.log(`[Asaas Pix Integration]: Found initial payment ${firstPayment.id} with status ${firstPayment.status}`);
+          await db.collection("users").doc(userId).set(syncUpdate, { merge: true });
+          await db.collection("usuarios").doc(userId).set(syncUpdate, { merge: true });
           
-          if (firstPayment.id && paymentMethod === "PIX") {
-            try {
-              console.log(`[Asaas Pix Integration]: Requesting Pix QR Code for payment ${firstPayment.id}`);
-              pixQrCodeResult = await fetchAsaas(`${asaasBaseUrl}/payments/${firstPayment.id}/pixQrCode`, {
-                headers: { "access_token": asaasToken }
-              });
-              console.log(`[Asaas Pix Integration]: Successfully fetched Pix QR Code.`, pixQrCodeResult);
-            } catch (pixErr: any) {
-              console.error("Asaas fetch Pix QR Code warning:", pixErr.response?.data || pixErr.message);
-            }
+          if (paymentData.status === "approved") {
+            await handleMercadoPagoApproved(userId);
           }
-        } else {
-          console.warn(`[Asaas Pix Integration]: No payments found linked to subscription ${subscriptionId} via both methods.`);
         }
-      } catch (payLinkErr: any) {
-        console.error("Warning: Could not fetch sub payments:", payLinkErr.response?.data || payLinkErr.message);
+
+        const pointOfInteraction = paymentData.point_of_interaction;
+        const transactionData = pointOfInteraction?.transaction_data;
+        
+        return res.status(200).json({
+          success: true,
+          paymentId,
+          status: paymentData.status,
+          planType: paymentData.status === "approved" ? "premium" : "free",
+          pixQrCode: {
+            encodedImage: transactionData?.qr_code_base64 || "",
+            payload: transactionData?.qr_code || ""
+          }
+        });
       }
 
-      res.status(201).json({
-        success: true,
-        subscriptionId,
-        customerId,
-        planType,
-        status: subJson.status,
-        invoiceUrl: firstPayment?.invoiceUrl || subJson.invoiceUrl || "",
-        bankSlipUrl: firstPayment?.bankSlipUrl || firstPayment?.invoiceUrl || "",
-        pixQrCode: pixQrCodeResult,
-        paymentId: firstPayment?.id || null
-      });
+      if (paymentMethod === "CREDIT_CARD") {
+        if (!creditCard) {
+          return res.status(400).json({ success: false, mensagem: "Parâmetros de cartão de crédito ausentes no payload." });
+        }
 
+        const cardTokenPayload = {
+          card_number: creditCard.number.replace(/\s/g, ""),
+          expiration_month: parseInt(creditCard.expiryMonth),
+          expiration_year: parseInt(creditCard.expiryYear),
+          security_code: creditCard.ccv,
+          cardholder: {
+            name: creditCard.holderName,
+            identification: {
+              type: docType,
+              number: cleanDoc
+            }
+          }
+        };
+
+        let tokenResp: any;
+        try {
+          const tokenHeaders: Record<string, string> = {
+            "Authorization": `Bearer ${mpToken}`,
+            "Content-Type": "application/json"
+          };
+          if (process.env.MERCADO_PAGO_INTEGRATOR_ID) {
+            tokenHeaders["X-Integrator-Id"] = process.env.MERCADO_PAGO_INTEGRATOR_ID;
+          }
+          tokenResp = await axios.post("https://api.mercadopago.com/v1/card_tokens", cardTokenPayload, {
+            headers: tokenHeaders,
+            timeout: 10000
+          });
+        } catch (tokenErr: any) {
+          console.error("[MP Tokenization Error inside Router]:", tokenErr.response?.data || tokenErr.message);
+          const errDetails = tokenErr.response?.data?.cause?.[0]?.description || "Verifique os dados informados.";
+          return res.status(400).json({
+            success: false,
+            mensagem: `Mercado Pago (Cartão recusado/inválido): ${errDetails}`
+          });
+        }
+
+        const cardTokenId = tokenResp.data.id;
+        const detectedBrand = getPaymentMethodId(creditCard.number);
+
+        const cardPayload = {
+          token: cardTokenId,
+          transaction_amount: 29.90,
+          description: "Plano Premium - MEI Flow",
+          installments: 1,
+          payment_method_id: detectedBrand,
+          payer: {
+            email: email,
+            first_name: payersFirstName,
+            last_name: payersLastName,
+            identification: {
+              type: docType,
+              number: cleanDoc
+            }
+          },
+          external_reference: userId
+        };
+
+        const cardHeaders: Record<string, string> = {
+          "Authorization": `Bearer ${mpToken}`,
+          "Content-Type": "application/json",
+          "X-Idempotency-Key": `card_${userId}_${Date.now()}`
+        };
+        if (process.env.MERCADO_PAGO_INTEGRATOR_ID) {
+          cardHeaders["X-Integrator-Id"] = process.env.MERCADO_PAGO_INTEGRATOR_ID;
+        }
+        const paymentResp = await axios.post("https://api.mercadopago.com/v1/payments", cardPayload, {
+          headers: cardHeaders,
+          timeout: 10000
+        });
+
+        const paymentData = paymentResp.data;
+        const isApproved = paymentData.status === "approved";
+        const paymentId = paymentData.id;
+
+        let planType = "free";
+        if (isApproved) {
+          planType = "premium";
+        }
+
+        if (db) {
+          const syncUpdate = {
+            mercadoPagoPaymentId: paymentId,
+            mercadoPagoStatus: paymentData.status,
+            planType,
+            updatedAt: new Date().toISOString()
+          };
+          await db.collection("users").doc(userId).set(syncUpdate, { merge: true });
+          await db.collection("usuarios").doc(userId).set(syncUpdate, { merge: true });
+
+          if (isApproved) {
+            await handleMercadoPagoApproved(userId);
+          }
+        }
+
+        if (paymentData.status === "rejected") {
+          const rejectDetail = paymentData.status_detail || "Pagamento rejeitado pelo emissor.";
+          return res.status(400).json({
+            success: false,
+            mensagem: `Transação Recusada (Mercado Pago): ${rejectDetail}.`
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          paymentId,
+          status: paymentData.status,
+          planType
+        });
+      }
+
+      res.status(400).json({ success: false, mensagem: "Forma de pagamento não suportada pelo checkout." });
     } catch (err: any) {
-      console.error("[Asaas Create Subscription Server Error]:", err.response?.data || err.message);
-      res.status(500).json({ success: false, mensagem: "Erro interno ao processar assinatura: " + err.message });
+      console.error("[MP Checkout API Router Error]:", err.response?.data || err.message);
+      const apiError = err.response?.data?.message || err.message;
+      res.status(500).json({ success: false, mensagem: `Erro na integração com Mercado Pago: ${apiError}` });
     }
   });
 
   // ==========================================
-  // PREMIUM UPGRADE WEBHOOK (ASAAS R$ 29,90 PAYMENT APPROVED)
+  // 4. WEBHOOK: MERCADO PAGO PREMIUM NOTIFICATION
   // ==========================================
-  app.post("/api/webhook-asaas", async (req, res) => {
+  app.post("/api/mercadopago/webhook", async (req, res) => {
+    try {
+      res.status(200).json({ received: true });
+
+      (async () => {
+        try {
+          const body = req.body;
+          console.log(`[MP Webhook Router Notification]:`, JSON.stringify(body));
+
+          let paymentId = "";
+          if (body.type === "payment" && body.data?.id) {
+            paymentId = String(body.data.id);
+          } else if (body.action?.startsWith("payment") && body.data?.id) {
+            paymentId = String(body.data.id);
+          } else if (body.topic === "payment" && body.id) {
+            paymentId = String(body.id);
+          } else if (body.resource && body.topic === "payment") {
+            const match = body.resource.match(/\/payments\/(\d+)/);
+            if (match) paymentId = match[1];
+          }
+
+          if (!paymentId) return;
+
+          const systemToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
+          const mpToken = (systemToken || "").trim();
+          if (!mpToken) return;
+
+          const mpPaymentRes = await axios.get(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+            headers: { "Authorization": `Bearer ${mpToken}` }
+          });
+
+          const paymentData = mpPaymentRes.data;
+          const status = paymentData.status;
+          const userId = paymentData.external_reference;
+
+          if (!userId) return;
+
+          if (db) {
+            const statusUpdate = {
+              mercadoPagoPaymentId: paymentId,
+              mercadoPagoStatus: status,
+              updatedAt: new Date().toISOString()
+            };
+            await db.collection("users").doc(userId).set(statusUpdate, { merge: true });
+            await db.collection("usuarios").doc(userId).set(statusUpdate, { merge: true });
+          }
+
+          if (status === "approved") {
+            await handleMercadoPagoApproved(userId);
+          }
+        } catch (innerErr: any) {
+          console.error("[MP Webhook Router Background error]:", innerErr.response?.data || innerErr.message);
+        }
+      })();
+    } catch (err: any) {
+      console.error("[MP Webhook Router Global Error]:", err.message);
+    }
+  });
+
+  // DEPRECATED ORIGINAL ASAAS WEBHOOK HANDLER BELOW
+  app.post("/api/webhook-asaas-deprecated", async (req, res) => {
     try {
       // 1. Validar webhook token do Asaas (process.env.ASAAS_WEBHOOK_TOKEN)
       const webhookToken = process.env.ASAAS_WEBHOOK_TOKEN;
