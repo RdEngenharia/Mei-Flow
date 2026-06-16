@@ -3,7 +3,6 @@ import { getFirestore } from "firebase-admin/firestore";
 import path from "path";
 import fs from "fs";
 import axios from "axios";
-import { MercadoPagoConfig, Payment, CardToken } from "mercadopago";
 
 // Securely initialize Firebase Admin in serverless environment
 const getFirebaseProjectId = () => {
@@ -20,6 +19,22 @@ const getFirebaseProjectId = () => {
     }
   }
   return "mei-flow-692d9"; // fallback
+};
+
+const getFirebaseDatabaseId = () => {
+  if (process.env.FIREBASE_DATABASE_ID) {
+    return process.env.FIREBASE_DATABASE_ID;
+  }
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      return config.firestoreDatabaseId || "(default)";
+    } catch (err) {
+      console.error("Error reading firebase-applet-config.json for database ID inside checkout API:", err);
+    }
+  }
+  return "(default)";
 };
 
 const projId = getFirebaseProjectId();
@@ -41,7 +56,9 @@ if (projId) {
 let db: any = null;
 if (appInitialized) {
   try {
-    db = getFirestore();
+    const dbId = getFirebaseDatabaseId();
+    db = dbId === "(default)" ? getFirestore() : getFirestore(dbId);
+    console.log(`[Firebase Admin Checkout]: Connected to Firestore database ID: ${dbId}`);
   } catch (dbInitErr: any) {
     console.warn("[Firebase Admin MP Checkout Init Warning]: Google ADC is not configured. Firestore operations are disabled in this server instance:", dbInitErr.message);
     db = null;
@@ -148,15 +165,29 @@ export default async function handler(req: any, res: any) {
       userId,
       name,
       cpfCnpj,
+      documentNumber,
       email,
       paymentMethod,
       creditCard
     } = req.body;
 
-    if (!userId || !name || !cpfCnpj || !email) {
-      res.status(400).json({ success: false, mensagem: "Parâmetros obrigatórios ausentes para o checkout." });
+    if (!userId || !email) {
+      res.status(400).json({ success: false, mensagem: "Parâmetros obrigatórios ausentes: userId e email são obrigatórios." });
       return;
     }
+
+    const docRaw = (documentNumber || cpfCnpj || "");
+    const cleanDoc = docRaw.replace(/\D/g, "");
+
+    if (cleanDoc.length !== 11 && cleanDoc.length !== 14) {
+      res.status(400).json({
+        success: false,
+        mensagem: `Documento CPF ou CNPJ inválido (${docRaw}). Certifique-se de digitar 11 dígitos para CPF ou 14 dígitos para CNPJ.`
+      });
+      return;
+    }
+
+    const docType = cleanDoc.length === 11 ? "CPF" : "CNPJ";
 
     const systemToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
     const mpToken = (systemToken || "").replace(/^["']|["']$/g, "").trim();
@@ -169,18 +200,19 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    console.log(`[MP Checkout Serverless]: Processing checkout for ${name} using ${paymentMethod}`);
-    
-    const cleanDoc = cpfCnpj.replace(/\D/g, "");
-    if (cleanDoc.length !== 14) {
-      res.status(400).json({
-        success: false,
-        mensagem: `Documento CNPJ inválido (${cpfCnpj}). O CNPJ deve conter exatamente 14 dígitos.`
-      });
-      return;
+    const sysIntegrator = process.env.MERCADO_PAGO_INTEGRATOR_ID;
+    const integratorId = (sysIntegrator || "").replace(/^["']|["']$/g, "").trim();
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${mpToken}`,
+      "X-Idempotency-Key": `chk_s_${userId}_${Date.now()}`
+    };
+
+    if (integratorId) {
+      headers["X-Integrator-Id"] = integratorId;
     }
-    const docType = "CNPJ";
-    
+
     let dbProfile: any = {};
     if (db) {
       try {
@@ -193,35 +225,16 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    const payersFirstName = name.split(" ")[0] || "MEI";
-    const payersLastName = name.split(" ").slice(1).join(" ") || "Flow";
-
-    const sysIntegrator = process.env.MERCADO_PAGO_INTEGRATOR_ID;
-    const integratorId = (sysIntegrator || "").replace(/^["']|["']$/g, "").trim();
-
-    const mpConfigOptions: any = {
-      timeout: 5000,
-    };
-    if (integratorId) {
-      mpConfigOptions.integratorId = integratorId;
-    }
-
-    const mpClient = new MercadoPagoConfig({
-      accessToken: mpToken,
-      options: mpConfigOptions,
-    });
-
-    const paymentSdk = new Payment(mpClient);
-    const cardTokenSdk = new CardToken(mpClient);
-
     if (paymentMethod === "PIX") {
-      // Create Pix payment on Mercado Pago
+      const payersFirstName = (name || "Comprador").split(" ")[0] || "Comprador";
+      const payersLastName = (name || "MEIFlow").split(" ").slice(1).join(" ") || "MEIFlow";
+
       const pixPayload = {
         transaction_amount: 29.90,
-        description: "Plano Premium - MEI Flow",
+        description: "Plano Premium - MEI Flow - Pix",
         payment_method_id: "pix",
         payer: {
-          email: email,
+          email: email.trim(),
           first_name: payersFirstName,
           last_name: payersLastName,
           identification: {
@@ -232,13 +245,24 @@ export default async function handler(req: any, res: any) {
         external_reference: userId
       };
 
-      console.log(`[MP Checkout Pix Payload]: Sending payout creation to MP via official SDK`);
-      const paymentData = await paymentSdk.create({
-        body: pixPayload,
-        requestOptions: {
-          idempotencyKey: `pix_${userId}_${Date.now()}`
-        }
+      console.log(`[MP Checkout Serverless Pix]: Sending payout creation to MP via fetch`);
+      const mpResponse = await fetch("https://api.mercadopago.com/v1/payments", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(pixPayload)
       });
+
+      const paymentData: any = await mpResponse.json();
+
+      if (!mpResponse.ok) {
+        const errorMsg = paymentData.message || JSON.stringify(paymentData);
+        console.error(`[MP Checkout Serverless Pix Error]: ${errorMsg}`);
+        res.status(mpResponse.status).json({
+          success: false,
+          mensagem: `Mercado Pago: ${errorMsg}`
+        });
+        return;
+      }
 
       const paymentId = paymentData.id;
 
@@ -262,18 +286,18 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      // Map back to format expected by current UI
       const pointOfInteraction = paymentData.point_of_interaction;
       const transactionData = pointOfInteraction?.transaction_data;
-      
-      const qrCodePayload = transactionData?.qr_code || "";
       const qrCodeImage = transactionData?.qr_code_base64 || "";
+      const qrCodePayload = transactionData?.qr_code || "";
 
       return res.status(200).json({
         success: true,
         paymentId,
         status: paymentData.status,
         planType: paymentData.status === "approved" ? "premium" : "free",
+        qrCodeBase64: qrCodeImage,
+        qrCode: qrCodePayload,
         pixQrCode: {
           encodedImage: qrCodeImage,
           payload: qrCodePayload
@@ -286,7 +310,6 @@ export default async function handler(req: any, res: any) {
         return res.status(400).json({ success: false, mensagem: "Parâmetros de cartão de crédito ausentes no payload." });
       }
 
-      // Tokenize card first using security client parameters representation
       const cardTokenPayload = {
         card_number: creditCard.number.replace(/\s/g, ""),
         expiration_month: String(creditCard.expiryMonth),
@@ -301,23 +324,28 @@ export default async function handler(req: any, res: any) {
         }
       };
 
-      console.log(`[MP Checkout serverless]: Tokenizing card via SDK...`);
-      let tokenResp: any;
-      try {
-        tokenResp = await cardTokenSdk.create({
-          body: cardTokenPayload
-        });
-      } catch (tokenErr: any) {
-        console.error("[MP Tokenization Error]:", tokenErr);
-        const errDetails = tokenErr.message || "Verifique os dados informados.";
+      console.log(`[Checkout Native Fetch CC Serverless]: Tokenizing card via fetch...`);
+      const tokenResponse = await fetch("https://api.mercadopago.com/v1/card_tokens", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(cardTokenPayload)
+      });
+
+      const tokenData: any = await tokenResponse.json();
+
+      if (!tokenResponse.ok) {
+        console.error("[Checkout Native Fetch CC Token Serverless Error]:", tokenData);
+        const errDetails = tokenData.message || "Verifique os dados informados.";
         return res.status(400).json({
           success: false,
           mensagem: `Mercado Pago (Cartão recusado/inválido): ${errDetails}`
         });
       }
 
-      const cardTokenId = tokenResp.id;
+      const cardTokenId = tokenData.id;
       const detectedBrand = getPaymentMethodId(creditCard.number);
+      const payersFirstName = (name || "Comprador").split(" ")[0] || "Comprador";
+      const payersLastName = (name || "MEIFlow").split(" ").slice(1).join(" ") || "MEIFlow";
 
       const cardPayload = {
         token: cardTokenId,
@@ -326,7 +354,7 @@ export default async function handler(req: any, res: any) {
         installments: 1,
         payment_method_id: detectedBrand,
         payer: {
-          email: email,
+          email: email.trim(),
           first_name: payersFirstName,
           last_name: payersLastName,
           identification: {
@@ -337,13 +365,23 @@ export default async function handler(req: any, res: any) {
         external_reference: userId
       };
 
-      console.log(`[MP Checkout serverless]: Creating card payment via SDK...`);
-      const paymentData = await paymentSdk.create({
-        body: cardPayload,
-        requestOptions: {
-          idempotencyKey: `card_${userId}_${Date.now()}`
-        }
+      console.log(`[Checkout Native Fetch CC Serverless]: Creating payment via fetch...`);
+      const mpPaymentResp = await fetch("https://api.mercadopago.com/v1/payments", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(cardPayload)
       });
+
+      const paymentData: any = await mpPaymentResp.json();
+
+      if (!mpPaymentResp.ok) {
+        const errorMsg = paymentData.message || JSON.stringify(paymentData);
+        console.error(`[Checkout Native Fetch CC Payment Serverless Error]: ${errorMsg}`);
+        return res.status(mpPaymentResp.status).json({
+          success: false,
+          mensagem: `Mercado Pago: ${errorMsg}`
+        });
+      }
 
       const isApproved = paymentData.status === "approved";
       const paymentId = paymentData.id;
@@ -353,7 +391,6 @@ export default async function handler(req: any, res: any) {
         planType = "premium";
       }
 
-      // Sync user profile status
       if (db) {
         try {
           const syncUpdate = {
@@ -369,7 +406,7 @@ export default async function handler(req: any, res: any) {
             await handleApprovedUpgrade(userId, { ...dbProfile, name, email, cnpjPrestador: cleanDoc });
           }
         } catch (dbErr: any) {
-          console.error("[MP Checkout API DB Sync Error (Credit Card)]:", dbErr.message);
+          console.error("[Checkout Native Fetch CC DB Sync Serverless Error]:", dbErr.message);
         }
       }
 
@@ -391,17 +428,7 @@ export default async function handler(req: any, res: any) {
 
     res.status(400).json({ success: false, mensagem: "Forma de pagamento não suportada pelo checkout." });
   } catch (err: any) {
-    console.error("[MP Checkout API Server Error]:", err.response?.data || err.message);
-    let errorMessage = "Erro na integração com Mercado Pago.";
-    if (err.response?.data) {
-      const data = err.response.data;
-      const details = data.cause && Array.isArray(data.cause)
-        ? data.cause.map((c: any) => `${c.description || c.code} (${c.data || ""})`).join(", ")
-        : data.message;
-      errorMessage = `Erro de Validação do Mercado Pago: ${details || JSON.stringify(data)}`;
-    } else {
-      errorMessage = `Erro de Conexão com Mercado Pago: ${err.message}`;
-    }
-    res.status(400).json({ success: false, mensagem: errorMessage });
+    console.error("[MP Checkout API Server Error]:", err.message);
+    res.status(400).json({ success: false, mensagem: `Erro na integração com Mercado Pago: ${err.message}` });
   }
 }

@@ -1,6 +1,10 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    
+    // -----------------------------------------------------------------
+    // 1. ÁREA DO PERFIL DO USUÁRIO
+    // -----------------------------------------------------------------
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
       
@@ -14,27 +18,47 @@ service cloud.firestore {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
     }
+
+    // Compatibilidade com coleção legada de usuários sincronizada pelo backend
     match /usuarios/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
-      match /vendas/{vendaId} {
+      match /{document=**} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
     }
+
+    // -----------------------------------------------------------------
+    // 2. PARCEIROS COMERCIAIS & CLIENTES (Necessário para a tela de Clientes)
+    // -----------------------------------------------------------------
     match /customers/{customerId} {
-      allow create: if request.auth != null;
-      allow read, write: if request.auth != null && (resource == null || !("userId" in resource.data) || resource.data.userId == request.auth.uid);
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow get: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid);
+      allow list: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
     }
+    
     match /clientes/{clienteId} {
-      allow create: if request.auth != null;
-      allow read, write: if request.auth != null && (resource == null || !("mei_uid" in resource.data) || resource.data.mei_uid == request.auth.uid);
+      allow create: if request.auth != null && request.resource.data.mei_uid == request.auth.uid;
+      allow get: if request.auth != null && (resource == null || resource.data.mei_uid == request.auth.uid);
+      allow list: if request.auth != null && resource.data.mei_uid == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.mei_uid == request.auth.uid;
     }
+
+    // -----------------------------------------------------------------
+    // 3. ENTRADAS & MOVIMENTAÇÕES (Necessário para a tela de Extrato/Transações e o Asaas)
+    // -----------------------------------------------------------------
     match /transactions/{transactionId} {
-      allow create: if request.auth != null;
-      allow read, write: if request.auth != null && (resource == null || !("userId" in resource.data) || resource.data.userId == request.auth.uid);
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow get: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid);
+      allow list: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
     }
+
     match /transacoes/{transacaoId} {
-      allow create: if request.auth != null;
-      allow read, write: if request.auth != null && (resource == null || !("mei_uid" in resource.data) || resource.data.mei_uid == request.auth.uid);
+      allow create: if request.auth != null && request.resource.data.mei_uid == request.auth.uid;
+      allow get: if request.auth != null && (resource == null || resource.data.mei_uid == request.auth.uid);
+      allow list: if request.auth != null && resource.data.mei_uid == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.mei_uid == request.auth.uid;
     }
   }
 }

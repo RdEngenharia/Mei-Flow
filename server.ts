@@ -42,7 +42,9 @@ if (firebaseConfig.projectId) {
 let db: any = null;
 if (appInitialized) {
   try {
-    db = getFirestore();
+    const dbId = firebaseConfig.firestoreDatabaseId || "(default)";
+    db = dbId === "(default)" ? getFirestore() : getFirestore(dbId);
+    console.log(`[Firebase Admin]: Connected to Firestore database ID: ${dbId}`);
   } catch (dbInitErr: any) {
     console.warn("[Firebase Admin Server Init Warning]: Google ADC is not configured. Firestore operations are disabled in this server instance:", dbInitErr.message);
     db = null;
@@ -408,6 +410,8 @@ async function startServer() {
 
       const premiumUpdate = {
         planType: "premium",
+        plan: "premium",
+        status: "active",
         invoiceLimit: 30,
         invoiceUsed: 0,
         updatedAt: new Date().toISOString()
@@ -496,21 +500,35 @@ async function startServer() {
     });
   });
 
-  app.post("/api/mercadopago/checkout", async (req, res) => {
+  app.post(["/api/checkout", "/api/mercadopago/checkout"], async (req, res) => {
     try {
       const {
         userId,
         name,
         cpfCnpj,
+        documentNumber,
         email,
         paymentMethod,
         creditCard
       } = req.body;
 
-      if (!userId || !name || !cpfCnpj || !email) {
-        res.status(400).json({ success: false, mensagem: "Parâmetros obrigatórios ausentes para o checkout." });
+      if (!userId || !email) {
+        res.status(400).json({ success: false, mensagem: "Parâmetros obrigatórios ausentes: userId e email são obrigatórios." });
         return;
       }
+
+      const docRaw = (documentNumber || cpfCnpj || "");
+      const cleanDoc = docRaw.replace(/\D/g, "");
+
+      if (cleanDoc.length !== 11 && cleanDoc.length !== 14) {
+        res.status(400).json({
+          success: false,
+          mensagem: `Documento CPF ou CNPJ inválido (${docRaw}). Certifique-se de digitar 11 dígitos para CPF ou 14 dígitos para CNPJ.`
+        });
+        return;
+      }
+
+      const docType = cleanDoc.length === 11 ? "CPF" : "CNPJ";
 
       const systemToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
       const mpToken = (systemToken || "").replace(/^["']|["']$/g, "").trim();
@@ -523,45 +541,29 @@ async function startServer() {
         return;
       }
 
-      console.log(`[MP Checkout Router]: Processing checkout for ${name} using ${paymentMethod}`);
-      const cleanDoc = cpfCnpj.replace(/\D/g, "");
-      if (cleanDoc.length !== 14) {
-        res.status(400).json({
-          success: false,
-          mensagem: `Documento CNPJ inválido (${cpfCnpj}). O CNPJ deve conter exatamente 14 dígitos.`
-        });
-        return;
-      }
-      const docType = "CNPJ";
-      
-      const payersFirstName = name.split(" ")[0] || "MEI";
-      const payersLastName = name.split(" ").slice(1).join(" ") || "Flow";
-
       const sysIntegrator = process.env.MERCADO_PAGO_INTEGRATOR_ID;
       const integratorId = (sysIntegrator || "").replace(/^["']|["']$/g, "").trim();
 
-      const mpConfigOptions: any = {
-        timeout: 5000,
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${mpToken}`,
+        "X-Idempotency-Key": `chk_${userId}_${Date.now()}`
       };
+
       if (integratorId) {
-        mpConfigOptions.integratorId = integratorId;
+        headers["X-Integrator-Id"] = integratorId;
       }
 
-      const mpClient = new MercadoPagoConfig({
-        accessToken: mpToken,
-        options: mpConfigOptions,
-      });
-
-      const paymentSdk = new Payment(mpClient);
-      const cardTokenSdk = new CardToken(mpClient);
-
       if (paymentMethod === "PIX") {
+        const payersFirstName = (name || "Comprador").split(" ")[0] || "Comprador";
+        const payersLastName = (name || "MEIFlow").split(" ").slice(1).join(" ") || "MEIFlow";
+
         const pixPayload = {
           transaction_amount: 29.90,
-          description: "Plano Premium - MEI Flow",
+          description: "Plano Premium - MEI Flow - Pix",
           payment_method_id: "pix",
           payer: {
-            email: email,
+            email: email.trim(),
             first_name: payersFirstName,
             last_name: payersLastName,
             identification: {
@@ -572,13 +574,24 @@ async function startServer() {
           external_reference: userId
         };
 
-        console.log(`[MP Checkout Router]: Sending payout creation to MP via official SDK`);
-        const paymentData = await paymentSdk.create({
-          body: pixPayload,
-          requestOptions: {
-            idempotencyKey: `pix_${userId}_${Date.now()}`
-          }
+        console.log(`[Checkout Native Fetch Pix]: Sending creation request to Mercado Pago API`);
+        const mpResponse = await fetch("https://api.mercadopago.com/v1/payments", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(pixPayload)
         });
+
+        const paymentData: any = await mpResponse.json();
+
+        if (!mpResponse.ok) {
+          const errorMsg = paymentData.message || JSON.stringify(paymentData);
+          console.error(`[Checkout Native Fetch Pix Error]: ${errorMsg}`);
+          res.status(mpResponse.status).json({
+            success: false,
+            mensagem: `Mercado Pago: ${errorMsg}`
+          });
+          return;
+        }
 
         const paymentId = paymentData.id;
 
@@ -597,21 +610,25 @@ async function startServer() {
               await handleMercadoPagoApproved(userId);
             }
           } catch (dbErr: any) {
-            console.error("[MP Checkout Router DB Sync Error (Pix)]:", dbErr.message);
+            console.error("[Checkout Native Fetch DB Sync Error (Pix)]:", dbErr.message);
           }
         }
 
         const pointOfInteraction = paymentData.point_of_interaction;
         const transactionData = pointOfInteraction?.transaction_data;
+        const qrCodeImage = transactionData?.qr_code_base64 || "";
+        const qrCodePayload = transactionData?.qr_code || "";
         
         return res.status(200).json({
           success: true,
           paymentId,
           status: paymentData.status,
           planType: paymentData.status === "approved" ? "premium" : "free",
+          qrCodeBase64: qrCodeImage,
+          qrCode: qrCodePayload,
           pixQrCode: {
-            encodedImage: transactionData?.qr_code_base64 || "",
-            payload: transactionData?.qr_code || ""
+            encodedImage: qrCodeImage,
+            payload: qrCodePayload
           }
         });
       }
@@ -635,23 +652,28 @@ async function startServer() {
           }
         };
 
-        console.log(`[MP Checkout Router]: Tokenizing card via SDK...`);
-        let tokenResp: any;
-        try {
-          tokenResp = await cardTokenSdk.create({
-            body: cardTokenPayload
-          });
-        } catch (tokenErr: any) {
-          console.error("[MP Tokenization Error inside Router]:", tokenErr);
-          const errDetails = tokenErr.message || "Verifique os dados informados.";
+        console.log(`[Checkout Native Fetch CC]: Tokenizing card via fetch...`);
+        const tokenResp = await fetch("https://api.mercadopago.com/v1/card_tokens", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(cardTokenPayload)
+        });
+
+        const tokenData: any = await tokenResp.json();
+
+        if (!tokenResp.ok) {
+          console.error("[Checkout Native Fetch CC Token Error]:", tokenData);
+          const errDetails = tokenData.message || "Verifique os dados informados.";
           return res.status(400).json({
             success: false,
             mensagem: `Mercado Pago (Cartão recusado/inválido): ${errDetails}`
           });
         }
 
-        const cardTokenId = tokenResp.id;
+        const cardTokenId = tokenData.id;
         const detectedBrand = getPaymentMethodId(creditCard.number);
+        const payersFirstName = (name || "Comprador").split(" ")[0] || "Comprador";
+        const payersLastName = (name || "MEIFlow").split(" ").slice(1).join(" ") || "MEIFlow";
 
         const cardPayload = {
           token: cardTokenId,
@@ -660,7 +682,7 @@ async function startServer() {
           installments: 1,
           payment_method_id: detectedBrand,
           payer: {
-            email: email,
+            email: email.trim(),
             first_name: payersFirstName,
             last_name: payersLastName,
             identification: {
@@ -671,13 +693,23 @@ async function startServer() {
           external_reference: userId
         };
 
-        console.log(`[MP Checkout Router]: Creating card payment via SDK...`);
-        const paymentData = await paymentSdk.create({
-          body: cardPayload,
-          requestOptions: {
-            idempotencyKey: `card_${userId}_${Date.now()}`
-          }
+        console.log(`[Checkout Native Fetch CC]: Creating payment via fetch...`);
+        const mpPaymentResp = await fetch("https://api.mercadopago.com/v1/payments", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(cardPayload)
         });
+
+        const paymentData: any = await mpPaymentResp.json();
+
+        if (!mpPaymentResp.ok) {
+          const errorMsg = paymentData.message || JSON.stringify(paymentData);
+          console.error(`[Checkout Native Fetch CC Payment Error]: ${errorMsg}`);
+          return res.status(mpPaymentResp.status).json({
+            success: false,
+            mensagem: `Mercado Pago: ${errorMsg}`
+          });
+        }
 
         const isApproved = paymentData.status === "approved";
         const paymentId = paymentData.id;
@@ -702,7 +734,7 @@ async function startServer() {
               await handleMercadoPagoApproved(userId);
             }
           } catch (dbErr: any) {
-            console.error("[MP Checkout Router DB Sync Error (Credit Card)]:", dbErr.message);
+            console.error("[Checkout Native Fetch CC DB Sync Error]:", dbErr.message);
           }
         }
 
@@ -724,25 +756,15 @@ async function startServer() {
 
       res.status(400).json({ success: false, mensagem: "Forma de pagamento não suportada pelo checkout." });
     } catch (err: any) {
-      console.error("[MP Checkout API Router Error]:", err.response?.data || err.message);
-      let errorMessage = "Erro na integração com Mercado Pago.";
-      if (err.response?.data) {
-        const data = err.response.data;
-        const details = data.cause && Array.isArray(data.cause)
-          ? data.cause.map((c: any) => `${c.description || c.code} (${c.data || ""})`).join(", ")
-          : data.message;
-        errorMessage = `Erro de Validação do Mercado Pago: ${details || JSON.stringify(data)}`;
-      } else {
-        errorMessage = `Erro de Conexão com Mercado Pago: ${err.message}`;
-      }
-      res.status(400).json({ success: false, mensagem: errorMessage });
+      console.error("[MP Checkout API Router Error]:", err.message);
+      res.status(400).json({ success: false, mensagem: `Erro na integração: ${err.message}` });
     }
   });
 
   // ==========================================
   // 4. WEBHOOK: MERCADO PAGO PREMIUM NOTIFICATION
   // ==========================================
-  app.post("/api/mercadopago/webhook", async (req, res) => {
+  app.post(["/api/mercadopago/webhook", "/api/webhooks/mercadopago"], async (req, res) => {
     try {
       res.status(200).json({ received: true });
 
@@ -783,6 +805,9 @@ async function startServer() {
             const statusUpdate = {
               mercadoPagoPaymentId: paymentId,
               mercadoPagoStatus: status,
+              planType: status === "approved" ? "premium" : "free",
+              plan: status === "approved" ? "premium" : "free",
+              status: status === "approved" ? "active" : "inactive",
               updatedAt: new Date().toISOString()
             };
             await db.collection("users").doc(userId).set(statusUpdate, { merge: true });
@@ -798,6 +823,43 @@ async function startServer() {
       })();
     } catch (err: any) {
       console.error("[MP Webhook Router Global Error]:", err.message);
+    }
+  });
+
+  // ==========================================
+  // 4B. POLLING: DYNAMIC USER PLAN STATUS CHECK
+  // ==========================================
+  app.get("/api/user/status", async (req, res) => {
+    try {
+      const { userId } = req.query;
+      if (!userId) {
+        return res.status(400).json({ success: false, error: "userId is required for polling query." });
+      }
+
+      let planType = "free";
+      let plan = "free";
+      let status = "inactive";
+
+      if (db) {
+        const docRef = db.collection("users").doc(String(userId));
+        const docSnap = await docRef.get();
+        if (docSnap.exists) {
+          const data = docSnap.data();
+          planType = data.planType || "free";
+          plan = data.plan || data.planType || "free";
+          status = data.status || "inactive";
+        }
+      }
+
+      return res.json({
+        success: true,
+        planType,
+        plan,
+        status
+      });
+    } catch (err: any) {
+      console.error("[Get User Status API Error]:", err.message);
+      return res.status(500).json({ success: false, error: err.message });
     }
   });
 

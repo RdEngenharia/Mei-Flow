@@ -21,6 +21,22 @@ const getFirebaseProjectId = () => {
   return "mei-flow-692d9"; // fallback
 };
 
+const getFirebaseDatabaseId = () => {
+  if (process.env.FIREBASE_DATABASE_ID) {
+    return process.env.FIREBASE_DATABASE_ID;
+  }
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      return config.firestoreDatabaseId || "(default)";
+    } catch (err) {
+      console.error("Error reading firebase-applet-config.json for database ID inside webhook API:", err);
+    }
+  }
+  return "(default)";
+};
+
 const projId = getFirebaseProjectId();
 let appInitialized = false;
 
@@ -37,7 +53,17 @@ if (projId) {
   }
 }
 
-const db = appInitialized ? getFirestore() : null;
+let db: any = null;
+if (appInitialized) {
+  try {
+    const dbId = getFirebaseDatabaseId();
+    db = dbId === "(default)" ? getFirestore() : getFirestore(dbId);
+    console.log(`[Firebase Admin Webhook]: Connected to Firestore database ID: ${dbId}`);
+  } catch (dbInitErr: any) {
+    console.error("[Firebase Admin Webhook Init Error]: failed to retrieve firestore database:", dbInitErr.message);
+    db = null;
+  }
+}
 
 async function handleApprovedUpgrade(userId: string) {
   if (!db) {
@@ -55,6 +81,8 @@ async function handleApprovedUpgrade(userId: string) {
     // 1. UPDATE USER TO PREMIUM CONTROLS
     const premiumUpdate = {
       planType: "premium",
+      plan: "premium",
+      status: "active",
       invoiceLimit: 30,
       invoiceUsed: 0,
       updatedAt: new Date().toISOString()

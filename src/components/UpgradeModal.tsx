@@ -55,6 +55,14 @@ export default function UpgradeModal({
   const [cardExpiry, setCardExpiry] = useState("");
   const [cardCvv, setCardCvv] = useState("");
 
+  const [documentNumber, setDocumentNumber] = useState(cnpjPrestador ? cnpjPrestador.replace(/\D/g, "") : "");
+
+  useEffect(() => {
+    if (cnpjPrestador) {
+      setDocumentNumber(cnpjPrestador.replace(/\D/g, ""));
+    }
+  }, [cnpjPrestador]);
+
   const activeUserId = propUserId || auth.currentUser?.uid || "user_49281";
 
   // Watch for premium activation in real-time from parent profile listener
@@ -101,13 +109,13 @@ export default function UpgradeModal({
     setIsSubmitting(true);
     setErrorMessage(null);
     try {
-      const response = await fetch("/api/mercadopago/checkout", {
+      const response = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: activeUserId,
           name: meiName || "Microempreendedor MEI",
-          cpfCnpj: cnpjPrestador ? cnpjPrestador.replace(/\D/g, "") : "44837190000183",
+          documentNumber: documentNumber.replace(/\D/g, ""),
           email: email || "contato@meiflow.com",
           paymentMethod: "PIX"
         })
@@ -119,14 +127,16 @@ export default function UpgradeModal({
         setErrorMessage(null);
 
         // Attempt to extract the QR Code Image Base64 from multiple possible formats
-        const qrCodeBase64 = data.pixQrCode?.encodedImage || 
+        const qrCodeBase64 = data.qrCodeBase64 || 
+                             data.pixQrCode?.encodedImage || 
                              data.point_of_interaction?.transaction_data?.qr_code_base64 || 
                              data.transaction_data?.qr_code_base64 || 
                              data.qr_code_base64 ||
                              null;
 
         // Attempt to extract the Pix Copia e Cola Payload from multiple structures
-        const qrCodePayload = data.pixQrCode?.payload || 
+        const qrCodePayload = data.qrCode || 
+                              data.pixQrCode?.payload || 
                               data.point_of_interaction?.transaction_data?.qr_code || 
                               data.qr_code || 
                               data.payload ||
@@ -149,12 +159,45 @@ export default function UpgradeModal({
     }
   };
 
-  // Generate Pix dynamically upon entering the step
+  // Escuta em tempo real (Polling) para verificar a aprovação do Pix a cada 4 segundos
   useEffect(() => {
-    if (checkoutStep === "pix" && !pixQrCodeBase64) {
-      handleGeneratePix();
+    if (checkoutStep !== "pix" || !pixQrCodeBase64 || success) return;
+
+    console.log(`[Pix Polling]: Iniciando loop de checagem para o usuário: ${activeUserId}`);
+
+    const intervalId = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/user/status?userId=${encodeURIComponent(activeUserId)}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.planType === "premium") {
+            console.log("[Pix Polling SUCCESS]: Usuário agora é Premium!");
+            clearInterval(intervalId);
+            setSuccess(true);
+            await onUpgradeSuccess();
+          }
+        }
+      } catch (err) {
+        console.error("Erro na rotina de polling do Pix:", err);
+      }
+    }, 4000);
+
+    return () => {
+      console.log(`[Pix Polling]: Limpando intervalo de checagem para: ${activeUserId}`);
+      clearInterval(intervalId);
+    };
+  }, [checkoutStep, pixQrCodeBase64, success, activeUserId, onUpgradeSuccess]);
+
+  // Redirecionamento automático após 4 segundos quando a liberação do Premium é confirmada
+  useEffect(() => {
+    if (success) {
+      console.log("[Redirect Timer]: Premium ativo, iniciando delay de redirecionamento de 4s.");
+      const redirectTimer = setTimeout(() => {
+        onClose();
+      }, 4000);
+      return () => clearTimeout(redirectTimer);
     }
-  }, [checkoutStep]);
+  }, [success, onClose]);
 
   // 2. Real Payment via Credit Card with Mercado Pago
   const handleCardSubmit = async (e: React.FormEvent) => {
@@ -261,11 +304,18 @@ export default function UpgradeModal({
               <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600 border border-emerald-100/50 mx-auto">
                 <CheckCircle className="w-6 h-6 shrink-0 animate-bounce" />
               </div>
-              <div className="space-y-1 max-w-xs mx-auto">
-                <h4 className="text-base font-extrabold text-slate-800 tracking-tight">Premium Ativado com Sucesso!</h4>
+              <div className="space-y-2 max-w-xs mx-auto">
+                <span className="text-emerald-700 font-black text-xs uppercase tracking-wide bg-emerald-50 border border-emerald-100 px-3 py-1 rounded-full inline-block">
+                  Parabéns! O seu plano Premium está ativo
+                </span>
+                <h4 className="text-base font-extrabold text-slate-800 tracking-tight">Assinatura Ativada!</h4>
                 <p className="text-xs text-slate-500 leading-normal">
-                  Parabéns! Sua assinatura foi confirmada através do sistema integrado e todos os privilégios e recursos extras do MEI Flow já estão ativos na sua conta.
+                  Identificamos o pagamento com sucesso via sistema de conciliação integrado. Todos os recursos adicionais já foram desbloqueados.
                 </p>
+                <div className="pt-2 flex items-center justify-center gap-2 text-[11px] text-slate-400 font-medium">
+                  <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping shrink-0" />
+                  <span>Redirecionando para a Dashboard...</span>
+                </div>
               </div>
 
               <button
@@ -273,7 +323,7 @@ export default function UpgradeModal({
                 className="w-full py-3 bg-slate-900 hover:bg-slate-850 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer text-center block uppercase tracking-wider"
                 id="success-modal-exit-btn"
               >
-                Começar a Usar Recursos Premium ➔
+                Ir para a Dashboard Agora ➔
               </button>
             </div>
           ) : (
@@ -412,70 +462,95 @@ export default function UpgradeModal({
                   >
                     <ArrowLeft className="w-3.5 h-3.5" /> Voltar
                   </button>
-
+ 
                   <div className="space-y-1">
                     <h4 className="text-sm font-black text-slate-900">Pagamento via Pix</h4>
                     <p className="text-xs text-slate-500 leading-normal max-w-xs mx-auto">
-                      Escaneie o QR Code abaixo com seu aplicativo bancário ou use Pix Copia e Cola.
+                      Instante e seguro. O plano Premium é liberado imediatamente.
                     </p>
                   </div>
-
-                  {isSubmitting ? (
-                    <div key="pix-loading-spinner-box" className="py-8 space-y-3 flex flex-col items-center justify-center" id="pix-loading-spinner-box">
-                      <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
-                      <span className="text-xs text-slate-500 font-bold">Gerando Pix oficial no Mercado Pago...</span>
-                    </div>
-                  ) : errorMessage ? (
-                    <div key="pix-error-box" className="p-4 bg-rose-50 border border-rose-200 rounded-xl space-y-2.5" id="pix-error-box">
-                      <p className="text-xs text-rose-800 font-semibold leading-normal">{errorMessage}</p>
+ 
+                  {!pixQrCodeBase64 ? (
+                    <div className="bg-slate-50/50 border border-slate-200/80 p-5 rounded-2xl max-w-xs mx-auto space-y-4 text-left animate-fade-in">
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] font-black text-slate-700 uppercase tracking-wider block">
+                          Informe o CPF ou CNPJ do comprador
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="000.000.000-00 ou 00.000.000/0000-00"
+                          value={documentNumber}
+                          onChange={(e) => setDocumentNumber(e.target.value)}
+                          className="w-full px-3.5 py-2.5 bg-white border border-slate-250 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 rounded-xl text-xs font-black text-slate-800 transition-all focus:outline-none placeholder:text-slate-400 placeholder:font-normal text-center"
+                          id="pix-document-input"
+                        />
+                      </div>
+ 
+                      {errorMessage && (
+                        <div className="p-3 bg-rose-50 border border-rose-100 rounded-xl">
+                          <p className="text-[11px] text-rose-800 font-bold leading-normal">{errorMessage}</p>
+                        </div>
+                      )}
+ 
                       <button
                         onClick={handleGeneratePix}
-                        className="inline-flex py-2 px-4 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg cursor-pointer shadow-sm transition-all uppercase tracking-wider"
+                        disabled={isSubmitting || !documentNumber.replace(/\D/g, "")}
+                        className="w-full py-3 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-extrabold text-[11px] rounded-xl shadow-md transition-all uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                        id="pix-submit-btn"
                       >
-                        Tentar Novamente
+                        {isSubmitting ? (
+                          <>
+                            <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
+                            <span>Gerando Pix...</span>
+                          </>
+                        ) : (
+                          <span>Gerar Código Pix</span>
+                        )}
                       </button>
                     </div>
                   ) : (
-                    <div key="pix-details-content" className="space-y-4">
+                    <div key="pix-details-content" className="space-y-4 animate-fade-in">
+                      {errorMessage && (
+                        <div className="p-3 bg-rose-50 border border-rose-100 rounded-xl max-w-xs mx-auto text-left">
+                          <p className="text-[11px] text-rose-800 font-bold leading-normal">{errorMessage}</p>
+                        </div>
+                      )}
+ 
                       {/* Visual QR Code representation */}
                       <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl max-w-[200px] mx-auto space-y-3 relative">
                         <div className="bg-white p-2.5 rounded-xl border border-slate-100 flex items-center justify-center">
-                          {pixQrCodeBase64 ? (
-                            <img 
-                              src={pixQrCodeBase64.startsWith("data:") ? pixQrCodeBase64 : `data:image/png;base64,${pixQrCodeBase64}`} 
-                              className="w-36 h-36" 
-                              alt="QR Code Pix" 
-                              referrerPolicy="no-referrer"
-                            />
-                          ) : (
-                            <QrCode className="w-36 h-36 text-slate-300" />
-                          )}
+                          <img 
+                            src={pixQrCodeBase64.startsWith("data:") ? pixQrCodeBase64 : `data:image/png;base64,${pixQrCodeBase64}`} 
+                            className="w-36 h-36" 
+                            alt="QR Code Pix" 
+                            referrerPolicy="no-referrer"
+                          />
                         </div>
-                        <div className="text-[10px] font-bold text-slate-700 bg-slate-250/50 py-1 px-2 rounded-md">
+                        <div className="text-[10px] font-bold text-slate-700 bg-slate-200/50 py-1 px-2 rounded-md">
                           Valor: <strong className="text-emerald-700">R$ 29,90 Por Mês</strong>
                         </div>
                       </div>
-
+ 
                       {/* Copia e Cola box */}
-                      <div className="space-y-2">
+                      <div className="space-y-2 max-w-xs mx-auto">
                         <button
                           onClick={handleCopyPix}
                           disabled={!pixPayload}
-                          className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-slate-800 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer border border-slate-200/50"
+                          className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-slate-800 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer border border-slate-200/50 shadow-sm"
                           id="copy-pix-payload-btn"
                         >
                           <Clipboard className="w-4 h-4 text-slate-600" />
                           <span>{isCopied ? "Pix Copiado!" : "Copiar Código Copia e Cola"}</span>
                         </button>
                       </div>
-
-                      <div className="py-3 px-4 bg-amber-50/50 border border-amber-200/60 rounded-2xl flex items-center justify-center gap-2">
-                        <div className="w-2.5 h-2.5 bg-amber-500 rounded-full animate-ping shrink-0" />
-                        <span className="text-[11px] text-amber-900 font-bold">
-                          Aguardando sinalização bancária do Mercado Pago...
+ 
+                      <div className="py-3 px-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-center justify-center gap-2 max-w-xs mx-auto">
+                        <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping shrink-0" />
+                        <span className="text-[11px] text-emerald-950 font-bold">
+                          Aguardando pagamento do Mercado Pago...
                         </span>
                       </div>
-
+ 
                       <p className="text-[10px] text-slate-400 font-medium">
                         O plano Premium será liberado automaticamente em tela assim que o pagamento for detectado pelo webhook.
                       </p>
