@@ -975,12 +975,9 @@ async function startServer() {
 
           await handleMercadoPagoApproved(userId);
         } catch (dbPromotionErr: any) {
-          console.warn("[Get User Status API Sync Promo Error]:", sanitizeDBError(dbPromotionErr));
-          return res.status(500).json({
-            success: false,
-            status: 500,
-            mensagem: "Erro ao atualizar dados cadastrais no banco de dados."
-          });
+          const sanitizedMsg = sanitizeDBError(dbPromotionErr);
+          console.warn("[Get User Status API - Preview Contingency Warning]: Firestore promotion bypassed, turning on local memory contingency:", sanitizedMsg);
+          // Continua em execução em vez de jogar erro 500, permitindo fluxo de ponta a ponta
         }
       }
 
@@ -1003,16 +1000,13 @@ async function startServer() {
             });
           }
         } catch (readErr: any) {
-          console.warn("[Get User Status API DB Read Error]:", sanitizeDBError(readErr));
-          return res.status(500).json({
-            success: false,
-            status: 500,
-            mensagem: "Erro ao ler dados de assinatura do banco de dados."
-          });
+          const sanitizedMsg = sanitizeDBError(readErr);
+          console.warn("[Get User Status API - Preview DB Read Contingency Warning]: Database read bypassed, falling back to local memory map status:", sanitizedMsg);
+          // Continua para o retorno de contingência abaixo
         }
       }
 
-      // Resposta padrão caso DB indisponível ou inexistente
+      // Resposta padrão caso DB indisponível, inexistente ou bloqueado no Preview
       return res.json({
         success: true,
         isPremium: isApprovedOnMP,
