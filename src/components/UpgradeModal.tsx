@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   X, 
   CheckCircle, 
@@ -39,6 +39,16 @@ export default function UpgradeModal({
   email,
   planType
 }: UpgradeModalProps) {
+  // Track component mount status to block setState calls in unmounted callbacks
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
   const [checkoutStep, setCheckoutStep] = useState<CheckoutStep>("details");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -108,7 +118,11 @@ export default function UpgradeModal({
     if (pixPayload) {
       navigator.clipboard.writeText(pixPayload);
       setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 2500);
+      setTimeout(() => {
+        if (isMounted.current && !success) {
+          setIsCopied(false);
+        }
+      }, 2500);
     }
   };
 
@@ -130,6 +144,8 @@ export default function UpgradeModal({
       });
       
       const data = await response.json();
+      if (!isMounted.current || success) return;
+
       if (response.ok && (data.success || data.id || data.status === "pending")) {
         // Clear any previous error messages explicitly
         setErrorMessage(null);
@@ -161,9 +177,13 @@ export default function UpgradeModal({
       }
     } catch (err: any) {
       console.error(err);
-      setErrorMessage("Erro técnico de rede ao tentar gerar o Pix com o Mercado Pago.");
+      if (isMounted.current && !success) {
+        setErrorMessage("Erro técnico de rede ao tentar gerar o Pix com o Mercado Pago.");
+      }
     } finally {
-      setIsSubmitting(false);
+      if (isMounted.current && !success) {
+        setIsSubmitting(false);
+      }
     }
   };
 
@@ -178,11 +198,16 @@ export default function UpgradeModal({
         const response = await fetch(getApiUrl(`/api/user/status?userId=${encodeURIComponent(activeUserId)}`));
         if (response.ok) {
           const data = await response.json();
-          if (data.success && data.planType === "premium") {
-            console.log("[Pix Polling SUCCESS]: Usuário agora é Premium!");
+          // Certifica que o componente ainda está montado e não finalizado antes de alterar estado
+          if (isMounted.current && !success) {
+            if (data.success && data.planType === "premium") {
+              console.log("[Pix Polling SUCCESS]: Usuário agora é Premium!");
+              clearInterval(intervalId);
+              setSuccess(true);
+              await onUpgradeSuccess();
+            }
+          } else {
             clearInterval(intervalId);
-            setSuccess(true);
-            await onUpgradeSuccess();
           }
         }
       } catch (err) {
@@ -201,11 +226,12 @@ export default function UpgradeModal({
     if (success) {
       console.log("[Redirect Timer]: Premium ativo, iniciando delay de redirecionamento de 4s.");
       const redirectTimer = setTimeout(() => {
-        onClose();
+        // Redireciona via window.location de forma limpa e nativa para a rota da Dashboard ("/") para atualizar o contexto
+        window.location.href = "/";
       }, 4000);
       return () => clearTimeout(redirectTimer);
     }
-  }, [success, onClose]);
+  }, [success]);
 
   // 2. Real Payment via Credit Card with Mercado Pago
   const handleCardSubmit = async (e: React.FormEvent) => {
@@ -259,6 +285,8 @@ export default function UpgradeModal({
       });
 
       const data = await response.json();
+      if (!isMounted.current || success) return;
+
       if (response.ok && data.success) {
         if (data.planType === "premium" || data.status === "approved") {
           setSuccess(true);
@@ -271,9 +299,13 @@ export default function UpgradeModal({
       }
     } catch (err: any) {
       console.error(err);
-      setErrorMessage("Erro de rede ao conectar-se ao servidor de pagamentos.");
+      if (isMounted.current && !success) {
+        setErrorMessage("Erro de rede ao conectar-se ao servidor de pagamentos.");
+      }
     } finally {
-      setIsSubmitting(false);
+      if (isMounted.current && !success) {
+        setIsSubmitting(false);
+      }
     }
   };
 
