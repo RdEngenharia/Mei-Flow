@@ -205,6 +205,7 @@ export default function UpgradeModal({
   };
 
   // Escuta em tempo real (Polling) para verificar a aprovação do Pix de forma resiliente e infinita
+  // Regra Estrita: Sem limite de tentativas, ignorando erros de rede/timeout/invalid-json de forma silenciosa para prezar pelo congelamento do QR-Code na tela
   useEffect(() => {
     if (!showQrCode || !pixQrCodeBase64 || success) return;
 
@@ -214,12 +215,13 @@ export default function UpgradeModal({
       try {
         const response = await fetch(getApiUrl(`/api/user/status?userId=${encodeURIComponent(activeUserId)}`));
         if (!response.ok) {
-          console.warn(`[Pix Polling Warning]: API de status retornou erro HTTP ${response.status}. Mantendo o loop de polling ativo.`);
+          // Erros HTTP (ex: 504 Gateway Timeout da Vercel, 500 Interno ou 404) não devem quebrar o loop nem reverter o estado
+          console.warn('Aguardando conexão estável...');
           return;
         }
 
         const data = await response.json();
-        const isApproved = data && (data.isPremium === true || data.status === "approved" || data.planType === "premium");
+        const isApproved = !!(data && (data.isPremium === true || data.status === "approved" || data.planType === "premium"));
 
         if (isApproved) {
           console.log("[Pix Polling SUCCESS]: Confirmação explícita de sucesso do Mercado Pago! Efetuando redirecionamento nativo instantâneo.");
@@ -229,8 +231,9 @@ export default function UpgradeModal({
           return;
         }
       } catch (err) {
-        // Ignorar Erros de Conexão no Frontend
-        console.warn("Aguardando conexão estável...", err);
+        // Ignorar Erros de Conexão no Frontend (falhas de requisição de rede, timeout, JSON inválido de proxies, etc.)
+        console.warn('Aguardando conexão estável...', err);
+        return;
       }
     }, 4000);
 
