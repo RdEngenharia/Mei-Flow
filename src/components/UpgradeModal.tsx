@@ -198,16 +198,12 @@ export default function UpgradeModal({
         const response = await fetch(getApiUrl(`/api/user/status?userId=${encodeURIComponent(activeUserId)}`));
         if (response.ok) {
           const data = await response.json();
-          // Certifica que o componente ainda está montado e não finalizado antes de alterar estado
-          if (isMounted.current && !success) {
-            if (data.success && data.planType === "premium") {
-              console.log("[Pix Polling SUCCESS]: Usuário agora é Premium!");
-              clearInterval(intervalId);
-              setSuccess(true);
-              await onUpgradeSuccess();
-            }
-          } else {
+          if (data.success && data.planType === "premium") {
+            console.log("[Pix Polling SUCCESS]: Usuário agora é Premium! Efetuando redirecionamento nativo instantâneo.");
             clearInterval(intervalId);
+            // Redirecionamento nativo instantâneo para evitar que a árvore do React quebre ao desmontar elementos de forma assíncrona
+            window.location.replace("/");
+            return;
           }
         }
       } catch (err) {
@@ -219,19 +215,7 @@ export default function UpgradeModal({
       console.log(`[Pix Polling]: Limpando intervalo de checagem para: ${activeUserId}`);
       clearInterval(intervalId);
     };
-  }, [checkoutStep, pixQrCodeBase64, success, activeUserId, onUpgradeSuccess]);
-
-  // Redirecionamento automático após 4 segundos quando a liberação do Premium é confirmada
-  useEffect(() => {
-    if (success) {
-      console.log("[Redirect Timer]: Premium ativo, iniciando delay de redirecionamento de 4s.");
-      const redirectTimer = setTimeout(() => {
-        // Redireciona via window.location de forma limpa e nativa para a rota da Dashboard ("/") para atualizar o contexto
-        window.location.href = "/";
-      }, 4000);
-      return () => clearTimeout(redirectTimer);
-    }
-  }, [success]);
+  }, [checkoutStep, pixQrCodeBase64, success, activeUserId]);
 
   // 2. Real Payment via Credit Card with Mercado Pago
   const handleCardSubmit = async (e: React.FormEvent) => {
@@ -289,8 +273,10 @@ export default function UpgradeModal({
 
       if (response.ok && data.success) {
         if (data.planType === "premium" || data.status === "approved") {
-          setSuccess(true);
-          await onUpgradeSuccess();
+          console.log("[Card Payment SUCCESS]: Redirecionando de forma nativa instantaneamente.");
+          // Redirecionamento nativo instantâneo para evitar que a árvore do React quebre ao desmontar elementos de forma assíncrona
+          window.location.replace("/");
+          return;
         } else {
           setErrorMessage("Assinatura enviada, porém o pagamento ainda está pendente ou sob análise de fraude no Mercado Pago.");
         }
