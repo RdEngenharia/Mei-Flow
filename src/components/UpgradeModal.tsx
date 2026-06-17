@@ -65,6 +65,14 @@ export default function UpgradeModal({
 
   const activeUserId = propUserId || auth.currentUser?.uid || "user_49281";
 
+  const getApiUrl = (path: string): string => {
+    // Dynamic absolute resolution for production build / client env compatibility
+    if (typeof window !== "undefined" && window.location) {
+      return `${window.location.origin}${path}`;
+    }
+    return `https://mei-flow-flax.vercel.app${path}`;
+  };
+
   // Watch for premium activation in real-time from parent profile listener
   useEffect(() => {
     if (planType === "premium") {
@@ -109,7 +117,7 @@ export default function UpgradeModal({
     setIsSubmitting(true);
     setErrorMessage(null);
     try {
-      const response = await fetch("/api/checkout", {
+      const response = await fetch(getApiUrl("/api/checkout"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -167,7 +175,7 @@ export default function UpgradeModal({
 
     const intervalId = setInterval(async () => {
       try {
-        const response = await fetch(`/api/user/status?userId=${encodeURIComponent(activeUserId)}`);
+        const response = await fetch(getApiUrl(`/api/user/status?userId=${encodeURIComponent(activeUserId)}`));
         if (response.ok) {
           const data = await response.json();
           if (data.success && data.planType === "premium") {
@@ -231,7 +239,7 @@ export default function UpgradeModal({
       const expiryMonth = parts[0];
       const expiryYear = "20" + parts[1]; // MM/AA -> MM/20AA
 
-      const response = await fetch("/api/mercadopago/checkout", {
+      const response = await fetch(getApiUrl("/api/mercadopago/checkout"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

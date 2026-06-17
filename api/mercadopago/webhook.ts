@@ -1,4 +1,4 @@
-import { initializeApp, getApps } from "firebase-admin/app";
+import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import path from "path";
 import fs from "fs";
@@ -44,7 +44,20 @@ let adminApp: any = null;
 try {
   if (getApps().length === 0) {
     const projId = getFirebaseProjectId();
-    if (projId) {
+    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+    const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+
+    if (projId && clientEmail && privateKey) {
+      const formattedPrivateKey = privateKey.replace(/\\n/g, '\n');
+      adminApp = initializeApp({
+        credential: cert({
+          projectId: projId,
+          clientEmail: clientEmail,
+          privateKey: formattedPrivateKey,
+        })
+      });
+      console.log(`[Firebase Admin Webhook]: Initialized securely with service account certification for projectId: ${projId}`);
+    } else if (projId) {
       adminApp = initializeApp({
         projectId: projId,
       });
