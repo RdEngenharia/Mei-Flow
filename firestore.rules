@@ -3,10 +3,20 @@ service cloud.firestore {
   match /databases/{database}/documents {
     
     // -----------------------------------------------------------------
-    // 1. ÁREA DO PERFIL DO USUÁRIO
+    // 1. ÁREA DO PERFIL DO USUÁRIO (Protegida contra Auto-Upgrade de Plano)
     // -----------------------------------------------------------------
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null && request.auth.uid == userId;
+      
+      // Impede auto-promoção ao criar o documento
+      allow create: if request.auth != null && request.auth.uid == userId && 
+        (!request.resource.data.keys().hasAny(['planType', 'plan', 'isPremium']) || request.resource.data.planType == 'free');
+      
+      // Impede modificação de campos de assinatura e faturamento no update pelo SDK Client
+      allow update: if request.auth != null && request.auth.uid == userId && 
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['planType', 'plan', 'isPremium', 'status', 'mercadoPagoStatus', 'mercadoPagoPaymentId']);
+        
+      allow delete: if request.auth != null && request.auth.uid == userId;
       
       // Permite que o usuário gerencie seu próprio catálogo de produtos/serviços
       match /catalog/{itemId} {
@@ -21,7 +31,18 @@ service cloud.firestore {
 
     // Compatibilidade com coleção legada de usuários sincronizada pelo backend
     match /usuarios/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null && request.auth.uid == userId;
+      
+      // Impede auto-promoção ao criar o documento legado
+      allow create: if request.auth != null && request.auth.uid == userId && 
+        (!request.resource.data.keys().hasAny(['planType', 'plan', 'isPremium']) || request.resource.data.planType == 'free');
+      
+      // Impede modificação de campos de assinatura no update legado pelo SDK Client
+      allow update: if request.auth != null && request.auth.uid == userId && 
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['planType', 'plan', 'isPremium', 'status', 'mercadoPagoStatus', 'mercadoPagoPaymentId']);
+        
+      allow delete: if request.auth != null && request.auth.uid == userId;
+      
       match /{document=**} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
