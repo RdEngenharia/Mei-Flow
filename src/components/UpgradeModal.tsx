@@ -196,18 +196,24 @@ export default function UpgradeModal({
     const intervalId = setInterval(async () => {
       try {
         const response = await fetch(getApiUrl(`/api/user/status?userId=${encodeURIComponent(activeUserId)}`));
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.planType === "premium") {
-            console.log("[Pix Polling SUCCESS]: Usuário agora é Premium! Efetuando redirecionamento nativo instantâneo.");
-            clearInterval(intervalId);
-            // Redirecionamento nativo instantâneo para evitar que a árvore do React quebre ao desmontar elementos de forma assíncrona
-            window.location.replace("/");
-            return;
-          }
+        if (!response.ok) {
+          console.warn(`[Pix Polling Warning]: API de status retornou erro HTTP ${response.status}. Mantendo o loop ativo.`);
+          return;
+        }
+
+        const data = await response.json();
+        const isApproved = data && (data.isPremium === true || data.status === "approved" || data.planType === "premium");
+
+        if (isApproved) {
+          console.log("[Pix Polling SUCCESS]: Pagamento confirmado via Mercado Pago! Efetuando redirecionamento nativo instantâneo.");
+          clearInterval(intervalId);
+          // Redirecionamento nativo instantâneo para recarregar o contexto e evitar erros de desmontagem do Virtual DOM do React
+          window.location.replace("/");
+          return;
         }
       } catch (err) {
-        console.error("Erro na rotina de polling do Pix:", err);
+        // Tratamento estrito de exceção: captura network errors/timeouts/etc, registra aviso discreto no console e mantém loop ativo
+        console.warn("[Pix Polling Exception Warning]: Erro de rede ou oscilação na conexão ao verificar status do Pix. Mantendo o loop ativo.", err);
       }
     }, 4000);
 
