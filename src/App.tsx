@@ -639,19 +639,7 @@ export default function App() {
   const handleUpgradeSuccess = async () => {
     try {
       setPlanType("premium");
-      if (user) {
-        await saveUserProfileToFirebase(user.uid, {
-          meiName,
-          cnpjPrestador,
-          inscricaoMunicipal,
-          telefone: telefonePrestador,
-          planType: "premium",
-          companyLogo
-        });
-        triggerToast("✓ Parabéns! Ativação Premium do MEI Flow realizada com sucesso na nuvem!");
-      } else {
-        triggerToast("✓ Plano Premium do MEI Flow ativado com sucesso!");
-      }
+      triggerToast("✓ Plano Premium do MEI Flow ativado com sucesso!");
     } catch (e) {
       console.error("Erro no upgrade premium remoto:", e);
       triggerToast("⚠ Licença ativa!");

@@ -536,7 +536,6 @@ export async function saveUserProfileToFirebase(
     const dataToSave = {
       name: profileData.meiName,
       email: auth.currentUser?.email || '',
-      planType: profileData.planType || 'free',
       logoUrl: profileData.companyLogo || '',
       updatedAt: new Date().toISOString(),
       isCpfEmissor: profileData.isCpfEmissor || false,

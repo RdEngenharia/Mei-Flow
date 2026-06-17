@@ -6,58 +6,65 @@ import axios from "axios";
 
 // Securely initialize Firebase Admin in serverless environment
 const getFirebaseProjectId = () => {
-  if (process.env.FIREBASE_PROJECT_ID) {
-    return process.env.FIREBASE_PROJECT_ID;
-  }
   const configPath = path.join(process.cwd(), "firebase-applet-config.json");
   if (fs.existsSync(configPath)) {
     try {
       const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      return config.projectId;
+      if (config.projectId) return config.projectId;
     } catch (err) {
       console.error("Error reading firebase-applet-config.json in webhook API:", err);
     }
+  }
+  if (process.env.FIREBASE_PROJECT_ID) {
+    return process.env.FIREBASE_PROJECT_ID;
+  }
+  if (process.env.GOOGLE_CLOUD_PROJECT) {
+    return process.env.GOOGLE_CLOUD_PROJECT;
   }
   return "mei-flow-692d9"; // fallback
 };
 
 const getFirebaseDatabaseId = () => {
-  if (process.env.FIREBASE_DATABASE_ID) {
-    return process.env.FIREBASE_DATABASE_ID;
-  }
   const configPath = path.join(process.cwd(), "firebase-applet-config.json");
   if (fs.existsSync(configPath)) {
     try {
       const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      return config.firestoreDatabaseId || "(default)";
+      if (config.firestoreDatabaseId) return config.firestoreDatabaseId;
     } catch (err) {
       console.error("Error reading firebase-applet-config.json for database ID inside webhook API:", err);
     }
   }
+  if (process.env.FIREBASE_DATABASE_ID) {
+    return process.env.FIREBASE_DATABASE_ID;
+  }
   return "(default)";
 };
 
-const projId = getFirebaseProjectId();
-let appInitialized = false;
-
-if (projId) {
-  try {
-    if (getApps().length === 0) {
-      initializeApp({
+let adminApp: any = null;
+try {
+  if (getApps().length === 0) {
+    const projId = getFirebaseProjectId();
+    if (projId) {
+      adminApp = initializeApp({
         projectId: projId,
       });
+      console.log(`[Firebase Admin Webhook]: Initialized securely with projectId: ${projId}`);
+    } else {
+      adminApp = initializeApp();
+      console.log("[Firebase Admin Webhook]: Initialized with generic ADC (no config projectId found)");
     }
-    appInitialized = true;
-  } catch (err: any) {
-    console.error("[Firebase Admin Webhook Error]: Failed to initialize:", err.message);
+  } else {
+    adminApp = getApps()[0];
   }
+} catch (err: any) {
+  console.error("[Firebase Admin Webhook Error]: Failed to initialize:", err.message);
 }
 
 let db: any = null;
-if (appInitialized) {
+if (adminApp) {
   try {
     const dbId = getFirebaseDatabaseId();
-    db = dbId === "(default)" ? getFirestore() : getFirestore(dbId);
+    db = dbId === "(default)" ? getFirestore(adminApp) : getFirestore(adminApp, dbId);
     console.log(`[Firebase Admin Webhook]: Connected to Firestore database ID: ${dbId}`);
   } catch (dbInitErr: any) {
     console.error("[Firebase Admin Webhook Init Error]: failed to retrieve firestore database:", dbInitErr.message);
