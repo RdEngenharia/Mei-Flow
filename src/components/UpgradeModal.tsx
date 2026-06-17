@@ -58,6 +58,14 @@ export default function UpgradeModal({
   // Real Asaas billing state
   const [pixQrCodeBase64, setPixQrCodeBase64] = useState<string | null>(null);
   const [pixPayload, setPixPayload] = useState<string | null>(null);
+  const [showQrCode, setShowQrCode] = useState(false);
+
+  // Guard values: If showQrCode is true, we force checkoutStep to stay as "pix" permanently
+  useEffect(() => {
+    if (showQrCode && checkoutStep !== "pix") {
+      setCheckoutStep("pix");
+    }
+  }, [showQrCode, checkoutStep]);
   
   // Credit Card Form States
   const [cardNumber, setCardNumber] = useState("");
@@ -126,6 +134,13 @@ export default function UpgradeModal({
     }
   };
 
+  const handleCancelPix = () => {
+    setShowQrCode(false);
+    setPixQrCodeBase64(null);
+    setPixPayload(null);
+    setCheckoutStep("payment_method");
+  };
+
   // 1. Fetch real Pix invoice from Mercado Pago checkout endpoint
   const handleGeneratePix = async () => {
     setIsSubmitting(true);
@@ -169,6 +184,8 @@ export default function UpgradeModal({
         if (qrCodeBase64 || qrCodePayload) {
           setPixQrCodeBase64(qrCodeBase64);
           setPixPayload(qrCodePayload);
+          setShowQrCode(true);
+          setCheckoutStep("pix");
         } else {
           setErrorMessage("Credenciais ativas, porém o Mercado Pago não retornou os dados de pagamento Pix. Verifique as configurações de Pix no seu painel do Mercado Pago.");
         }
@@ -187,17 +204,17 @@ export default function UpgradeModal({
     }
   };
 
-  // Escuta em tempo real (Polling) para verificar a aprovação do Pix a cada 4 segundos
+  // Escuta em tempo real (Polling) para verificar a aprovação do Pix de forma resiliente e infinita
   useEffect(() => {
-    if (checkoutStep !== "pix" || !pixQrCodeBase64 || success) return;
+    if (!showQrCode || !pixQrCodeBase64 || success) return;
 
-    console.log(`[Pix Polling]: Iniciando loop de checagem para o usuário: ${activeUserId}`);
+    console.log(`[Pix Polling]: Iniciando loop de checagem infinito e resiliente para o usuário: ${activeUserId}`);
 
     const intervalId = setInterval(async () => {
       try {
         const response = await fetch(getApiUrl(`/api/user/status?userId=${encodeURIComponent(activeUserId)}`));
         if (!response.ok) {
-          console.warn(`[Pix Polling Warning]: API de status retornou erro HTTP ${response.status}. Mantendo o loop ativo.`);
+          console.warn(`[Pix Polling Warning]: API de status retornou erro HTTP ${response.status}. Mantendo o loop de polling ativo.`);
           return;
         }
 
@@ -205,15 +222,15 @@ export default function UpgradeModal({
         const isApproved = data && (data.isPremium === true || data.status === "approved" || data.planType === "premium");
 
         if (isApproved) {
-          console.log("[Pix Polling SUCCESS]: Pagamento confirmado via Mercado Pago! Efetuando redirecionamento nativo instantâneo.");
+          console.log("[Pix Polling SUCCESS]: Confirmação explícita de sucesso do Mercado Pago! Efetuando redirecionamento nativo instantâneo.");
           clearInterval(intervalId);
           // Redirecionamento nativo instantâneo para recarregar o contexto e evitar erros de desmontagem do Virtual DOM do React
           window.location.replace("/");
           return;
         }
       } catch (err) {
-        // Tratamento estrito de exceção: captura network errors/timeouts/etc, registra aviso discreto no console e mantém loop ativo
-        console.warn("[Pix Polling Exception Warning]: Erro de rede ou oscilação na conexão ao verificar status do Pix. Mantendo o loop ativo.", err);
+        // Ignorar Erros de Conexão no Frontend
+        console.warn("Aguardando conexão estável...", err);
       }
     }, 4000);
 
@@ -221,7 +238,7 @@ export default function UpgradeModal({
       console.log(`[Pix Polling]: Limpando intervalo de checagem para: ${activeUserId}`);
       clearInterval(intervalId);
     };
-  }, [checkoutStep, pixQrCodeBase64, success, activeUserId]);
+  }, [showQrCode, pixQrCodeBase64, success, activeUserId]);
 
   // 2. Real Payment via Credit Card with Mercado Pago
   const handleCardSubmit = async (e: React.FormEvent) => {
@@ -488,7 +505,7 @@ export default function UpgradeModal({
               {checkoutStep === "pix" && (
                 <div key="step-pix-checkout" className="space-y-5 animate-fade-in text-center" id="step-pix-checkout">
                   <button 
-                    onClick={() => setCheckoutStep("payment_method")} 
+                    onClick={handleCancelPix} 
                     className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition-all cursor-pointer"
                     id="pix-back-btn"
                   >
