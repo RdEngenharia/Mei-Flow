@@ -424,18 +424,25 @@ async function startServer() {
       const userDoc = await userDocRef.get();
       const existingProfile = userDoc.exists ? userDoc.data() : {};
 
+      const now = new Date();
+      const premiumUntilDate = new Date();
+      premiumUntilDate.setDate(now.getDate() + 30); // 30 days validation
+      const premiumUntilStr = premiumUntilDate.toISOString();
+
       const premiumUpdate = {
         planType: "premium",
         plan: "premium",
         status: "active",
+        premiumUntil: premiumUntilStr,
         invoiceLimit: 30,
         invoiceUsed: 0,
-        updatedAt: new Date().toISOString()
+        updatedAt: now.toISOString()
       };
 
+      console.log(`[AUDIT] [PLAN UPGRADE START]: Transitioning user ${userId} to premium until ${premiumUntilStr}. Payload:`, JSON.stringify(premiumUpdate));
       await db.collection("users").doc(userId).set(premiumUpdate, { merge: true });
       await db.collection("usuarios").doc(userId).set(premiumUpdate, { merge: true });
-      console.log(`[MP Webhook]: Updated user profile in Firestore to premium / limits set!`);
+      console.log(`[AUDIT] [PLAN UPGRADE SUCCESS]: Successfully wrote premium plan metadata and expiration for user ${userId} in Firestore users and usuarios collections. premiumUntil=${premiumUntilStr}`);
 
       try {
         console.log(`[MP Webhook FocusNFe]: Triggering subscription invoice emission for user ${userId}`);
@@ -818,7 +825,9 @@ async function startServer() {
           if (!userId) return;
 
           if (db) {
-            const statusUpdate = {
+            const expirationDate = new Date();
+            expirationDate.setDate(expirationDate.getDate() + 30);
+            const statusUpdate: any = {
               mercadoPagoPaymentId: paymentId,
               mercadoPagoStatus: status,
               planType: status === "approved" ? "premium" : "free",
@@ -826,6 +835,10 @@ async function startServer() {
               status: status === "approved" ? "active" : "inactive",
               updatedAt: new Date().toISOString()
             };
+            if (status === "approved") {
+              statusUpdate.premiumUntil = expirationDate.toISOString();
+            }
+            console.log(`[AUDIT] [WEBHOOK TRANSACTION UPDATE]: Received payment status "${status}" for user ${userId}. Logging update payload:`, JSON.stringify(statusUpdate));
             await db.collection("users").doc(userId).set(statusUpdate, { merge: true });
             await db.collection("usuarios").doc(userId).set(statusUpdate, { merge: true });
           }
@@ -975,14 +988,21 @@ async function startServer() {
       // 5. Se detectado como approved, atualiza o documento do usuário no Firestore (Admin SDK)
       if (db && isApprovedOnMP) {
         try {
+          const expirationDate = new Date();
+          expirationDate.setDate(expirationDate.getDate() + 30);
+          const expirationStr = expirationDate.toISOString();
+
           const syncUpdate = {
             plan: "premium",
             planType: "premium",
             status: "active",
+            premiumUntil: expirationStr,
             mercadoPagoStatus: "approved",
             mercadoPagoPaymentId: paymentId || "",
             updatedAt: new Date().toISOString()
           };
+
+          console.log(`[AUDIT] [STATUS CHECK PROMOTION START]: Polling checkup triggered premium transition for user ${userId}. Expiration: ${expirationStr}. Payload:`, JSON.stringify(syncUpdate));
 
           // Tenta atualizar. Se documento não existir, faz merge set
           try {
@@ -997,6 +1017,7 @@ async function startServer() {
             await db.collection("usuarios").doc(userId).set(syncUpdate, { merge: true });
           }
 
+          console.log(`[AUDIT] [STATUS CHECK PROMOTION SUCCESS]: User ${userId} updated on Firestore collections to premium via polling checkup.`);
           await handleMercadoPagoApproved(userId);
         } catch (dbPromotionErr: any) {
           const errorMsg = sanitizeDBError(dbPromotionErr);

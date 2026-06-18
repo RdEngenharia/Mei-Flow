@@ -29,14 +29,66 @@ import {
 } from 'firebase/firestore';
 
 // Carrega as configurações geradas pelo console do AI Studio / Firebase Blueprints
-import firebaseConfig from '../firebase-applet-config.json';
+import firebaseConfigImport from '../firebase-applet-config.json';
 import { Cliente, Transacao } from './types';
 import { cadastrarEmpresaFocusNFe, CadastroEmpresaPayload } from './focusNFeService';
+
+// Garante que o objeto process e process.env existam no ambiente de execução (browser/Vite) para evitar erros de referência críticos.
+if (typeof globalThis !== 'undefined' && !(globalThis as any).process) {
+  (globalThis as any).process = { env: {} };
+}
+if (typeof process !== 'undefined' && !process.env) {
+  (process as any).env = {};
+}
+
+// Inicializa as variáveis com os valores das do Vercel/process.env ou fallback para import.meta.env e por último o arquivo JSON local
+const envApiKey = (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_API_KEY : undefined) || (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_API_KEY) || firebaseConfigImport.apiKey;
+const envAuthDomain = (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN : undefined) || (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN) || firebaseConfigImport.authDomain;
+const envProjectId = (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID : undefined) || (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID) || firebaseConfigImport.projectId;
+const envAppId = (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_APP_ID : undefined) || (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_APP_ID) || firebaseConfigImport.appId;
+
+// Sincroniza process.env de forma segura para estarem disponíveis sob demanda
+if (typeof process !== 'undefined' && process.env) {
+  process.env.NEXT_PUBLIC_FIREBASE_API_KEY = envApiKey;
+  process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN = envAuthDomain;
+  process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID = envProjectId;
+  process.env.NEXT_PUBLIC_FIREBASE_APP_ID = envAppId;
+}
+
+// Configuração dinâmica conforme estrutura da Vercel integrada ao Firebase
+const firebaseConfig: any = {
+  apiKey: typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_API_KEY : envApiKey,
+  authDomain: typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN : envAuthDomain,
+  projectId: typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID : envProjectId,
+  appId: typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_APP_ID : envAppId,
+  // Mantendo os complementares caso o banco precise:
+  databaseURL: "https://mei-flow-692d9-default-rtdb.firebaseio.com",
+  storageBucket: "mei-flow-692d9.firebasestorage.app",
+  messagingSenderId: "481891312358",
+  firestoreDatabaseId: firebaseConfigImport.firestoreDatabaseId
+};
+
+// Validação de inicialização rígida para ambiente de produção (Lança erro explícito na Vercel se chaves faltarem)
+const apiKey = firebaseConfig.apiKey;
+const authDomain = firebaseConfig.authDomain;
+const projectId = firebaseConfig.projectId;
+
+if (!apiKey || !authDomain || !projectId) {
+  const missingKeys = [];
+  if (!apiKey) missingKeys.push("apiKey");
+  if (!authDomain) missingKeys.push("authDomain");
+  if (!projectId) missingKeys.push("projectId");
+  
+  const errorMsg = `[CRITICAL FIREBASE INITIALIZATION ERROR]: Missing mandatory configuration keys in production environment: ${missingKeys.join(", ")}. Checking process.env and config fallback.`;
+  console.error(errorMsg);
+  throw new Error(errorMsg);
+}
 
 // Inicialização segura dos componentes do Firebase
 const app = initializeApp(firebaseConfig);
 
 // CRÍTICO: Ativação correta do banco do Firestore vinculando o ID do banco
+// A persistência offline por IndexedDb NÃO está habilitada para assegurar gravação/leitura estritamente online em produção sem mascarar erros de conectividade.
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 
@@ -402,6 +454,8 @@ export async function registerWithEmailPassword(email: string, password: string,
         companyLogo: '',
         updatedAt: new Date().toISOString()
       };
+      
+      // AWAIT é obrigatório. Se houver falha de rede/conexão, lançará exceção e interromperá o fluxo.
       await setDoc(userDocRef, initialProfile);
       
       // Também persiste na coleção legada 'usuarios' por segurança e prevenção de bugs legados
@@ -421,12 +475,23 @@ export async function registerWithEmailPassword(email: string, password: string,
           updatedAt: new Date().toISOString()
         });
       } catch (legacyErr) {
-        console.warn("Não foi possivel persistir na coleção usuarios legada:", legacyErr);
+        console.warn("Não foi possivel persistir na coleção usuarios legada de forma secundária:", legacyErr);
       }
       
       console.log("Perfil inicial do usuário persistido com sucesso no Firestore.");
     } catch (firestoreError) {
-      console.error("Alerta: Falha ao criar documento inicial de perfil no Firestore:", firestoreError);
+      console.error("[CRITICAL DB CONNECTIVITY ERROR]: Falha ao criar documento inicial de perfil no Firestore. Abortando cadastro e limpando registro órfão no Auth.", firestoreError);
+      
+      // Limpeza imediata do usuário do Firebase Auth para evitar órfãos!
+      try {
+        await result.user.delete();
+        console.log("Usuário correspondente limpo com sucesso do Firebase Auth.");
+      } catch (authDeleteError) {
+        console.error("Falha ao deletar usuário órfão do Auth:", authDeleteError);
+      }
+      
+      // Repassa o erro de forma limpa
+      throw new Error("Erro 500: Falha ao persistir perfil no banco de dados. Conta não pôde ser criada por problemas de conexão com o Firestore.");
     }
   }
   

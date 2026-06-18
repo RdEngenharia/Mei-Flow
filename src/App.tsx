@@ -428,8 +428,9 @@ export default function App() {
     const unsubscribeSnapshot = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        if (data.planType) {
-          setPlanType(data.planType);
+        const docPlanValue = data.planType || data.plan;
+        if (docPlanValue === "premium" || data.status === "active" || data.isPremium === true) {
+          setPlanType("premium");
         } else {
           setPlanType("free");
         }
