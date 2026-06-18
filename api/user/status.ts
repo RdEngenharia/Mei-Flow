@@ -118,12 +118,12 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ success: false, error: "Method not allowed. Use GET." });
   }
 
-  try {
-    const userId = req.query.userId as string;
-    if (!userId) {
-      return res.status(400).json({ success: false, error: "userId is required for status query." });
-    }
+  const userId = req.query.userId as string;
+  if (!userId) {
+    return res.status(400).json({ success: false, error: "userId is required for status query." });
+  }
 
+  try {
     // 1. Check if user already has premium plan in Firestore database
     if (db) {
       try {
@@ -145,7 +145,18 @@ export default async function handler(req: any, res: any) {
           }
         }
       } catch (dbErr: any) {
-        console.warn(`[Status API Firestore Quick-Check Bypassed]: ${sanitizeDBError(dbErr)}`);
+        const errorMsg = sanitizeDBError(dbErr);
+        console.warn(`[Status API Firestore Quick-Check Bypassed]: ${errorMsg}`);
+        // If it's a restricted or structural block from the environment, treat as pending wait
+        if (errorMsg.includes("ACCESS_RESTRICTED") || errorMsg.includes("PERMISSION_DENIED")) {
+          return res.status(200).json({
+            success: true,
+            isPremium: false,
+            planType: "free",
+            status: "pending",
+            message: "Aguardando confirmação do banco"
+          });
+        }
       }
     }
 
@@ -158,7 +169,17 @@ export default async function handler(req: any, res: any) {
           paymentId = uDoc.data()?.mercadoPagoPaymentId || "";
         }
       } catch (getErr: any) {
-        console.warn("[Status API Firestore error reading paymentId]:", sanitizeDBError(getErr));
+        const errorMsg = sanitizeDBError(getErr);
+        console.warn("[Status API Firestore error reading paymentId]:", errorMsg);
+        if (errorMsg.includes("ACCESS_RESTRICTED") || errorMsg.includes("PERMISSION_DENIED")) {
+          return res.status(200).json({
+            success: true,
+            isPremium: false,
+            planType: "free",
+            status: "pending",
+            message: "Aguardando confirmação do banco"
+          });
+        }
       }
     }
 
@@ -215,7 +236,22 @@ export default async function handler(req: any, res: any) {
 
     // 5. Update user to Premium if approved
     if (isApprovedOnMP) {
-      await upgradeToPremium(userId, paymentId);
+      try {
+        await upgradeToPremium(userId, paymentId);
+      } catch (updErr: any) {
+        const errorMsg = sanitizeDBError(updErr);
+        console.warn("[Status API Promotion Error caught gracefully]:", errorMsg);
+        if (errorMsg.includes("ACCESS_RESTRICTED") || errorMsg.includes("PERMISSION_DENIED")) {
+          // Keep loop waiting with status pending
+          return res.status(200).json({
+            success: true,
+            isPremium: false,
+            planType: "free",
+            status: "pending",
+            message: "Aguardando confirmação do banco"
+          });
+        }
+      }
     }
 
     // 6. Return standard representation
@@ -223,14 +259,19 @@ export default async function handler(req: any, res: any) {
       success: true,
       isPremium: isApprovedOnMP,
       planType: isApprovedOnMP ? "premium" : "free",
-      status: currentMPStatus
+      status: isApprovedOnMP ? "approved" : currentMPStatus
     });
 
   } catch (err: any) {
-    console.warn("[Status API Graceful Recovery]:", sanitizeDBError(err));
-    return res.status(500).json({
-      success: false,
-      mensagem: "Erro ao processar verificação de pagamento operacional."
+    const errorMsg = sanitizeDBError(err);
+    console.warn("[Status API Graceful Recovery]:", errorMsg);
+    // Guarantee returning a standard pending/waiting state under any error/contingency/ACCESS_RESTRICTED
+    return res.status(200).json({
+      success: true,
+      isPremium: false,
+      planType: "free",
+      status: "pending",
+      message: "Aguardando confirmação do banco"
     });
   }
 }

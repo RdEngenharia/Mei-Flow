@@ -221,9 +221,18 @@ export default function UpgradeModal({
         }
 
         const data = await response.json();
-        const isApproved = !!(data && (data.isPremium === true || data.status === "approved" || data.planType === "premium"));
+        
+        // Tratar ACCESS_RESTRICTED ou erros estruturais como espera (sem alterar estado de sucesso)
+        const jsonStr = JSON.stringify(data);
+        if (jsonStr.includes("ACCESS_RESTRICTED") || jsonStr.includes("PERMISSION_DENIED")) {
+          console.warn("Aguardando conexão estável...");
+          return;
+        }
 
-        if (isApproved) {
+        // Checagem Estrita do Status do Pix: a transação só deve ser considerada um sucesso se o status for estritamente 'approved' ou se isPremium for true
+        const isApproved = !!(data && (data.status === "approved" || data.isPremium === true));
+
+        if (isApproved && (data.status === "approved" || data.isPremium === true)) {
           console.log("[Pix Polling SUCCESS]: Confirmação explícita de sucesso do Mercado Pago! Efetuando redirecionamento nativo instantâneo.");
           clearInterval(intervalId);
           // Redirecionamento nativo instantâneo para recarregar o contexto e evitar erros de desmontagem do Virtual DOM do React

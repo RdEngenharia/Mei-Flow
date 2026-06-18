@@ -874,7 +874,17 @@ async function startServer() {
             }
           }
         } catch (dbErr: any) {
-          console.warn(`[Get User Status API]: Firestore quick-check bypassed (${sanitizeDBError(dbErr)}).`);
+          const errorMsg = sanitizeDBError(dbErr);
+          console.warn(`[Get User Status API]: Firestore quick-check bypassed (${errorMsg}).`);
+          if (errorMsg.includes("ACCESS_RESTRICTED") || errorMsg.includes("PERMISSION_DENIED")) {
+            return res.json({
+              success: true,
+              isPremium: false,
+              planType: "free",
+              status: "pending",
+              message: "Aguardando confirmação do banco"
+            });
+          }
         }
       }
 
@@ -887,7 +897,17 @@ async function startServer() {
             paymentId = docSnap.data()?.mercadoPagoPaymentId;
           }
         } catch (getErr: any) {
-          console.warn("[Get User Status API]: Firestore error reading paymentId:", sanitizeDBError(getErr));
+          const errorMsg = sanitizeDBError(getErr);
+          console.warn("[Get User Status API]: Firestore error reading paymentId:", errorMsg);
+          if (errorMsg.includes("ACCESS_RESTRICTED") || errorMsg.includes("PERMISSION_DENIED")) {
+            return res.json({
+              success: true,
+              isPremium: false,
+              planType: "free",
+              status: "pending",
+              message: "Aguardando confirmação do banco"
+            });
+          }
         }
       }
 
@@ -949,8 +969,6 @@ async function startServer() {
       // 5. Se detectado como approved, atualiza o documento do usuário no Firestore (Admin SDK)
       if (db && isApprovedOnMP) {
         try {
-          // Garante a persistência do estado conforme diretrizes
-          const isApproved = isApprovedOnMP;
           const syncUpdate = {
             plan: "premium",
             planType: "premium",
@@ -975,9 +993,17 @@ async function startServer() {
 
           await handleMercadoPagoApproved(userId);
         } catch (dbPromotionErr: any) {
-          const sanitizedMsg = sanitizeDBError(dbPromotionErr);
-          console.warn("[Get User Status API - Preview Contingency Warning]: Firestore promotion bypassed, turning on local memory contingency:", sanitizedMsg);
-          // Continua em execução em vez de jogar erro 500, permitindo fluxo de ponta a ponta
+          const errorMsg = sanitizeDBError(dbPromotionErr);
+          console.warn("[Get User Status API - Preview Contingency Warning]: Firestore promotion bypassed, turning on local memory contingency:", errorMsg);
+          if (errorMsg.includes("ACCESS_RESTRICTED") || errorMsg.includes("PERMISSION_DENIED")) {
+            return res.json({
+              success: true,
+              isPremium: false,
+              planType: "free",
+              status: "pending",
+              message: "Aguardando confirmação do banco"
+            });
+          }
         }
       }
 
@@ -990,19 +1016,27 @@ async function startServer() {
             const itemPlanType = data.planType || "free";
             const itemPlan = data.plan || data.planType || "free";
             const itemStatus = data.status || "inactive";
-            const isPremium = (itemPlanType === "premium" || itemPlan === "premium" || itemStatus === "active");
+            const isPremium = (itemPlanType === "premium" || itemPlan === "premium" || itemStatus === "active" || data.isPremium === true);
 
             return res.json({
               success: true,
               isPremium,
               planType: isPremium ? "premium" : "free",
-              status: isPremium ? "approved" : (data.mercadoPagoStatus || currentMPStatus)
+              status: isPremium ? "approved" : currentMPStatus
             });
           }
         } catch (readErr: any) {
-          const sanitizedMsg = sanitizeDBError(readErr);
-          console.warn("[Get User Status API - Preview DB Read Contingency Warning]: Database read bypassed, falling back to local memory map status:", sanitizedMsg);
-          // Continua para o retorno de contingência abaixo
+          const errorMsg = sanitizeDBError(readErr);
+          console.warn("[Get User Status API - Preview DB Read Contingency Warning]: Database read bypassed, falling back to local memory map status:", errorMsg);
+          if (errorMsg.includes("ACCESS_RESTRICTED") || errorMsg.includes("PERMISSION_DENIED")) {
+            return res.json({
+              success: true,
+              isPremium: false,
+              planType: "free",
+              status: "pending",
+              message: "Aguardando confirmação do banco"
+            });
+          }
         }
       }
 
@@ -1011,15 +1045,18 @@ async function startServer() {
         success: true,
         isPremium: isApprovedOnMP,
         planType: isApprovedOnMP ? "premium" : "free",
-        status: currentMPStatus
+        status: isApprovedOnMP ? "approved" : currentMPStatus
       });
 
     } catch (err: any) {
-      console.warn("[Get User Status API Error Graceful Recovery]:", sanitizeDBError(err));
-      return res.status(500).json({
-        success: false,
-        status: 500,
-        mensagem: "Regra operacional indisponível no momento."
+      const errorMsg = sanitizeDBError(err);
+      console.warn("[Get User Status API Error Graceful Recovery]:", errorMsg);
+      return res.json({
+        success: true,
+        isPremium: false,
+        planType: "free",
+        status: "pending",
+        message: "Aguardando confirmação do banco"
       });
     }
   });
