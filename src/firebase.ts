@@ -402,7 +402,7 @@ export async function registerWithEmailPassword(email: string, password: string,
         companyLogo: '',
         updatedAt: new Date().toISOString()
       };
-      await setDoc(userDocRef, initialProfile, { merge: true });
+      await setDoc(userDocRef, initialProfile);
       
       // Também persiste na coleção legada 'usuarios' por segurança e prevenção de bugs legados
       try {
@@ -419,7 +419,7 @@ export async function registerWithEmailPassword(email: string, password: string,
           companyLogo: '',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
-        }, { merge: true });
+        });
       } catch (legacyErr) {
         console.warn("Não foi possivel persistir na coleção usuarios legada:", legacyErr);
       }

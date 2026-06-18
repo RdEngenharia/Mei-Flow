@@ -541,7 +541,7 @@ export default function App() {
         err.code === "auth/wrong-password" || 
         err.code === "auth/user-not-found"
       ) {
-        errMsg = "E-mail ou senha incorretos ou não cadastrados.";
+        errMsg = "E-mail ou senha inválidos.";
       } else if (err.code === "auth/weak-password") {
         errMsg = "A senha fornecida é fraca. Digite pelo menos 6 caracteres.";
       } else if (err.message) {
@@ -3451,7 +3451,11 @@ ${meiName}`;
                     required
                     placeholder="Ex: João Silva Consultoria"
                     value={authName}
-                    onChange={(e) => setAuthName(e.target.value)}
+                    onFocus={() => setAuthError("")}
+                    onChange={(e) => {
+                      setAuthName(e.target.value);
+                      setAuthError("");
+                    }}
                     className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
                   />
                 </div>
@@ -3466,7 +3470,11 @@ ${meiName}`;
                   required
                   placeholder="seu@emailmeiflow.com"
                   value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)}
+                  onFocus={() => setAuthError("")}
+                  onChange={(e) => {
+                    setAuthEmail(e.target.value);
+                    setAuthError("");
+                  }}
                   className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
                 />
               </div>
@@ -3480,13 +3488,18 @@ ${meiName}`;
                   required
                   placeholder="Mínimo 6 caracteres"
                   value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
+                  onFocus={() => setAuthError("")}
+                  onChange={(e) => {
+                    setAuthPassword(e.target.value);
+                    setAuthError("");
+                  }}
                   className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
                 />
               </div>
 
               <button
                 type="submit"
+                onClick={() => setAuthError("")}
                 disabled={authLoading}
                 className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
               >

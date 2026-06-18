@@ -920,6 +920,7 @@ async function startServer() {
 
       let isApprovedOnMP = false;
       let currentMPStatus = "pending";
+      let checkedWithSpecificId = false;
 
       // 3. Checagem Real da API por Payment ID
       if (mpToken && paymentId) {
@@ -928,6 +929,7 @@ async function startServer() {
             headers: { "Authorization": `Bearer ${mpToken}` }
           });
           if (payResp.ok) {
+            checkedWithSpecificId = true;
             const payData: any = await payResp.json();
             currentMPStatus = payData.status || "pending";
             if (currentMPStatus === "approved") {
@@ -939,8 +941,8 @@ async function startServer() {
         }
       }
 
-      // 4. Fallback search by external_reference (userId) if paymentId can't be resolved or API failed
-      if (mpToken && !isApprovedOnMP) {
+      // 4. Fallback search by external_reference (userId) ONLY if specific payment check did not occur or failed
+      if (mpToken && !isApprovedOnMP && !checkedWithSpecificId) {
         try {
           const searchResp = await fetch(`https://api.mercadopago.com/v1/payments/search?external_reference=${encodeURIComponent(userId)}`, {
             headers: { "Authorization": `Bearer ${mpToken}` }
