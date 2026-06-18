@@ -854,7 +854,8 @@ async function startServer() {
       }
 
       // 1B. Quick DB check to see if the user is already premium. If yes, read and return state.
-      if (db) {
+      // NOTE: Bypass quick DB check for public fallback user "user_49281" since it's a shared demo ID
+      if (db && userId !== "user_49281") {
         try {
           const docRef = db.collection("users").doc(String(userId));
           const docSnap = await docRef.get();
@@ -888,8 +889,11 @@ async function startServer() {
         }
       }
 
-      // 2. Retrieve paymentId associated with this userId
-      let paymentId = userLastPaymentIdMap.get(String(userId));
+      // 2. Retrieve paymentId associated with this userId (checking query param first, then map)
+      let paymentId = (req.query?.paymentId || (req.nextUrl && typeof req.nextUrl.searchParams?.get === "function" ? req.nextUrl.searchParams.get("paymentId") : null)) as string;
+      if (!paymentId) {
+        paymentId = userLastPaymentIdMap.get(String(userId));
+      }
       if (!paymentId && db) {
         try {
           const docSnap = await db.collection("users").doc(String(userId)).get();
@@ -1007,8 +1011,8 @@ async function startServer() {
         }
       }
 
-      // 6. Lê do Banco de Dados usando o Admin SDK para devolver o estado real
-      if (db) {
+      // 6. Lê do Banco de Dados usando o Admin SDK para devolver o estado real (bypass if guest userId "user_49281")
+      if (db && userId !== "user_49281") {
         try {
           const docSnap = await db.collection("users").doc(String(userId)).get();
           if (docSnap.exists) {

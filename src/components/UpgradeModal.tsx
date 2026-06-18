@@ -60,6 +60,7 @@ export default function UpgradeModal({
   const [pixPayload, setPixPayload] = useState<string | null>(null);
   const [showQrCode, setShowQrCode] = useState(false);
   const [isPixActive, setIsPixActive] = useState(false);
+  const [currentPaymentId, setCurrentPaymentId] = useState<string | null>(null);
 
   // Guard values: If isPixActive or showQrCode is true, we force checkoutStep to stay as "pix" permanently (Anti-Reset)
   useEffect(() => {
@@ -140,6 +141,7 @@ export default function UpgradeModal({
     setIsPixActive(false);
     setPixQrCodeBase64(null);
     setPixPayload(null);
+    setCurrentPaymentId(null);
     setCheckoutStep("payment_method");
   };
 
@@ -184,6 +186,8 @@ export default function UpgradeModal({
                               null;
 
         if (qrCodeBase64 || qrCodePayload) {
+          const generatedPaymentId = data.paymentId || data.id || null;
+          setCurrentPaymentId(generatedPaymentId ? String(generatedPaymentId) : null);
           setPixQrCodeBase64(qrCodeBase64);
           setPixPayload(qrCodePayload);
           setShowQrCode(true);
@@ -214,7 +218,11 @@ export default function UpgradeModal({
 
     const checkPaymentStatus = async () => {
       try {
-        const response = await fetch(getApiUrl(`/api/user/status?userId=${encodeURIComponent(activeUserId)}`));
+        let queryUrl = `/api/user/status?userId=${encodeURIComponent(activeUserId)}`;
+        if (currentPaymentId) {
+          queryUrl += `&paymentId=${encodeURIComponent(currentPaymentId)}`;
+        }
+        const response = await fetch(getApiUrl(queryUrl));
         if (!response.ok) {
           // Erros HTTP (ex: 504 Gateway Timeout da Vercel, 500 Interno ou 404) não devem quebrar o loop nem reverter o estado
           console.warn('[Pix Polling Status Check]: Conexão Vercel instável ou timeout. Mantendo QR Code congelado na tela...');
@@ -256,7 +264,7 @@ export default function UpgradeModal({
     const interval = setInterval(checkPaymentStatus, 4000);
     return () => clearInterval(interval); // Cleanup obrigatório
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPixActive]);
+  }, [isPixActive, currentPaymentId]);
 
   // 2. Real Payment via Credit Card with Mercado Pago
   const handleCardSubmit = async (e: React.FormEvent) => {
