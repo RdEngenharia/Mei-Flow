@@ -47,37 +47,71 @@ export default function CnpjOnboarding({ onSave, onSkipWithDemo, userEmail }: Cn
     setErrorMsg("");
 
     try {
-      const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cleanCnpj}`);
-      if (!response.ok) {
-        throw new Error("CNPJ não localizado na API BrasilAPI. Verifique o número digitado.");
-      }
-      const data = await response.json();
+      let data: any = null;
+      let ok = false;
       
-      if (data.razao_social || data.nome_fantasia) {
-        setMeiName(data.nome_fantasia || data.razao_social);
-        
-        if (data.ddd_telefone_1) {
-          const rawTel = data.ddd_telefone_1.replace(/\D/g, "");
-          if (rawTel.length >= 10) {
-            setTelefone(`(${rawTel.substring(0, 2)}) ${rawTel.substring(2, 6)}-${rawTel.substring(6)}`);
-          } else {
-            setTelefone(data.ddd_telefone_1);
-          }
-        } else {
-          setTelefone("");
+      try {
+        const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cleanCnpj}`);
+        if (response.ok) {
+          data = await response.json();
+          ok = true;
         }
-        
-        setStep(2); // Go to verification step
+      } catch (e) {
+        console.warn("[CNPJ Fetch] BrasilAPI bypassed:", e);
+      }
+
+      if (!ok) {
+        // Try fallback with Speedio API
+        try {
+          const response = await fetch(`https://api-publica.speedio.com.br/buscarcnpj?cnpj=${cleanCnpj}`);
+          if (response.ok) {
+            const speedioData = await response.json();
+            if (speedioData && !speedioData.error) {
+              data = {
+                nome_fantasia: speedioData["NOME FANTASIA"] || speedioData["RAZAO SOCIAL"],
+                razao_social: speedioData["RAZAO SOCIAL"],
+                ddd_telefone_1: speedioData["TELEFONE"] || ""
+              };
+              ok = true;
+            }
+          }
+        } catch (e) {
+          console.warn("[CNPJ Fetch] Speedio API bypassed:", e);
+        }
+      }
+
+      if (ok && data) {
+        if (data.razao_social || data.nome_fantasia) {
+          setMeiName(data.nome_fantasia || data.razao_social);
+          
+          if (data.ddd_telefone_1) {
+            const rawTel = data.ddd_telefone_1.replace(/\D/g, "");
+            if (rawTel.length >= 10) {
+              setTelefone(`(${rawTel.substring(0, 2)}) ${rawTel.substring(2, 6)}-${rawTel.substring(6)}`);
+            } else {
+              setTelefone(data.ddd_telefone_1);
+            }
+          } else {
+            setTelefone("");
+          }
+          
+          setStep(2); // Go to verification step
+        } else {
+          setErrorMsg("Dados obtidos incompletos, preencha manualmente.");
+          setMeiName("");
+          setTelefone("");
+          setStep(2);
+        }
       } else {
-        setErrorMsg("Buscamos os dados, mas não conseguimos extrair o nome comercial. Digite os dados manualmente.");
+        // Set error message peacefully without writing to console.error
+        setErrorMsg("CNPJ não localizado automaticamente nas bases federais. Digite os dados abaixo manualmente:");
         setMeiName("");
         setTelefone("");
         setStep(2);
       }
     } catch (err: any) {
-      console.error("Erro na busca de CNPJ:", err);
-      setErrorMsg("CNPJ não encontrado nas bases públicas federais ou serviço temporariamente indisponível. Deseja preencher manualmente?");
-      // Go to step 2 anyway to allow manual typing if lookup fails, ensuring user is never locked out
+      console.warn("[CNPJ Onboarding lookup bypassed gracefully (expected developer preview limit)]");
+      setErrorMsg("CNPJ não encontrado nas bases públicas ou serviço temporariamente indisponível. Preencha manualmente para prosseguir.");
       setMeiName("");
       setTelefone("");
       setStep(2);

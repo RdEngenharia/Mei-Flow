@@ -38,7 +38,8 @@ import {
   Settings,
   Building,
   Wallet,
-  BookOpen
+  BookOpen,
+  Calendar
 } from "lucide-react";
 
 import { Cliente, Transacao, CatalogItem, Orcamento } from "./types";
@@ -48,6 +49,8 @@ import UpgradeModal from "./components/UpgradeModal";
 import CnpjOnboarding from "./components/CnpjOnboarding";
 import CatalogManager from "./components/CatalogManager";
 import OrcamentoGenerator from "./components/OrcamentoGenerator";
+import DasModal from "./components/DasModal";
+import DasnModal from "./components/DasnModal";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -122,6 +125,8 @@ export default function App() {
   // NOVO: ESTADOS INTEGRADOS DO CHAMADO DE SUPORTE TÉCNICO (MENSAGEM VIA MAILTO)
   // -------------------------------------------------------------------------
   const [showSupportModal, setShowSupportModal] = useState(false);
+  const [showDasModal, setShowDasModal] = useState(false);
+  const [showDasnModal, setShowDasnModal] = useState(false);
   const [showSupportSuccessModal, setShowSupportSuccessModal] = useState(false);
   const [submittedTicket, setSubmittedTicket] = useState<{
     id: string;
@@ -1853,6 +1858,24 @@ ${meiName}`;
                 </button>
 
                 <button
+                  onClick={() => setShowDasModal(true)}
+                  className="px-4.5 py-2.5 bg-indigo-50 border border-indigo-200/60 hover:bg-indigo-100/50 text-indigo-700 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+                  id="btn-gerar-das-header"
+                >
+                  <FileText className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>Gerar DAS MEI</span>
+                </button>
+
+                <button
+                  onClick={() => setShowDasnModal(true)}
+                  className="px-4.5 py-2.5 bg-amber-50 border border-amber-200/60 hover:bg-amber-100/50 text-amber-700 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer animate-pulse"
+                  id="btn-declaracao-dasn-header"
+                >
+                  <Calendar className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Declaração Anual MEI</span>
+                </button>
+
+                <button
                   onClick={() => setCurrentView("catalogo")}
                   className="px-4.5 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
                 >
@@ -1920,6 +1943,69 @@ ${meiName}`;
                     Ver Tudo &rarr;
                   </button>
                 </div>
+              </div>
+
+            </div>
+
+            {/* REGULARIDADE TRIBUTÁRIA MEI (DAS & DASN-SIMEI) */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
+              
+              {/* GUIA MENSAL DAS-MEI */}
+              <div 
+                onClick={() => setShowDasModal(true)}
+                className="bg-indigo-50/50 border border-indigo-100 rounded-3xl p-6 flex flex-col sm:flex-row items-center justify-between gap-5 cursor-pointer hover:shadow-sm hover:border-indigo-200 transition-all duration-300 transform hover:-translate-y-0.5 text-left"
+                id="das-guide-reminder"
+              >
+                <div className="flex items-center gap-4 text-center sm:text-left flex-col sm:flex-row min-w-0">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-100/60 text-indigo-700 flex items-center justify-center shrink-0 border border-indigo-200/40 font-bold text-xl">
+                    📅
+                  </div>
+                  <div className="space-y-0.5">
+                    <h3 className="font-extrabold tracking-tight text-slate-900 text-sm sm:text-base flex items-center gap-2">
+                      <span>Guia Mensal DAS-MEI</span>
+                      <span className="inline-flex px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-100 text-indigo-700 uppercase animate-pulse">Pagar Imposto</span>
+                    </h3>
+                    <p className="text-xs text-slate-500 font-medium">
+                      Mantenha a regularidade da sua microempresa. Clique para copiar seu CNPJ de forma combinada e abrir a página de emissão do governo.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] rounded-lg shadow-sm transition-all shrink-0 uppercase tracking-widest cursor-pointer flex items-center gap-1"
+                >
+                  <span>Emitir DAS</span>
+                  <span className="text-xs">&rarr;</span>
+                </button>
+              </div>
+
+              {/* DECLARAÇÃO ANUAL DASN-SIMEI */}
+              <div 
+                onClick={() => setShowDasnModal(true)}
+                className="bg-amber-50/50 border border-amber-100 rounded-3xl p-6 flex flex-col sm:flex-row items-center justify-between gap-5 cursor-pointer hover:shadow-sm hover:border-amber-200 transition-all duration-300 transform hover:-translate-y-0.5 text-left"
+                id="dasn-guide-reminder"
+              >
+                <div className="flex items-center gap-4 text-center sm:text-left flex-col sm:flex-row min-w-0">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-100/60 text-amber-700 flex items-center justify-center shrink-0 border border-amber-200/40 font-bold text-xl">
+                    📊
+                  </div>
+                  <div className="space-y-0.5">
+                    <h3 className="font-extrabold tracking-tight text-slate-900 text-sm sm:text-base flex items-center gap-2">
+                      <span>Declaração Anual MEI</span>
+                      <span className="inline-flex px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-100 text-amber-700 uppercase animate-pulse">Obrigatório</span>
+                    </h3>
+                    <p className="text-xs text-slate-500 font-medium">
+                      Envie o faturamento bruto do ano anterior. Copie o CNPJ de forma unificada e acesse o painel oficial da Receita Federal.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-[10px] rounded-lg shadow-sm transition-all shrink-0 uppercase tracking-widest cursor-pointer flex items-center gap-1"
+                >
+                  <span>Fazer DASN</span>
+                  <span className="text-xs">&rarr;</span>
+                </button>
               </div>
 
             </div>
@@ -3478,6 +3564,24 @@ ${meiName}`;
           onClose={() => setShowMeiConfigModal(false)}
           onSave={handleSaveMeiProfile}
           onTriggerUpgrade={() => setShowUpgradeModal(true)}
+        />
+      )}
+
+      {/* GUIA DE EMISSÃO DO DAS MEI */}
+      {showDasModal && (
+        <DasModal
+          cnpjUsuario={cnpjPrestador || localStorage.getItem("meiflow_cnpj_prestador") || ""}
+          onClose={() => setShowDasModal(false)}
+          triggerToast={triggerToast}
+        />
+      )}
+
+      {/* GUIA DE EMISSÃO DA DECLARAÇÃO ANUAL DASN MEI */}
+      {showDasnModal && (
+        <DasnModal
+          cnpjUsuario={cnpjPrestador || localStorage.getItem("meiflow_cnpj_prestador") || ""}
+          onClose={() => setShowDasnModal(false)}
+          triggerToast={triggerToast}
         />
       )}
 

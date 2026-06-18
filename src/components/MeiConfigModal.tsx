@@ -60,31 +60,62 @@ export default function MeiConfigModal({
     setSearchError("");
 
     try {
-      const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cleaned}`);
-      if (!response.ok) {
-        throw new Error("CNPJ não encontrado na base de dados pública.");
+      let data: any = null;
+      let ok = false;
+
+      // Try BrasilAPI first
+      try {
+        const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cleaned}`);
+        if (response.ok) {
+          data = await response.json();
+          ok = true;
+        }
+      } catch (e) {
+        console.warn("[MeiConfig Fetch] BrasilAPI bypassed:", e);
       }
-      const data = await response.json();
-      
-      if (data.razao_social || data.nome_fantasia) {
-        // Prefer Fantasia for MEIs as Razão Social is usually "NAME CPF-NUMBER"
-        const finalName = data.nome_fantasia || data.razao_social;
-        setName(finalName);
-        
-        if (data.ddd_telefone_1) {
-          const rawTel = data.ddd_telefone_1.replace(/\D/g, "");
-          if (rawTel.length >= 10) {
-            setTelefone(`(${rawTel.substring(0, 2)}) ${rawTel.substring(2, 6)}-${rawTel.substring(6)}`);
-          } else {
-            setTelefone(data.ddd_telefone_1);
+
+      // Try Speedio as fallback
+      if (!ok) {
+        try {
+          const response = await fetch(`https://api-publica.speedio.com.br/buscarcnpj?cnpj=${cleaned}`);
+          if (response.ok) {
+            const speedioData = await response.json();
+            if (speedioData && !speedioData.error) {
+              data = {
+                nome_fantasia: speedioData["NOME FANTASIA"] || speedioData["RAZAO SOCIAL"],
+                razao_social: speedioData["RAZAO SOCIAL"],
+                ddd_telefone_1: speedioData["TELEFONE"] || ""
+              };
+              ok = true;
+            }
           }
+        } catch (e) {
+          console.warn("[MeiConfig Fetch] Speedio bypassed:", e);
+        }
+      }
+
+      if (ok && data) {
+        if (data.razao_social || data.nome_fantasia) {
+          const finalName = data.nome_fantasia || data.razao_social;
+          setName(finalName);
+          
+          if (data.ddd_telefone_1) {
+            const rawTel = data.ddd_telefone_1.replace(/\D/g, "");
+            if (rawTel.length >= 10) {
+              setTelefone(`(${rawTel.substring(0, 2)}) ${rawTel.substring(2, 6)}-${rawTel.substring(6)}`);
+            } else {
+              setTelefone(data.ddd_telefone_1);
+            }
+          }
+        } else {
+          setSearchError("Dados obtidos incompletos, preencha manualmente.");
         }
       } else {
-        setSearchError("Dados obtidos incompletos, preencha manualmente.");
+        setSearchError("Não foi possível buscar automaticamente. Por favor, digite os dados abaixo.");
       }
     } catch (err: any) {
-      console.error("Erro ao buscar CNPJ:", err);
-      setSearchError("Não foi possível buscar os dados automaticamente. Digite os dados manualmente.");
+      console.warn("[MeiConfig lookup bypassed gracefully]");
+      setSearchError("Não foi possível buscar automaticamente. Por favor, digite os dados abaixo.");
     } finally {
       setSearchingCnpj(false);
     }

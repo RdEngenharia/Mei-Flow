@@ -233,7 +233,7 @@ export default function UpgradeModal({
         const isApproved = !!(data && (data.status === "approved" || data.isPremium === true));
 
         if (isApproved && (data.status === "approved" || data.isPremium === true)) {
-          console.log("[Pix Polling SUCCESS]: Confirmação explícita de sucesso do Mercado Pago! Efetuando redirecionamento nativo instantâneo.");
+          console.log("[Pix Polling SUCCESS v2.0 - PRODUÇÃO]: Confirmação explícita de sucesso do Mercado Pago! Efetuando redirecionamento nativo instantâneo.");
           clearInterval(intervalId);
           // Redirecionamento nativo instantâneo para recarregar o contexto e evitar erros de desmontagem do Virtual DOM do React
           window.location.replace("/");
