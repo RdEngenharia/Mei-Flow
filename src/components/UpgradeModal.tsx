@@ -59,13 +59,14 @@ export default function UpgradeModal({
   const [pixQrCodeBase64, setPixQrCodeBase64] = useState<string | null>(null);
   const [pixPayload, setPixPayload] = useState<string | null>(null);
   const [showQrCode, setShowQrCode] = useState(false);
+  const [isPixActive, setIsPixActive] = useState(false);
 
-  // Guard values: If showQrCode is true, we force checkoutStep to stay as "pix" permanently
+  // Guard values: If isPixActive or showQrCode is true, we force checkoutStep to stay as "pix" permanently (Anti-Reset)
   useEffect(() => {
-    if (showQrCode && checkoutStep !== "pix") {
+    if ((isPixActive || showQrCode) && checkoutStep !== "pix") {
       setCheckoutStep("pix");
     }
-  }, [showQrCode, checkoutStep]);
+  }, [isPixActive, showQrCode, checkoutStep]);
   
   // Credit Card Form States
   const [cardNumber, setCardNumber] = useState("");
@@ -136,6 +137,7 @@ export default function UpgradeModal({
 
   const handleCancelPix = () => {
     setShowQrCode(false);
+    setIsPixActive(false);
     setPixQrCodeBase64(null);
     setPixPayload(null);
     setCheckoutStep("payment_method");
@@ -185,6 +187,7 @@ export default function UpgradeModal({
           setPixQrCodeBase64(qrCodeBase64);
           setPixPayload(qrCodePayload);
           setShowQrCode(true);
+          setIsPixActive(true);
           setCheckoutStep("pix");
         } else {
           setErrorMessage("Credenciais ativas, porém o Mercado Pago não retornou os dados de pagamento Pix. Verifique as configurações de Pix no seu painel do Mercado Pago.");
@@ -207,50 +210,53 @@ export default function UpgradeModal({
   // Escuta em tempo real (Polling) para verificar a aprovação do Pix de forma resiliente e infinita
   // Regra Estrita: Sem limite de tentativas, ignorando erros de rede/timeout/invalid-json de forma silenciosa para prezar pelo congelamento do QR-Code na tela
   useEffect(() => {
-    if (!showQrCode || !pixQrCodeBase64 || success) return;
+    if (!isPixActive) return;
 
-    console.log(`[Pix Polling]: Iniciando loop de checagem infinito e resiliente para o usuário: ${activeUserId}`);
-
-    const intervalId = setInterval(async () => {
+    const checkPaymentStatus = async () => {
       try {
         const response = await fetch(getApiUrl(`/api/user/status?userId=${encodeURIComponent(activeUserId)}`));
         if (!response.ok) {
           // Erros HTTP (ex: 504 Gateway Timeout da Vercel, 500 Interno ou 404) não devem quebrar o loop nem reverter o estado
-          console.warn('Aguardando conexão estável...');
+          console.warn('[Pix Polling Status Check]: Conexão Vercel instável ou timeout. Mantendo QR Code congelado na tela...');
           return;
         }
 
         const data = await response.json();
+        if (!data) {
+          console.warn("[Pix Polling Status Check]: Resposta vazia recebida do servidor.");
+          return;
+        }
         
         // Tratar ACCESS_RESTRICTED ou erros estruturais como espera (sem alterar estado de sucesso)
         const jsonStr = JSON.stringify(data);
         if (jsonStr.includes("ACCESS_RESTRICTED") || jsonStr.includes("PERMISSION_DENIED")) {
-          console.warn("Aguardando conexão estável...");
+          console.warn("[Pix Polling Status Check]: Conexão de autenticação ou banco em espera.");
           return;
         }
 
         // Checagem Estrita do Status do Pix: a transação só deve ser considerada um sucesso se o status for estritamente 'approved' ou se isPremium for true
-        const isApproved = !!(data && (data.status === "approved" || data.isPremium === true));
+        const isApproved = !!(data.status === "approved" || data.isPremium === true);
 
-        if (isApproved && (data.status === "approved" || data.isPremium === true)) {
-          console.log("[Pix Polling SUCCESS v2.0 - PRODUÇÃO]: Confirmação explícita de sucesso do Mercado Pago! Efetuando redirecionamento nativo instantâneo.");
-          clearInterval(intervalId);
+        if (isApproved) {
+          console.log("[Pix Polling SUCCESS v3.0 - PRODUÇÃO]: Confirmação explícita de sucesso do Mercado Pago! Efetuando redirecionamento nativo instantâneo.");
           // Redirecionamento nativo instantâneo para recarregar o contexto e evitar erros de desmontagem do Virtual DOM do React
           window.location.replace("/");
           return;
         }
       } catch (err) {
-        // Ignorar Erros de Conexão no Frontend (falhas de requisição de rede, timeout, JSON inválido de proxies, etc.)
-        console.warn('Aguardando conexão estável...', err);
+        // Ignorar Erros de Conexão no Frontend (falhas de requisição de rede, timeout, JSON inválido de proxies, etc.) de forma totalmente silenciosa
+        console.warn('[Pix Polling Status Check Exception]: Mantendo QR Code ativo e aguardando conexão estável...', err);
         return;
       }
-    }, 4000);
-
-    return () => {
-      console.log(`[Pix Polling]: Limpando intervalo de checagem para: ${activeUserId}`);
-      clearInterval(intervalId);
     };
-  }, [showQrCode, pixQrCodeBase64, success, activeUserId]);
+
+    // Executamos uma vez imediatamente para melhorar feedback
+    checkPaymentStatus();
+
+    const interval = setInterval(checkPaymentStatus, 4000);
+    return () => clearInterval(interval); // Cleanup obrigatório
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPixActive]);
 
   // 2. Real Payment via Credit Card with Mercado Pago
   const handleCardSubmit = async (e: React.FormEvent) => {
