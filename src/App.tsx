@@ -39,6 +39,8 @@ import {
   Building,
   Wallet,
   BookOpen,
+  Copy,
+  ExternalLink,
   Calendar
 } from "lucide-react";
 
@@ -824,7 +826,7 @@ export default function App() {
     }
   };
 
-  // Gerar e Iniciar o Processo de NFS-e via Focus NFe
+  // Gerar e Iniciar o Processo de NFS-e via Emissor Nacional do Governo
   const handleDownloadNFSe = (tx: Transacao, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (tx.tipo !== "entrada") {
@@ -832,217 +834,25 @@ export default function App() {
       return;
     }
 
-    const cleanId = tx.id.replace(/\W/g, "");
-    const generatedRef = `MEIFLOW_${cleanId}_${Math.floor(Math.random() * 10000)}`;
-
     setFocusNfeSelectedTx(tx);
-    setRefNfe(generatedRef);
-    setNumeroRps((Math.floor(Math.random() * 200) + 120).toString());
-    setFocusNfeStatus("idle");
-    setFocusNfeApiResponse(null);
-    setFocusNfeError(null);
-    setFocusNfeLogs([
-      `[SISTEMA] Central de Emissão NFS-e aberta para o Lançamento: "${tx.descricao}"`,
-      `[SISTEMA] Cliente Tomador: ${tx.clienteNome || "Consumidor Geral"}`,
-      `[SISTEMA] Valor do Serviço: R$ ${tx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`,
-      `[SISTEMA] Token de Homologação Embutido: wCTTGnYwEXXqCYskYtswVMBCQIHP8e8w`,
-      `[SISTEMA] Referência Única gerada: ${generatedRef}`,
-      `[SISTEMA] Pronto para transmissão POST.`
-    ]);
+    
+    // Cópia automática do CNPJ para clipboard
+    const cleanCnpj = cnpjPrestador ? cnpjPrestador.replace(/\D/g, "") : "";
+    if (cleanCnpj) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(cleanCnpj)
+          .then(() => triggerToast("✓ CNPJ copiado para a área de transferência!"))
+          .catch(() => {
+            // fallback
+          });
+      }
+    }
+
+    // Abre o Emissor Nacional em nova aba
+    window.open("https://www.nfse.gov.br/EmissorNacional/Login", "_blank");
+
+    // Abre o modal de instrução
     setShowFocusNfeModal(true);
-  };
-
-  // 1. TRANSMISSÃO REAL (POST) VIA PROXY
-  const handleEmitFocusNfe = async () => {
-    if (!focusNfeSelectedTx) return;
-
-    if (planType === "premium" && invoiceUsed >= invoiceLimit) {
-      triggerToast("⚠ Limite de emissões de notas atingido (30 de 30)!");
-      const blockLogs = [
-        ...focusNfeLogs,
-        `[ERROR] Bloqueado: Limite de emissões atingido (${invoiceUsed}/${invoiceLimit}).`,
-        `[SISTEMA] Por favor, aguarde o ciclo de renovação mensal para liberar novos créditos de emissão.`
-      ];
-      setFocusNfeLogs(blockLogs);
-      setFocusNfeStatus("error");
-      setFocusNfeError(`Você atingiu o limite de emissões de NFS-e (${invoiceUsed}/${invoiceLimit}) incluídas no seu plano premium.`);
-      return;
-    }
-
-    setFocusNfeStatus("sending");
-    const updatedLogs = [
-      ...focusNfeLogs,
-      `[POST] Enviando dados para: /api/focusnfe (Proxy local)...`,
-      `[POST] Payload JSON montado com o CPF/CNPJ corporativo do Prestador e do Tomador...`,
-    ];
-    setFocusNfeLogs(updatedLogs);
-
-    const payload = {
-      cnpj_prestador: cnpjPrestador.replace(/\D/g, ""),
-      ref: refNfe,
-      numero_rps: numeroRps,
-      serie_rps: serieRps,
-      tipo_rps: tipoRps,
-      valor_servicos: focusNfeSelectedTx.valor,
-      razao_social_tomador: focusNfeSelectedTx.clienteNome || "Consumidor Final",
-      email_tomador: focusNfeSelectedTx.email || "contato-homologacao@meiflow.com.br",
-      cnpj_tomador: focusNfeSelectedTx.clienteDocumento && focusNfeSelectedTx.clienteDocumento.replace(/\D/g, "").length === 14 ? focusNfeSelectedTx.clienteDocumento.replace(/\D/g, "") : undefined,
-      cpf_tomador: focusNfeSelectedTx.clienteDocumento && focusNfeSelectedTx.clienteDocumento.replace(/\D/g, "").length === 11 ? focusNfeSelectedTx.clienteDocumento.replace(/\D/g, "") : undefined,
-      descricao_servicos: focusNfeSelectedTx.descricao,
-    };
-
-    try {
-      const response = await fetch('/api/focusnfe', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-
-      const httpStatus = response.status;
-      const data = await response.json();
-
-      if (httpStatus === 201 || httpStatus === 200) {
-        setFocusNfeStatus("processing");
-        setFocusNfeApiResponse(data);
-        const nextLogs = [
-          ...updatedLogs,
-          `[HTTP ${httpStatus}] Retorno do Envio: "201 - Processando Autorização"!`,
-          `[INFO] Referência ativa: "${data.ref || refNfe}"`,
-          `[INFO] Status Focus NFe: "${data.status || "processando_autorizacao"}"`,
-          `[INFO] Mensagem: "O lote de RPS foi recebido e está aguardando processamento."`,
-          `[GET] Iniciando consultas de status automática via GET a cada 4 segundos...`
-        ];
-        setFocusNfeLogs(nextLogs);
-
-        // Inicia pooling automático
-        setTimeout(() => {
-          handleCheckFocusNfeStatus(data.ref || refNfe, 1, nextLogs);
-        }, 4000);
-      } else {
-        setFocusNfeStatus("error");
-        setFocusNfeApiResponse(data);
-        const errMsg = data.mensagem || (data.errors && typeof data.errors === 'object' ? JSON.stringify(data.errors) : "") || "Dados incorretos ou CNPJ prestador não habilitado.";
-        setFocusNfeError(errMsg);
-        setFocusNfeLogs([
-          ...updatedLogs,
-          `[HTTP ${httpStatus}] Rejeitado / Erro de Validação!`,
-          `[ERROR] Focus NFe Respondeu: "${errMsg}"`,
-          `[DICA] O token de testes está ativo, mas o CNPJ do Prestador digitado (${cnpjPrestador}) precisa estar habilitado no painel da Focus NFe.`
-        ]);
-        triggerToast("⚠ Falha: Verifique os erros no log da Focus NFe.");
-      }
-    } catch (err: any) {
-      setFocusNfeStatus("error");
-      setFocusNfeError(err.message || "Erro de conexão.");
-      setFocusNfeLogs([
-        ...updatedLogs,
-        `[SISTEMA ERROR] Erro de comunicação de rede com o proxy: ${err.message}`
-      ]);
-    }
-  };
-
-  // 2. CONSULTA REAL (GET) VIA PROXY
-  const handleCheckFocusNfeStatus = async (targetRef?: string, attempt: number = 1, currentLogs?: string[]) => {
-    const currentRef = targetRef || refNfe;
-    if (!currentRef) return;
-
-    const baseLogs = currentLogs || focusNfeLogs;
-    const monitoringLogs = [
-      ...baseLogs,
-      `[GET] [Consulta #${attempt}] Verificando: /api/focusnfe?ref=${currentRef} ...`
-    ];
-    setFocusNfeLogs(monitoringLogs);
-
-    try {
-      const response = await fetch(`/api/focusnfe?ref=${currentRef}`);
-      const httpStatus = response.status;
-      const data = await response.json();
-
-      if (httpStatus === 200) {
-        setFocusNfeApiResponse(data);
-        const currentStatus = data.status;
-
-        if (currentStatus === "autorizado") {
-          setFocusNfeStatus("authorized");
-          setFocusNfeLogs([
-            ...monitoringLogs,
-            `[HTTP 200] Resposta: "autorizado"`,
-            `[SUCESSO] NFS-e Emitida e Autorizada com sucesso!`,
-            `[SUCESSO] Chave de Acesso: "${data.chave_nfe || "N/A"}"`,
-            `[SUCESSO] Número da Nota Fiscal: ${data.numero || "Gerado pelo Fisco"}`,
-            `[SUCESSO] Link XML: https://homologacao.focusnfe.com.br${data.caminho_xml_nota_fiscal}`,
-            `[SUCESSO] Link PDF (Danfse): https://homologacao.focusnfe.com.br${data.caminho_pdf_nota_fiscal}`
-          ]);
-          triggerToast("✓ NFS-e de Homologação emitida e autorizada!");
-
-          // Incrementar invoiceUsed no Firestore em +1
-          if (user) {
-            try {
-              const newUsed = invoiceUsed + 1;
-              const docRef = doc(db, "users", user.uid);
-              await setDoc(docRef, { invoiceUsed: newUsed }, { merge: true });
-              
-              const legacyDocRef = doc(db, "usuarios", user.uid);
-              await setDoc(legacyDocRef, { invoiceUsed: newUsed }, { merge: true });
-              
-              setInvoiceUsed(newUsed);
-              console.log(`[Firestore Success]: invoiceUsed incremented to ${newUsed}`);
-            } catch (fsErr) {
-              console.error("Erro ao incrementar invoiceUsed no Firestore:", fsErr);
-            }
-          } else {
-            const localUsed = Number(localStorage.getItem("meiflow_invoice_used") || "0") + 1;
-            localStorage.setItem("meiflow_invoice_used", localUsed.toString());
-            setInvoiceUsed(localUsed);
-          }
-        } else if (currentStatus === "erro_autorizacao" || currentStatus === "erro" || data.erros) {
-          setFocusNfeStatus("error");
-          const errorsList = data.erros ? JSON.stringify(data.erros) : (data.mensagem || "Rejeição do fisco municipal");
-          setFocusNfeError(errorsList);
-          setFocusNfeLogs([
-            ...monitoringLogs,
-            `[HTTP 200] Resposta: "erro_autorizacao" (Negado pela prefeitura)`,
-            `[REJEIÇÃO] Razão detalhada: ${errorsList}`
-          ]);
-        } else {
-          // Permanece em processando
-          const nextLogs = [
-            ...monitoringLogs,
-            `[GET] Resposta: "${currentStatus}". A nota ainda está na fila de processamento municipal.`
-          ];
-          setFocusNfeLogs(nextLogs);
-
-          if (attempt < 3) {
-            setTimeout(() => {
-              handleCheckFocusNfeStatus(currentRef, attempt + 1, nextLogs);
-            }, 4000);
-          } else {
-            setFocusNfeStatus("processing");
-            setFocusNfeLogs([
-              ...nextLogs,
-              `[SISTEMA] Tempo limite de pooling excedido. Clique em "Consultar Status Manual" para verificar o processamento.`
-            ]);
-          }
-        }
-      } else {
-        setFocusNfeStatus("error");
-        const errMsg = data.mensagem || "Erro na resposta do servidor.";
-        setFocusNfeError(errMsg);
-        setFocusNfeLogs([
-          ...monitoringLogs,
-          `[HTTP ${httpStatus}] Erro na consulta de status: ${errMsg}`
-        ]);
-      }
-    } catch (err: any) {
-      setFocusNfeStatus("error");
-      setFocusNfeError(err.message || "Erro de rede.");
-      setFocusNfeLogs([
-        ...monitoringLogs,
-        `[SISTEMA ERROR] Falha de comunicação na consulta: ${err.message}`
-      ]);
-    }
   };
 
   // Exportar todas as transações para relatório PDF profissional consolidado do MEI
@@ -2872,533 +2682,156 @@ ${meiName}`;
         </div>
       )}
       {showFocusNfeModal && focusNfeSelectedTx && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto" id="modal-nfse-passo-a-passo">
           <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-100 overflow-hidden text-left flex flex-col my-8">
             
             {/* Header */}
-            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+            <div className="px-6 py-5 bg-slate-900 text-white flex items-center justify-between" id="header-nfse">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-blue-600 rounded-xl">
-                  <FileCode className="w-5 h-5 text-white" />
+                  <FileText className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm tracking-tight font-sans">Central de Emissão NFS-e</h3>
-                  <p className="text-[10px] text-slate-400">Canal Direto de Emissão de Notas • Mei Flow</p>
+                  <h3 className="font-bold text-sm tracking-tight font-sans">Central de Emissão de NFS-e</h3>
+                  <p className="text-[10px] text-slate-400">Guia União Nacional do MEI • Emissão Sem Custos</p>
                 </div>
               </div>
-              <button
-                onClick={() => {
-                  setShowFocusNfeModal(false);
-                  setFocusNfeError(null);
-                  setFocusNfeStatus("idle");
-                }}
-                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 font-extrabold text-xs cursor-pointer"
-              >
-                ✕
-              </button>
             </div>
 
-            <div className="p-6 overflow-y-auto max-h-[75vh] space-y-4">
-              
-              {/* ALERTA DE CADASTRO OBRIGATÓRIO (CNPJ NÃO CADASTRADO NO GOVERNO) */}
-              <div className="p-4 bg-gradient-to-br from-amber-50 to-orange-50/75 border border-amber-100 rounded-2xl space-y-2.5">
-                <div className="flex gap-2 items-start">
-                  <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                  <div>
-                    <h4 className="text-xs font-bold text-amber-900 uppercase tracking-widest leading-none">Credenciamento Obrigatório</h4>
-                    <p className="text-[11px] text-amber-700 leading-relaxed font-semibold mt-1">
-                      Para emitir Notas Fiscais Eletrônicas (NFS-e) por aqui, seu CNPJ MEI <strong>deve estar cadastrado</strong> no Emissor Nacional do governo. Caso não esteja credenciado, você receberá erro. Clique no link para fazer o credenciamento obrigatório primeiro:
-                    </p>
-                  </div>
-                </div>
-                <a
-                  href="https://www.nfse.gov.br/emissor-nacional"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center justify-center gap-2 w-full py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm hover:shadow-md cursor-pointer"
-                >
-                  <span>Cadastrar MEI no Emissor Nacional ➔</span>
-                </a>
-              </div>
-
-              {/* Resumo Simplificado da Venda */}
-              <div className="p-4 bg-blue-50/45 border border-blue-100 rounded-2xl space-y-2">
-                <span className="text-[9px] font-extrabold text-blue-800 uppercase tracking-widest">Resumo do Serviço Prestado</span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-xs">
-                  <div>
-                    <span className="text-slate-400 font-medium block text-[10px]">Serviço</span>
-                    <strong className="text-slate-800 font-semibold">{focusNfeSelectedTx.descricao}</strong>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 font-medium block text-[10px]">Cliente (Tomador)</span>
-                    <strong className="text-slate-800 font-semibold truncate block">
-                      {focusNfeSelectedTx.clienteNome || "Consumidor Geral"}
-                    </strong>
-                  </div>
-                  <div className="mt-1">
-                    <span className="text-slate-400 font-medium block text-[10px]">Valor Bruto</span>
-                    <strong className="text-emerald-700 font-extrabold text-sm">
-                      R$ {focusNfeSelectedTx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                    </strong>
-                  </div>
-                  <div className="mt-1">
-                    <span className="text-slate-400 font-medium block text-[10px]">Competência / Data</span>
-                    <strong className="text-slate-700 font-medium font-mono block text-[11px]">{focusNfeSelectedTx.data}</strong>
-                  </div>
-                </div>
-              </div>
-
-              {/* Parâmetros Prontos */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1">
-                <div>
-                  <label className="block text-[9px] font-extrabold text-slate-400 uppercase tracking-widest mb-1 font-sans">
-                    CNPJ do Emissor (Seu MEI)
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: 55.823.144/0001-90"
-                    value={cnpjPrestador}
-                    onChange={(e) => setCnpjPrestador(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 text-slate-700 font-mono rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[9px] font-extrabold text-slate-400 uppercase tracking-widest mb-1 font-sans">
-                    RPS da Nota / Identificador
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={numeroRps}
-                    onChange={(e) => setNumeroRps(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 text-slate-700 font-mono rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* LINHA DO TEMPO VISUAL DO STATUS DE EMISSÃO */}
-              {focusNfeStatus !== "idle" && (
-                <div className="p-4 bg-slate-50 border border-slate-100 rounded-2xl space-y-3.5">
-                  <h4 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">Acompanhamento do Lote Fiscal</h4>
-                  
-                  <div className="space-y-4">
-                    {/* Passo 1 */}
-                    <div className="flex gap-3">
-                      <div className="flex flex-col items-center">
-                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold ${
-                          focusNfeStatus === "sending"
-                            ? "bg-blue-600 text-white animate-pulse"
-                            : ["processing", "authorized"].includes(focusNfeStatus)
-                              ? "bg-emerald-500 text-white font-bold"
-                              : "bg-slate-200 text-slate-500"
-                        }`}>
-                          {["processing", "authorized"].includes(focusNfeStatus) ? "✓" : "1"}
-                        </div>
-                        <div className="w-0.5 h-6 bg-slate-200"></div>
-                      </div>
-                      <div className="space-y-0.5">
-                        <span className={`text-xs font-bold block ${focusNfeStatus === "sending" ? "text-blue-600 animate-pulse" : "text-slate-800"}`}>
-                          {focusNfeStatus === "sending" ? "Enviando dados da nota..." : "Dados enviados com sucesso"}
-                        </span>
-                        <span className="text-[10px] text-slate-400 block leading-tight">Transmissão segura de lote via protocolo TLS</span>
-                      </div>
-                    </div>
-
-                    {/* Passo 2 */}
-                    <div className="flex gap-3">
-                      <div className="flex flex-col items-center">
-                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold ${
-                          focusNfeStatus === "processing"
-                            ? "bg-blue-600 text-white animate-pulse"
-                            : focusNfeStatus === "authorized"
-                              ? "bg-emerald-500 text-white font-bold"
-                              : "bg-slate-200 text-slate-500"
-                        }`}>
-                          {focusNfeStatus === "authorized" ? "✓" : "2"}
-                        </div>
-                        <div className="w-0.5 h-6 bg-slate-200"></div>
-                      </div>
-                      <div className="space-y-0.5">
-                        <span className={`text-xs font-bold block ${focusNfeStatus === "processing" ? "text-blue-600 animate-pulse" : "text-slate-800"}`}>
-                          {focusNfeStatus === "processing" ? "Servidor público processando na fila municipal..." : focusNfeStatus === "authorized" ? "Processamento municipal concluído" : "Aguardando transmissão"}
-                        </span>
-                        <span className="text-[10px] text-slate-400 block leading-tight">Verificação das regras do DAS-MEI municipal e de crédito fiscal</span>
-                      </div>
-                    </div>
-
-                    {/* Passo 3 */}
-                    <div className="flex gap-3">
-                      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold shrink-0 ${
-                        focusNfeStatus === "authorized"
-                          ? "bg-emerald-500 text-white shadow-xs"
-                          : "bg-slate-200 text-slate-500"
-                      }`}>
-                        {focusNfeStatus === "authorized" ? "🏆" : "3"}
-                      </div>
-                      <div className="space-y-0.5">
-                        <span className={`text-xs font-bold block ${focusNfeStatus === "authorized" ? "text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-lg w-fit" : "text-slate-400"}`}>
-                          NFS-e autorizada e emitida!
-                        </span>
-                        <span className="text-[10px] text-slate-400 block leading-tight font-medium">Nota validada oficialmente para download em PDF e formato XML</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Resultado da Autorização (Pronto para baixar) */}
-              {focusNfeStatus === "authorized" && focusNfeApiResponse && (
-                <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex flex-col gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
-                      <Check className="w-5 h-5 text-emerald-600" />
-                    </div>
-                    <div className="text-left font-sans">
-                      <h4 className="text-xs font-extrabold text-emerald-800 uppercase tracking-wide">NFS-e Autorizada no Fisco!</h4>
-                      <p className="text-[10px] text-emerald-600 font-medium leading-tight mt-0.5">
-                        Número da Nota: <strong className="font-mono font-bold text-emerald-800 px-1 py-0.5 bg-emerald-100/50 rounded">{focusNfeApiResponse.numero}</strong> • Chave de autenticação gerada.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex gap-2 w-full">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        try {
-                          triggerToast("✓ Gerando e baixando PDF oficial unificado...");
-                          const doc = new jsPDF();
-                          
-                          // Outer border
-                          doc.setDrawColor(203, 213, 225); // slate-300
-                          doc.setLineWidth(0.5);
-                          doc.rect(5, 5, 200, 287);
-                          
-                          // Custom header banner
-                          doc.setFillColor(15, 23, 42); // slate-900 (deep navy)
-                          doc.rect(5, 5, 200, 32, "F");
-                          
-                          // Header text
-                          doc.setFont("helvetica", "bold");
-                          doc.setFontSize(14);
-                          doc.setTextColor(255, 255, 255);
-                          doc.text("NOTA FISCAL DE SERVIÇOS ELETRÔNICA (NFS-e)", 12, 17);
-                          
-                          doc.setFont("helvetica", "normal");
-                          doc.setFontSize(8.5);
-                          doc.setTextColor(226, 232, 240); // slate-200
-                          doc.text("Emissor Nacional de Microempreendedores Individuais • Mei Flow Faturamento", 12, 24);
-                          doc.text(`Número da Nota: ${focusNfeApiResponse.numero} | Série: 1 | Tipo RPS: 1 (RPS Municipal)`, 12, 30);
-                          
-                          // Right badges for verification and security code
-                          doc.setFillColor(51, 65, 85); // slate-700
-                          doc.rect(142, 11, 56, 20, "F");
-                          doc.setTextColor(255, 255, 255);
-                          doc.setFont("helvetica", "bold");
-                          doc.setFontSize(8);
-                          doc.text("CÓDIGO VERIFICAÇÃO", 146, 17);
-                          doc.setFont("helvetica", "normal");
-                          doc.setFontSize(10.5);
-                          doc.text(focusNfeApiResponse.codigo_verificacao, 146, 25);
-                          
-                          // Content Section 1: PRESTADOR DO SERVIÇO
-                          doc.setDrawColor(226, 232, 240); // slate-200
-                          doc.setFillColor(248, 250, 252); // slate-50
-                          doc.rect(10, 44, 190, 42, "FD");
-                          
-                          doc.setTextColor(15, 23, 42); // slate-900
-                          doc.setFont("helvetica", "bold");
-                          doc.setFontSize(9.5);
-                          doc.text("DADOS DO EMISSOR (PRESTADOR)", 14, 51);
-                          
-                          doc.setFont("helvetica", "normal");
-                          doc.setFontSize(8.5);
-                          doc.setTextColor(71, 85, 105); // slate-600
-                          doc.text(`Razão Social / Nome: ${meiName || "Microempreendedor MEI"}`, 14, 58);
-                          doc.text(`CNPJ do Prestador: ${cnpjPrestador || "Não Cadastrado"}`, 14, 64);
-                          doc.text(`Inscrição Municipal / Estado: Habilitada / Isenta do Simples Nacional`, 14, 70);
-                          doc.text("Endereço Fiscal do MEI: Registrado em Cadastro Municipal Unificado", 14, 76);
-                          doc.text(`Plataforma Emissora Oficial: Mei Flow Sistemas de Faturamento Inteligente`, 14, 82);
-                          
-                          // Content Section 2: TOMADOR DO SERVIÇO
-                          doc.setFillColor(248, 250, 252);
-                          doc.rect(10, 92, 190, 42, "FD");
-                          
-                          doc.setTextColor(15, 23, 42);
-                          doc.setFont("helvetica", "bold");
-                          doc.setFontSize(9.5);
-                          doc.text("DADOS DO TOMADOR (CLIENTE)", 14, 99);
-                          
-                          // Buscar registro do cliente correspondente para puxar e-mail e telefone dinâmicos
-                          const matchingCli = clientes.find(c => 
-                            (focusNfeSelectedTx.clienteId && c.id === focusNfeSelectedTx.clienteId) ||
-                            (focusNfeSelectedTx.clienteNome && c.nome.toLowerCase() === focusNfeSelectedTx.clienteNome.toLowerCase()) ||
-                            (focusNfeSelectedTx.clienteDocumento && c.documento === focusNfeSelectedTx.clienteDocumento)
-                          );
-
-                          const emailTomador = matchingCli?.email || "contato@cliente.com.br";
-                          const telefoneTomador = matchingCli?.telefone || "(11) 98888-7777";
-                          const enderecoTomador = "Av. Paulista, 1000 - Bela Vista, São Paulo - SP, CEP 01311-100";
-
-                          doc.setFont("helvetica", "normal");
-                          doc.setFontSize(8.5);
-                          doc.setTextColor(71, 85, 105);
-                          doc.text(`Nome / Razão Social: ${focusNfeSelectedTx.clienteNome || "Consumidor Final"}`, 14, 106);
-                          doc.text(`Documento (CPF / CNPJ): ${focusNfeSelectedTx.clienteDocumento || "Consumidor Geral"}`, 14, 112);
-                          doc.text(`E-mail: ${emailTomador}   |   Telefone: ${telefoneTomador}`, 14, 118);
-                          doc.text(`Endereço: ${enderecoTomador}`, 14, 124);
-                          doc.text("Relação de Consumo Comercial: Prestadora de Serviço por Meio Tecnológico", 14, 130);
-                          
-                          // Content Section 3: DETALHAMENTO DE TRIBUTOS E SERVIÇO
-                          doc.setFillColor(255, 255, 255);
-                          doc.rect(10, 140, 190, 60, "F");
-                          doc.rect(10, 140, 190, 60, "D");
-                          
-                          doc.setFillColor(241, 245, 249); // slate-100 heading row
-                          doc.rect(10, 140, 190, 8, "F");
-                          
-                          doc.setTextColor(15, 23, 42);
-                          doc.setFont("helvetica", "bold");
-                          doc.setFontSize(9);
-                          doc.text("DETALHAMENTO E DISCRIMINAÇÃO DOS SERVIÇOS PRESTADOS", 14, 145);
-                          
-                          doc.setFont("helvetica", "normal");
-                          doc.setFontSize(8.5);
-                          doc.setTextColor(51, 65, 85);
-                          doc.text(`Serviço Prestado: ${focusNfeSelectedTx.descricao || "Consultoria e Serviços Técnicos"}`, 14, 154);
-                          doc.text(`Categoria Tributária: ${focusNfeSelectedTx.categoria || "Geral"}`, 14, 160);
-                          doc.text("Item da LC 116/03: 01.01 - Análise e desenvolvimento de sistemas, softwares e consultorias tecnificadas,", 14, 166);
-                          doc.text("ou atividades mercantis enquadradas no Simples Nacional do Microempreendedor Individual (MEI).", 14, 171);
-                          
-                          const notes = "Instruções Normativas / Observações Importantes: Nota fiscal eletrônica direta com isenção total tributária na fonte conforme Lei Complementar nº 123 de 14 de Dezembro de 2006. O recolhimento de tributos federais e ISS é unificado pelo regime MEI por boleto consolidado mensal (DAS-MEI). Isento de retenção de ISSQN.";
-                          const splitNotes = doc.splitTextToSize(notes, 180);
-                          doc.text(splitNotes, 14, 178);
-                          
-                          // Content Section 4: VALORES TRIBUTÁRIOS
-                          doc.setFillColor(248, 250, 252);
-                          doc.rect(10, 206, 190, 32, "FD");
-                          
-                          doc.setTextColor(15, 23, 42);
-                          doc.setFont("helvetica", "bold");
-                          doc.setFontSize(9);
-                          doc.text("VALORES TRIBUTÁRIOS & RETENÇÕES", 14, 212);
-                          
-                          doc.setFont("helvetica", "normal");
-                          doc.setFontSize(8.5);
-                          doc.setTextColor(71, 85, 105);
-                          doc.text(`Valor de Serviços (Bruto Declarado): R$ ${focusNfeSelectedTx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 14, 220);
-                          doc.text("Alíquota de ISS: 0.0% (Regime Unificado do DAS-MEI - Isento)", 14, 226);
-                          doc.text("Retenções Federais (PIS/COFINS/CSLL/IR): Não Aplicáveis ao Microempreendedor", 14, 232);
-                          
-                          // Sub card inside values
-                          doc.setFillColor(241, 245, 249);
-                          doc.rect(130, 208, 68, 28, "F");
-                          doc.setTextColor(15, 23, 42);
-                          doc.setFont("helvetica", "bold");
-                          doc.setFontSize(7.5);
-                          doc.text("VALOR LÍQUIDO REVERTIDO", 134, 214);
-                          doc.setFont("helvetica", "bold");
-                          doc.setFontSize(13);
-                          doc.setTextColor(4, 120, 87); // emerald-700
-                          doc.text(`R$ ${focusNfeSelectedTx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, 134, 223);
-                          doc.setFont("helvetica", "normal");
-                          doc.setFontSize(7.5);
-                          doc.setTextColor(100, 116, 139);
-                          doc.text("Totalmente quitado via Mei Flow.", 134, 231);
-                          
-                          // Chave de acesso
-                          doc.setTextColor(15, 23, 42);
-                          doc.setFont("helvetica", "bold");
-                          doc.setFontSize(8.5);
-                          doc.text("CHAVE DE ACESSO E ASSINATURA ELETRÔNICA:", 10, 245);
-                          doc.setFont("helvetica", "normal");
-                          doc.setFontSize(8);
-                          doc.setTextColor(51, 65, 85);
-                          const cleanCnpj = cnpjPrestador?.replace(/\D/g, "") || "4483719000183";
-                          const formattedKey = `352606${cleanCnpj}550010000${focusNfeApiResponse.numero}1837482937`;
-                          doc.text(formattedKey, 10, 250);
-                          
-                          // Footer disclaimer
-                          doc.setTextColor(148, 163, 184); // slate-400
-                          doc.setFontSize(7.5);
-                          doc.text("Esta correspondência é uma representação gráfica e legível da Nota Fiscal Eletrônica nacional de serviços para conformidade fiscal do MEI.", 10, 272);
-                          doc.text("Emitida em total sincronia eletrônica pelo Portal Unificado e homologada via sistema integrado Mei Flow.", 10, 277);
-                          doc.text(`Recibo de Faturamento nº ${focusNfeApiResponse.numero} gerado e assinado digitalmente com sucesso.`, 10, 282);
-                          
-                          doc.save(`nfse_meiflow_nota_${focusNfeApiResponse.numero}.pdf`);
-                        } catch (err) {
-                          console.error("Erro ao gerar PDF:", err);
-                          triggerToast("⚠ Falha ao renderizar PDF oficial.");
-                        }
-                      }}
-                      className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-center text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-xs shrink-0 cursor-pointer"
-                    >
-                      <FileDown className="w-3.5 h-3.5" />
-                      <span>Baixar PDF (Nota)</span>
-                    </button>
-                    <a
-                      href="#"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        triggerToast("✓ Baixando XML de faturamento...");
-                        const mockXml = `<?xml version="1.0" encoding="UTF-8"?>
-<NFSe>
-  <InfNFSe Id="NFS-${focusNfeSelectedTx.id}">
-    <tpAmb>1</tpAmb>
-    <verAplic>MeiFlow_v1</verAplic>
-    <Prestador><CNPJ>${cnpjPrestador.replace(/\D/g, "")}</CNPJ></Prestador>
-    <Tomador><xNome>${focusNfeSelectedTx.clienteNome || "Consumidor Final"}</xNome></Tomador>
-    <Servico><vServ>${focusNfeSelectedTx.valor.toFixed(2)}</vServ></Servico>
-    <codigoVerificacao>${focusNfeApiResponse.codigo_verificacao}</codigoVerificacao>
-  </InfNFSe>
-</NFSe>`;
-                        const blob = new Blob([mockXml], { type: "application/xml;charset=utf-8" });
-                        const url = URL.createObjectURL(blob);
-                        const link = document.createElement("a");
-                        link.href = url;
-                        link.download = `nfse_meiflow_rps_${numeroRps}.xml`;
-                        link.click();
-                      }}
-                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-center text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-xs shrink-0 cursor-pointer"
-                    >
-                      <FileCode className="w-3.5 h-3.5" />
-                      <span>Baixar XML</span>
-                    </a>
-                  </div>
-                </div>
-              )}
-
-              {/* Feedback Amigável de Erro */}
-              {focusNfeStatus === "error" && focusNfeError && (
-                <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex flex-col gap-2.5">
-                  <div className="flex items-center gap-2 text-rose-800 text-xs font-bold uppercase tracking-wider">
-                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                    <span>Falha na Autorização da NFS-e</span>
-                  </div>
-                  <p className="text-xs text-rose-700 leading-relaxed font-mono bg-white p-2.5 rounded-xl border border-rose-100/50 max-h-[100px] overflow-y-auto">
-                    {focusNfeError}
+            <div className="p-6 space-y-5 overflow-y-auto" id="content-nfse">
+              {/* Alerta de Sucesso / Feedback do CNPJ */}
+              <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-start gap-3" id="alert-cnpj-copiado">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 mt-0.5 shrink-0" />
+                <div className="flex-1">
+                  <h4 className="text-xs font-bold text-emerald-950 font-sans">CNPJ copiado com sucesso!</h4>
+                  <p className="text-[11px] text-emerald-700 leading-normal mt-0.5 font-medium">
+                    O número do seu CNPJ MEI (<strong className="font-mono">{cnpjPrestador || "Padrão de Cadastro"}</strong>) foi copiado automaticamente para a sua área de transferência para facilitar o preenchimento no portal nacional do governo.
                   </p>
-                  <p className="text-[10px] text-slate-500 leading-normal font-medium">
-                    🔍 <strong>Dica de Credenciamento:</strong> Seu CNPJ precisa estar habilitado para NFS-e no emissor nacional do governo (Sefaz ou prefeitura de domicílio). Se ainda não possui esse cadastro, você deve realizá-lo para que a emissão de faturamento oficial funcione perfeitamente.
-                  </p>
-                </div>
-              )}
-
-              {/* SEÇÃO DOBRÁVEL / ACCORDION PARA LOGS TÉCNICOS DE API */}
-              <div className="pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setShowTechnicalLogs(!showTechnicalLogs)}
-                  className="w-full text-left py-1 text-[10px] font-extrabold text-slate-400 hover:text-slate-600 flex items-center justify-between uppercase tracking-widest transition-all cursor-pointer"
-                >
-                  <span>{showTechnicalLogs ? "Ocultar" : "Visualizar"} Relatórios de Faturamento (Avançado)</span>
-                  <span className="text-xs">{showTechnicalLogs ? "▲" : "▼"}</span>
-                </button>
-                
-                {showTechnicalLogs && (
-                  <div className="mt-2.5 space-y-2.5 animate-fade-in text-left">
-                    <p className="text-[10px] text-slate-450 leading-relaxed">
-                      Esta área monitora em tempo real os relatórios de comunicação em lote criptografados com o Fisco municipal.
-                    </p>
-                    <div className="p-3 bg-slate-950 rounded-xl text-[10px] text-slate-300 font-mono max-h-[130px] overflow-y-auto space-y-1 shadow-inner border border-slate-800">
-                      {focusNfeLogs.map((log, idx) => {
-                        let colorClass = "text-slate-400";
-                        if (log.startsWith("[POST]")) colorClass = "text-yellow-400";
-                        if (log.startsWith("[GET]")) colorClass = "text-teal-400";
-                        if (log.startsWith("[SISTEMA]")) colorClass = "text-indigo-300";
-                        if (log.startsWith("[SUCESSO]")) colorClass = "text-emerald-400 font-bold";
-                        if (log.startsWith("[ERROR]") || log.startsWith("[REJEIÇÃO]")) colorClass = "text-rose-400";
-                        if (log.startsWith("[SIMULAÇÃO]")) colorClass = "text-purple-300";
-                        if (log.includes("HTTP 201") || log.includes("HTTP 200")) colorClass = "text-emerald-300 font-semibold";
-                        return (
-                          <div key={idx} className={`${colorClass} whitespace-pre-wrap leading-relaxed`}>
-                            {log}
-                          </div>
-                        );
-                      })}
-                      {focusNfeStatus === "sending" && (
-                        <div className="text-yellow-300 animate-pulse flex items-center gap-1.5 mt-1.5">
-                          <span>●</span><span>Transmitindo RPS ao servidor para autorização de lote...</span>
-                        </div>
-                      )}
-                      {focusNfeStatus === "processing" && (
-                        <div className="text-teal-300 animate-pulse flex items-center gap-1.5 mt-1.5">
-                          <span>●</span><span>[PROCESSANDO] O servidor municipal está computando a nota na fila...</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* CONTADOR DE NFS-E DESTE MÊS (PLANO PREMIUM) */}
-              {planType === "premium" ? (
-                <div className="pt-3 pb-3 border-t border-slate-100 flex flex-col gap-1.5 bg-slate-50/50 p-3 rounded-2xl border">
-                  <div className="flex justify-between items-center text-[11px] font-bold text-slate-700">
-                    <span className="text-slate-600">Franquia Premium de Notas Fiscais:</span>
-                    <span className={invoiceUsed >= invoiceLimit ? "text-rose-600" : "text-blue-700"}>
-                      {invoiceUsed} de {invoiceLimit} emitidas
-                    </span>
-                  </div>
-                  <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
-                    <div 
-                      className={`h-1.5 rounded-full transition-all duration-500 ${
-                        invoiceUsed >= invoiceLimit ? "bg-rose-500 animate-pulse" : "bg-blue-600"
-                      }`} 
-                      style={{ width: `${Math.min(100, (invoiceUsed / invoiceLimit) * 100)}%` }}
-                    ></div>
-                  </div>
-                  {invoiceUsed >= invoiceLimit ? (
-                    <p className="text-[10px] text-rose-600 font-bold leading-normal">
-                      ⚠ Atenção: Limite mensal de 30 emissões atingido. Clique no suporte caso queira solicitar extensão.
-                    </p>
-                  ) : (
-                    <p className="text-[10px] text-slate-500 leading-normal">
-                      Você pode emitir mais {invoiceLimit - invoiceUsed} notas fiscais incluídas em seu faturamento Premium do mês.
-                    </p>
-                  )}
-                </div>
-              ) : null}
-
-              {/* FOOTER DO MODAL DA NFS-E */}
-              <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row gap-3 items-center justify-between">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowFocusNfeModal(false);
-                    setFocusNfeError(null);
-                    setFocusNfeStatus("idle");
-                  }}
-                  className="w-full sm:w-auto px-4 py-2.5 bg-slate-50 border border-slate-200 hover:bg-slate-100 text-slate-600 hover:text-slate-800 font-bold text-xs rounded-xl transition-all text-center cursor-pointer"
-                >
-                  Voltar ao Painel
-                </button>
-                
-                <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto justify-end">
-                  {/* BOTÃO DE TRANSMISSÃO OFICIAL */}
                   <button
-                    type="button"
-                    onClick={handleEmitFocusNfe}
-                    disabled={focusNfeStatus === "sending" || focusNfeStatus === "processing" || (planType === "premium" && invoiceUsed >= invoiceLimit)}
-                    className={`w-full sm:w-auto font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-95 cursor-pointer disabled:opacity-50 ${
-                      planType === "premium" && invoiceUsed >= invoiceLimit 
-                        ? "bg-slate-350 hover:bg-slate-350 text-slate-200 cursor-not-allowed" 
-                        : "bg-blue-600 hover:bg-blue-700 text-white hover:shadow-lg"
-                    }`}
-                    title={planType === "premium" && invoiceUsed >= invoiceLimit ? "Limite de emissões atingido (30/30)" : "Emite a nota oficial e transmite diretamente ao Fisco municipal"}
+                    onClick={() => {
+                      const cleanCnpj = cnpjPrestador ? cnpjPrestador.replace(/\D/g, "") : "";
+                      if (cleanCnpj) {
+                        navigator.clipboard.writeText(cleanCnpj);
+                        triggerToast("✓ CNPJ copiado!");
+                      }
+                    }}
+                    className="mt-2 text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1.5"
+                    id="btn-copy-cnpj-secondary"
                   >
-                    {focusNfeStatus === "sending" || focusNfeStatus === "processing" ? (
-                      <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    ) : (
-                      <Cpu className="w-3.5 h-3.5" />
-                    )}
-                    <span>Emitir Nota Fiscal (Real)</span>
+                    <Copy className="w-3 h-3" />
+                    <span>Copiar Novamente</span>
                   </button>
                 </div>
               </div>
 
+              {/* Passo a Passo */}
+              <div className="space-y-4" id="passos-emissao-nfse">
+                <h4 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest font-sans">Como emitir no Emissor Nacional</h4>
+                
+                <div className="space-y-4">
+                  {/* Passo 1 */}
+                  <div className="flex gap-4" id="passo-1">
+                    <div className="flex flex-col items-center shrink-0">
+                      <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold font-sans">
+                        1
+                      </div>
+                      <div className="w-0.5 h-10 bg-slate-100"></div>
+                    </div>
+                    <div className="space-y-1">
+                      <h5 className="text-xs font-bold text-slate-800">Cópia do CNPJ Automática</h5>
+                      <p className="text-[11px] text-slate-500 leading-normal font-medium">
+                        O aplicativo acabou de copiar o seu CNPJ. Basta colar (Ctrl+V ou pressionando e segurando) no site do governo.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Passo 2 */}
+                  <div className="flex gap-4" id="passo-2">
+                    <div className="flex flex-col items-center shrink-0">
+                      <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold font-sans">
+                        2
+                      </div>
+                      <div className="w-0.5 h-10 bg-slate-100"></div>
+                    </div>
+                    <div className="space-y-1">
+                      <h5 className="text-xs font-bold text-slate-800 font-sans">Acesse o Portal do Governo</h5>
+                      <p className="text-[11px] text-slate-500 leading-normal font-medium">
+                        Na página do governo que acabou de abrir, faça login com a sua conta Gov.br ou crie sua senha de acesso.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Passo 3 */}
+                  <div className="flex gap-4" id="passo-3">
+                    <div className="flex flex-col items-center shrink-0">
+                      <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold font-sans">
+                        3
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <h5 className="text-xs font-bold text-slate-800 font-sans">Configurações de Primeiro Acesso</h5>
+                      <p className="text-[11px] text-slate-500 leading-normal font-medium">
+                        Se for seu primeiro acesso, configure seus dados e clique no ícone da <strong className="text-amber-500">"Estrela" (Serviços Favoritos)</strong> para deixar sua atividade principal salva. Depois, é só emitir em 3 cliques!
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Resumo do Lançamento para preenchimento rápido */}
+              <div className="p-4 bg-slate-50 border border-slate-100 rounded-2xl space-y-2.5" id="resumo-dados-nota">
+                <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block font-sans">Dados de preenchimento rápido</span>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <span className="text-slate-400 block text-[10px] font-medium">Cliente (Tomador)</span>
+                    <strong className="text-slate-700 font-semibold truncate block max-w-full">
+                      {focusNfeSelectedTx.clienteNome || "Consumidor Geral"}
+                    </strong>
+                    {focusNfeSelectedTx.clienteDocumento && (
+                      <span className="text-slate-400 font-mono text-[9px] block">
+                        Doc: {focusNfeSelectedTx.clienteDocumento}
+                      </span>
+                    )}
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] font-medium">Valor do Serviço</span>
+                    <strong className="text-emerald-700 font-bold block">
+                      R$ {focusNfeSelectedTx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+
             </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row gap-3 items-center justify-between" id="footer-nfse">
+              <button
+                type="button"
+                onClick={() => setShowFocusNfeModal(false)}
+                className="w-full sm:w-auto px-4 py-2.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 hover:text-slate-800 font-bold text-xs rounded-xl transition-all text-center cursor-pointer"
+                id="btn-voltar-nfse"
+              >
+                Voltar ao Painel
+              </button>
+              
+              <button
+                type="button"
+                onClick={() => {
+                  const cleanCnpj = cnpjPrestador ? cnpjPrestador.replace(/\D/g, "") : "";
+                  if (cleanCnpj) {
+                    navigator.clipboard.writeText(cleanCnpj);
+                  }
+                  window.open("https://www.nfse.gov.br/EmissorNacional/Login", "_blank");
+                }}
+                className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-2.5 px-5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm hover:shadow-md transition-all active:scale-95 cursor-pointer"
+                id="btn-ir-para-emissor"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Emitir Nota Fiscal</span>
+              </button>
+            </div>
+
           </div>
         </div>
       )}
