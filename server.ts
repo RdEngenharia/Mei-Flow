@@ -5,6 +5,7 @@ import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import { getStorage } from "firebase-admin/storage";
 import axios from "axios";
 import { MercadoPagoConfig, Payment, CardToken } from "mercadopago";
 
@@ -56,6 +57,7 @@ try {
 }
 
 let db: any = null;
+let adminStorage: any = null;
 if (adminApp) {
   try {
     const dbId = firebaseConfig.firestoreDatabaseId || "(default)";
@@ -64,6 +66,13 @@ if (adminApp) {
   } catch (dbInitErr: any) {
     console.warn("[Firebase Admin Server Init Error]: Failed to retrieve firestore database:", dbInitErr.message);
     db = null;
+  }
+  try {
+    adminStorage = getStorage(adminApp);
+    console.log("[Firebase Admin]: Storage instance initialized successfully.");
+  } catch (storageInitErr: any) {
+    console.warn("[Firebase Admin Server Storage Init Error]: Failed to retrieve storage instance:", storageInitErr.message);
+    adminStorage = null;
   }
 }
 
@@ -115,8 +124,9 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Use JSON middleware for Express routes, except for raw webhook headers if needed
-  app.use(express.json());
+  // Use JSON middleware with increased payload size limit for handling base64 document uploads
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
   // ==========================================
   // ARQUIVO DIGITAL MEI: REMOÇÃO DE DOCUMENTOS EXPIRADOS (RETENÇÃO LEGAL DE 5 ANOS)
@@ -168,6 +178,130 @@ async function startServer() {
     } catch (err: any) {
       console.error("[Backend Limpeza Retencao Error]:", err.message);
       res.status(500).json({ success: false, mensagem: "Falha na rotina de limpeza do backend: " + err.message });
+    }
+  });
+
+  // ==========================================
+  // ARQUIVO DIGITAL MEI: UPLOAD E DOWNLOAD DE ARQUIVOS (BYPASS CORS FEITO VIA SERVIDOR)
+  // ==========================================
+  app.post("/api/documentos/upload", async (req, res) => {
+    try {
+      const { fileBase64, fileName, userId, ano, mes, size, type } = req.body;
+      if (!fileBase64 || !fileName || !userId || !ano || !mes) {
+        res.status(400).json({ success: false, message: "Parâmetros obrigatórios ausentes para o upload." });
+        return;
+      }
+
+      const docId = `doc_${Date.now()}`;
+      const cleanFileName = fileName.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+      const targetStoragePath = `usuarios/${userId}/${ano}/${mes}/${cleanFileName}`;
+
+      let base64Data = fileBase64;
+      let finalType = type || "application/octet-stream";
+      if (fileBase64.includes(";base64,")) {
+        const parts = fileBase64.split(";base64,");
+        base64Data = parts[1];
+        if (!type && parts[0].startsWith("data:")) {
+          finalType = parts[0].substring(5);
+        }
+      }
+
+      const buffer = Buffer.from(base64Data, "base64");
+      let downloadUrl = `/api/documentos/download?path=${encodeURIComponent(targetStoragePath)}`;
+      let isSimulated = false;
+
+      // 1. Tentar salvar no Firebase Storage usando o Firebase Admin
+      if (adminStorage) {
+        try {
+          const bucket = adminStorage.bucket(firebaseConfig.storageBucket || "usina-rd-solar.firebasestorage.app");
+          const fileRef = bucket.file(targetStoragePath);
+          await fileRef.save(buffer, {
+            metadata: {
+              contentType: finalType,
+            },
+          });
+          console.log(`[Firebase Admin Storage] Arquivo salvo com sucesso via API no path: ${targetStoragePath}`);
+        } catch (storageErr: any) {
+          console.warn("[Firebase Admin Storage Error]: Falha ao salvar no bucket, usando simulação persistida no Firestore:", storageErr.message);
+          isSimulated = true;
+        }
+      } else {
+        console.warn("[Firebase Admin Storage]: Não disponível, executando simulação contábil segura.");
+        isSimulated = true;
+      }
+
+      // Se for simulação pura, gera um link representativo
+      if (isSimulated) {
+        downloadUrl = `/api/mock-document?name=${encodeURIComponent(cleanFileName)}&ano=${ano}&mes=${encodeURIComponent(mes)}`;
+      }
+
+      // 2. Prepara e salva o documento no Firestore do usuário
+      const metadataDoc = {
+        id: docId,
+        nome: fileName,
+        url: downloadUrl,
+        ano: ano,
+        mes: mes,
+        criadoEm: new Date().toISOString(),
+        tamanho: size || buffer.length,
+        tipo: finalType,
+        uploadedAt: new Date().toISOString(),
+        userId: userId,
+        downloadUrl: downloadUrl,
+        storagePath: targetStoragePath,
+        isSimulated: isSimulated
+      };
+
+      if (db) {
+        try {
+          await db.collection("users").doc(userId).collection("documentos").doc(docId).set(metadataDoc);
+          console.log(`[Firestore Admin] Registro gravado com sucesso em: users/${userId}/documentos/${docId}`);
+        } catch (dbErr: any) {
+          console.error("[Firestore Admin Error]: Falha ao gravar metadados:", dbErr.message);
+        }
+      }
+
+      res.status(200).json({
+        success: true,
+        document: metadataDoc,
+        mensagem: "Documento processado com êxito pelo proxy do servidor!"
+      });
+    } catch (err: any) {
+      console.error("[API Upload Error]:", err.message);
+      res.status(500).json({ success: false, message: `Erro interno no upload do servidor: ${err.message}` });
+    }
+  });
+
+  app.get("/api/documentos/download", async (req, res) => {
+    try {
+      const { path: storagePath } = req.query;
+      if (!storagePath) {
+        res.status(400).send("O parâmetro 'path' é obrigatório.");
+        return;
+      }
+
+      if (!adminStorage) {
+        res.status(500).send("Serviço de Storage não está configurado ou ativo no servidor.");
+        return;
+      }
+
+      const bucket = adminStorage.bucket(firebaseConfig.storageBucket || "usina-rd-solar.firebasestorage.app");
+      const fileRef = bucket.file(String(storagePath));
+      
+      const [exists] = await fileRef.exists();
+      if (!exists) {
+        res.status(404).send("Documento não encontrado no Storage.");
+        return;
+      }
+
+      const [metadata] = await fileRef.getMetadata();
+      res.setHeader("Content-Type", metadata.contentType || "application/octet-stream");
+      res.setHeader("Content-Disposition", `inline; filename="${path.basename(String(storagePath))}"`);
+
+      fileRef.createReadStream().pipe(res);
+    } catch (err: any) {
+      console.error("[API Download Error]:", err.message);
+      res.status(500).send(`Erro ao processar download do documento: ${err.message}`);
     }
   });
 

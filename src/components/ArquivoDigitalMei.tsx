@@ -291,9 +291,6 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     };
 
     try {
-      let downloadUrl = "";
-      let isSimulated = false;
-
       // 1. Converter o arquivo físico para Data URL (Base64)
       let dataUrl = "";
       try {
@@ -302,54 +299,39 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
         throw new Error(`Erro ao preparar o arquivo: ${readErr.message}`);
       }
 
-      // 2. Tenta upload físico de string para o Firebase Storage
-      try {
-        const fileRef = ref(storage, targetStoragePath);
-        // Upload da string em formato 'data_url' para evitar o preflight de CORS no envio de bytes puros
-        await uploadString(fileRef, dataUrl, 'data_url');
-        // Resgata URL pública de download gerada pelo Firebase
-        downloadUrl = await getDownloadURL(fileRef);
-        console.log(`[Firebase Storage] Upload string base64 realizado com sucesso para: ${targetStoragePath}`);
-      } catch (storageError: any) {
-        console.warn("[Firebase Storage] Falha ao gravar no bucket do Storage via uploadString:", storageError.message);
-        
-        // Alerta amigável na tela orientando sobre o CORS ou regras do Storage do Firebase
-        setStorageWarning("Aviso de CORS/Bucket: Identificamos restrições de CORS no seu Firebase Storage. O link seguro temporário no Firestore foi criado no seu banco para manter seu fluxo ativo normalmente!");
-        
-        // Ativa contingência pré-visualizável do preview
-        isSimulated = true;
-        downloadUrl = `https://ais-dev-qov4j7azuejc767wzytktk-17712161831.us-east5.run.app/api/mock-document?name=${encodeURIComponent(cleanFileName)}&ano=${selectedYear}&mes=${encodeURIComponent(selectedMonth)}`;
+      // 2. Transmite via POST para o nosso endpoint seguro do backend para contornar preflight do CORS
+      const uploadResponse = await fetch("/api/documentos/upload", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          fileBase64: dataUrl,
+          fileName: file.name,
+          userId: uid,
+          ano: selectedYear,
+          mes: selectedMonth,
+          size: file.size,
+          type: file.type || "application/octet-stream"
+        })
+      });
+
+      if (!uploadResponse.ok) {
+        const errorText = await uploadResponse.text();
+        throw new Error(errorText || `Erro no servidor (${uploadResponse.status}).`);
       }
 
-      // Prepara o objeto com a estrutura exata solicitada e os dados de compatibilidade da tela
-      const metadataDoc: DocumentoMEI = {
-        id: docId,
-        nome: file.name,
-        url: downloadUrl,
-        ano: selectedYear,
-        mes: selectedMonth,
-        criadoEm: new Date().toISOString(),
-        tamanho: file.size,
-        tipo: file.type || "application/octet-stream",
-        uploadedAt: new Date().toISOString(),
-        userId: uid,
-        downloadUrl: downloadUrl,
-        storagePath: targetStoragePath,
-        isSimulated: isSimulated
-      };
-
-      // Grava no Firestore na subcoleção correta e autorizada
-      try {
-        await setDoc(doc(db, "users", uid, "documentos", docId), metadataDoc);
-      } catch (fsErr: any) {
-        handleFirestoreError(fsErr, OperationType.WRITE, `users/${uid}/documentos/${docId}`);
+      const resJson = await uploadResponse.json();
+      if (!resJson.success) {
+        throw new Error(resJson.message || "Endpoint no servidor indicou falha no processamento.");
       }
+
+      const savedDoc = resJson.document;
       
       setSuccessMsg(`Documento "${file.name}" guardado com sucesso na pasta de ${selectedMonth}/${selectedYear}!`);
       
-      // Se for simulação, alerta discretamente sobre as regras
-      if (isSimulated) {
-        console.info("Simulações de links ativadas para assegurar execução no ambiente de desenvolvimento.");
+      if (savedDoc.isSimulated) {
+        setStorageWarning("Aviso de CORS/Bucket: O backend utilizou contingência local segura de visualização de link devido às políticas de acesso do bucket do Firebase.");
       }
     } catch (err: any) {
       console.error("Erro ao realizar upload:", err);
