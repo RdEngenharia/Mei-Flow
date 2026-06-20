@@ -118,8 +118,6 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const [useLocalFallback, setUseLocalFallback] = useState(false);
-  
   // Estado para drag and drop
   const [isDragging, setIsDragging] = useState(false);
   
@@ -130,97 +128,21 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
   // Controle de Auditoria Silenciosa de 5 Anos
   const hasCleanedUpRef = useRef(false);
 
-  // Helper síncrono para buscar ou semear documentos demo locais
-  const getLocalDocs = (uId: string): DocumentoMEI[] => {
-    const saved = localStorage.getItem(`meiflow_docs_${uId}`);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error("Falha ao analisar JSON dos documentos MEI locais.");
-      }
-    }
-    // Sementes iniciais para demonstração e teste estrito do prazo legal de 5 anos fiscais
-    const initialDocs: DocumentoMEI[] = [
-      {
-        id: "seed_1",
-        nome: "Nota_Fiscal_Servicos_Junho_2026.pdf",
-        tamanho: 142500,
-        tipo: "application/pdf",
-        uploadedAt: "2026-06-15T14:30:00.000Z",
-        ano: 2026,
-        mes: "Junho",
-        userId: uId,
-        downloadUrl: "#",
-        storagePath: "",
-        isSimulated: true
-      },
-      {
-        id: "seed_2",
-        nome: "Comprovante_DAS_SIMEI_Maio_2026.pdf",
-        tamanho: 89300,
-        tipo: "application/pdf",
-        uploadedAt: "2026-05-20T10:15:00.000Z",
-        ano: 2026,
-        mes: "Maio",
-        userId: uId,
-        downloadUrl: "#",
-        storagePath: "",
-        isSimulated: true
-      },
-      {
-        id: "seed_3",
-        nome: "Relatorio_Faturamento_Expirado_2021.pdf",
-        tamanho: 254000,
-        tipo: "application/pdf",
-        uploadedAt: "2021-12-10T18:00:00.000Z",
-        ano: 2021, // Excedeu 5 anos! Excelente para o usuário testar a varredura
-        mes: "Dezembro",
-        userId: uId,
-        downloadUrl: "#",
-        storagePath: "",
-        isSimulated: true
-      }
-    ];
-    localStorage.setItem(`meiflow_docs_${uId}`, JSON.stringify(initialDocs));
-    return initialDocs;
-  };
-
-  // Helper para salvar localmente
-  const saveLocalDocs = (newDocs: DocumentoMEI[]) => {
-    localStorage.setItem(`meiflow_docs_${userId}`, JSON.stringify(newDocs));
-    setDocumentos(newDocs.filter(d => d.ano >= anoMaisAntigoPermitido));
-  };
-
   // Busca síncrona/realtime de documentos do usuário
   useEffect(() => {
-    if (!userId) return;
-    
-    const isUnauthenticated = !auth.currentUser || userId === "demouser_49281";
-
-    if (isUnauthenticated || useLocalFallback) {
-      console.log("[ArquivoDigitalMei] Operando em modo de Demonstração (Auditoria Coesa via LocalStorage).");
-      setUseLocalFallback(true);
-      const localDocs = getLocalDocs(userId);
-      const filtrados = localDocs.filter(docItem => docItem.ano >= anoMaisAntigoPermitido);
-      
-      const expiradosCount = localDocs.length - filtrados.length;
-      if (expiradosCount > 0) {
-        console.info(`${expiradosCount} documentos locais excederam 5 anos contábeis e foram arquivados legalmente.`);
-      }
-
-      setDocumentos(filtrados);
-      setIsLoading(false);
+    const user = auth.currentUser;
+    if (!user || !user.uid || userId === "demouser_49281") {
+      console.log("[ArquivoDigitalMei] Inicialização abortada: Usuário não autenticado no Firebase Auth.");
       return;
     }
+    const uid = user.uid;
 
     setIsLoading(true);
     setErrorMsg(null);
 
-    // Consulta documentos do usuário logado
+    // Consulta documentos do usuário logado diretamente na subcollection correta e autorizada
     const q = query(
-      collection(db, "documentos_mei"),
-      where("userId", "==", userId)
+      collection(db, "users", uid, "documentos")
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -232,20 +154,21 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
           nome: data.nome || "",
           tamanho: data.tamanho || 0,
           tipo: data.tipo || "",
-          uploadedAt: data.uploadedAt || new Date().toISOString(),
+          uploadedAt: data.uploadedAt || data.criadoEm || new Date().toISOString(),
           ano: Number(data.ano),
           mes: data.mes || "",
-          userId: data.userId || "",
-          downloadUrl: data.downloadUrl || "",
+          userId: uid,
+          downloadUrl: data.downloadUrl || data.url || "",
           storagePath: data.storagePath || "",
-          isSimulated: data.isSimulated || false
+          isSimulated: data.isSimulated || false,
+          url: data.url || data.downloadUrl || "",
+          criadoEm: data.criadoEm || data.uploadedAt || new Date().toISOString()
         });
       });
 
       // Filtra de acordo com a regra de retenção de 5 anos no cliente para blindagem extra
       const docsFiltrados = docsList.filter(docItem => docItem.ano >= anoMaisAntigoPermitido);
       
-      // Se houverem documentos mais antigos no banco, informa que foram arquivados/purgados da visualização
       const expiradosCount = docsList.length - docsFiltrados.length;
       if (expiradosCount > 0) {
         console.warn(`${expiradosCount} arquivos expiraram o prazo legal de 5 anos fiscais e foram bloqueados da visualização pela regra contábil digital.`);
@@ -254,57 +177,25 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
       setDocumentos(docsFiltrados);
       setIsLoading(false);
     }, (error) => {
-      console.warn("[ArquivoDigitalMei] Permissão indisponível no Firestore. Ativando fallback resiliente automático via LocalStorage:", error.message);
-      setUseLocalFallback(true);
+      console.error("[ArquivoDigitalMei] Erro de permissão no Firestore:", error.message);
+      setErrorMsg(`Erro de permissão no Firestore: ${error.message}`);
+      setIsLoading(false);
     });
 
     return () => unsubscribe();
-  }, [userId, anoMaisAntigoPermitido, useLocalFallback]);
+  }, [userId, anoMaisAntigoPermitido]);
 
   // Rotina silenciosa e automática de retenção legal (5 anos contábeis)
   const executarRotinaLimpezaSilenciosa = async () => {
-    if (!userId) return;
+    const user = auth.currentUser;
+    if (!user || !user.uid || userId === "demouser_49281") return;
+    const uid = user.uid;
     
     console.log(`[Regra do Fisco (5 Anos)] Iniciando varredura em segundo plano. Prazo permitido: ${anoMaisAntigoPermitido} até ${currentYear}.`);
 
-    if (useLocalFallback) {
-      try {
-        const currentLocal = getLocalDocs(userId);
-        let removidosCount = 0;
-        const updatedLocal: DocumentoMEI[] = [];
-
-        for (const docItem of currentLocal) {
-          const docAno = Number(docItem.ano);
-          if (docAno < anoMaisAntigoPermitido) {
-            console.log(`[Regra do Fisco (5 Anos)] Purgando registro local expirado de decurso de prazo: ${docItem.nome}`);
-            removidosCount++;
-          } else {
-            updatedLocal.push(docItem);
-          }
-        }
-
-        if (removidosCount > 0) {
-          saveLocalDocs(updatedLocal);
-        }
-
-        // Sincroniza silenciosamente com backend de conformidade
-        try {
-          await fetch("/api/documentos/limpeza", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId, currentYear })
-          });
-        } catch (e) {}
-
-      } catch (err: any) {
-        console.error("[Regra do Fisco (5 Anos)] Erro na varredura local silenciosa:", err.message);
-      }
-      return;
-    }
-
     try {
-      // 1. Busca todos os documentos do usuário
-      const queryAll = query(collection(db, "documentos_mei"), where("userId", "==", userId));
+      // 1. Busca todos os documentos do usuário na subcoleção correta e autorizada
+      const queryAll = query(collection(db, "users", uid, "documentos"));
       const querySnap = await getDocs(queryAll);
       
       let removidosCount = 0;
@@ -318,7 +209,7 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
           console.warn(`[Regra do Fisco (5 Anos)] Documento expirado encontrado: ${data.nome} (${docAno}). Excurga permanente...`);
           
           // Excluir metadado do Firestore
-          await deleteDoc(doc(db, "documentos_mei", docId));
+          await deleteDoc(doc(db, "users", uid, "documentos", docId));
           
           // Excluir do Storage se houver path e não for simulação
           if (data.storagePath && !data.isSimulated) {
@@ -333,15 +224,6 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
         }
       }
 
-      // Sincroniza silenciosamente com backend de conformidade
-      try {
-        await fetch("/api/documentos/limpeza", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId, currentYear })
-        });
-      } catch (backErr) {}
-
       if (removidosCount > 0) {
         console.log(`[Regra do Fisco (5 Anos)] Varredura bem-sucedida! ${removidosCount} arquivos expirados reciclados.`);
       }
@@ -352,7 +234,8 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
 
   // Efeito automático para rodar a auditoria legal em segundo plano silenciosamente
   useEffect(() => {
-    if (!userId || hasCleanedUpRef.current) return;
+    const user = auth.currentUser;
+    if (!user || !user.uid || userId === "demouser_49281" || hasCleanedUpRef.current) return;
     
     const timer = setTimeout(() => {
       executarRotinaLimpezaSilenciosa();
@@ -360,14 +243,16 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     }, 2000);
 
     return () => clearTimeout(timer);
-  }, [userId, useLocalFallback]);
+  }, [userId]);
 
   // Trata o upload do arquivo
   const handleFileUpload = async (file: File) => {
-    if (!userId) {
-      setErrorMsg("Erro: Usuário não identificado.");
+    const user = auth.currentUser;
+    if (!user || !user.uid || userId === "demouser_49281") {
+      setErrorMsg("Erro: Você precisa estar autenticado para realizar uploads.");
       return;
     }
+    const uid = user.uid;
 
     if (!selectedMonth) {
       setErrorMsg("Por favor, selecione uma pasta de mês antes de efetuar o upload do documento.");
@@ -386,40 +271,7 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
 
     const docId = `doc_${Date.now()}`;
     const cleanFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-    const targetStoragePath = `usuarios/${userId}/${selectedYear}/${selectedMonth}/${cleanFileName}`;
-    
-    if (useLocalFallback) {
-      try {
-        const mockUrl = `/api/mock-document?name=${encodeURIComponent(cleanFileName)}&ano=${selectedYear}&mes=${encodeURIComponent(selectedMonth)}`;
-        const localDoc: DocumentoMEI = {
-          id: docId,
-          nome: file.name,
-          tamanho: file.size,
-          tipo: file.type || "application/octet-stream",
-          uploadedAt: new Date().toISOString(),
-          ano: selectedYear,
-          mes: selectedMonth,
-          userId: userId,
-          downloadUrl: mockUrl,
-          storagePath: targetStoragePath,
-          isSimulated: true
-        };
-
-        const currentLocal = getLocalDocs(userId);
-        const updatedLocal = [...currentLocal, localDoc];
-        saveLocalDocs(updatedLocal);
-
-        setSuccessMsg(`[Modo Demonstração] Documento "${file.name}" guardado e simulado localmente com sucesso!`);
-        setIsLoading(false);
-        if (uploadFileInputRef.current) uploadFileInputRef.current.value = "";
-        return;
-      } catch (err: any) {
-        console.error("Erro no upload local:", err);
-        setErrorMsg(`Falha ao registrar localmente: ${err.message}`);
-        setIsLoading(false);
-        return;
-      }
-    }
+    const targetStoragePath = `usuarios/${uid}/${selectedYear}/${selectedMonth}/${cleanFileName}`;
 
     try {
       let downloadUrl = "";
@@ -453,30 +305,17 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
         tamanho: file.size,
         tipo: file.type || "application/octet-stream",
         uploadedAt: new Date().toISOString(),
-        userId: userId,
+        userId: uid,
         downloadUrl: downloadUrl,
         storagePath: targetStoragePath,
         isSimulated: isSimulated
       };
 
-      // Grava no Firestore na coleção cadastrada nas regras para a listagem funcionar
+      // Grava no Firestore na subcoleção correta e autorizada
       try {
-        await setDoc(doc(db, "documentos_mei", docId), metadataDoc);
+        await setDoc(doc(db, "users", uid, "documentos", docId), metadataDoc);
       } catch (fsErr: any) {
-        handleFirestoreError(fsErr, OperationType.WRITE, `documentos_mei/${docId}`);
-      }
-
-      // Tenta gravar também na estrutura de subcoleção flexível requisitada (users/{uid}/documentos)
-      try {
-        await setDoc(doc(db, `users/${userId}/documentos`, docId), {
-          nome: file.name,
-          url: downloadUrl,
-          ano: selectedYear,
-          mes: selectedMonth,
-          criadoEm: metadataDoc.criadoEm
-        });
-      } catch (subErr) {
-        console.info("[Firestore Subcoleção Info] Não persistido na subcoleção paralela devido a permissões de produção (comportamento simulado/ignorado).");
+        handleFirestoreError(fsErr, OperationType.WRITE, `users/${uid}/documentos/${docId}`);
       }
       
       setSuccessMsg(`Documento "${file.name}" guardado com sucesso na pasta de ${selectedMonth}/${selectedYear}!`);
@@ -523,30 +362,22 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
 
   // Exclui um documento específico
   const deletarDocumento = async (docItem: DocumentoMEI) => {
+    const user = auth.currentUser;
+    if (!user || !user.uid || userId === "demouser_49281") {
+      setErrorMsg("Erro: Você precisa estar autenticado para excluir documentos.");
+      return;
+    }
+    const uid = user.uid;
+
     if (!window.confirm(`Deseja realmente excluir o arquivo "${docItem.nome}"?`)) {
       return;
     }
 
     setIsLoading(true);
 
-    if (useLocalFallback) {
-      try {
-        const currentLocal = getLocalDocs(userId);
-        const updatedLocal = currentLocal.filter(d => d.id !== docItem.id);
-        saveLocalDocs(updatedLocal);
-        setSuccessMsg(`Documento "${docItem.nome}" excluído com sucesso.`);
-        setIsLoading(false);
-        return;
-      } catch (err: any) {
-        setErrorMsg(`Erro ao deletar localmente: ${err.message}`);
-        setIsLoading(false);
-        return;
-      }
-    }
-
     try {
-      // 1. Remove do Firestore
-      await deleteDoc(doc(db, "documentos_mei", docItem.id));
+      // 1. Remove do Firestore na subcoleção correta e autorizada
+      await deleteDoc(doc(db, "users", uid, "documentos", docItem.id));
 
       // 2. Remove do Storage se não for simulado
       if (!docItem.isSimulated && docItem.storagePath) {
