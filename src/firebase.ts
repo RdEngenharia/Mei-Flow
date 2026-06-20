@@ -27,6 +27,13 @@ import {
   getDocFromServer,
   getDoc
 } from 'firebase/firestore';
+import {
+  getStorage,
+  ref,
+  uploadBytes,
+  getDownloadURL,
+  deleteObject
+} from 'firebase/storage';
 
 // Carrega as configurações geradas pelo console do AI Studio / Firebase Blueprints
 import firebaseConfigImport from '../firebase-applet-config.json';
@@ -91,6 +98,7 @@ const app = initializeApp(firebaseConfig);
 // A persistência offline por IndexedDb NÃO está habilitada para assegurar gravação/leitura estritamente online em produção sem mascarar erros de conectividade.
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
+export const storage = getStorage(app);
 
 // Provedor padrão para login via Google (ideal para ambiente de popups e IFrames)
 export const googleProvider = new GoogleAuthProvider();

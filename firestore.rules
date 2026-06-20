@@ -81,5 +81,15 @@ service cloud.firestore {
       allow list: if request.auth != null && resource.data.mei_uid == request.auth.uid;
       allow update, delete: if request.auth != null && resource.data.mei_uid == request.auth.uid;
     }
+
+    // -----------------------------------------------------------------
+    // 4. ARQUIVO DIGITAL DO MEI (Metadados dos documentos e comprovantes)
+    // -----------------------------------------------------------------
+    match /documentos_mei/{documentId} {
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow get: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid);
+      allow list: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
+    }
   }
 }

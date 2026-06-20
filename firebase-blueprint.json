@@ -58,6 +58,25 @@
         "price": { "type": "number", "description": "Valor monetário padrão do item" }
       },
       "required": ["id", "title", "type", "price"]
+    },
+    "documentos_mei": {
+      "title": "documentos_mei",
+      "description": "Metadados de comprovantes de pagamento e notas fiscais armazenados no Arquivo Digital",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID exclusivo do documento" },
+        "userId": { "type": "string", "description": "ID do usuário MEI proprietário do arquivo" },
+        "nome": { "type": "string", "description": "Nome original do arquivo" },
+        "tamanho": { "type": "number", "description": "Tamanho do arquivo em bytes" },
+        "tipo": { "type": "string", "description": "Mime type do documento (ex: application/pdf, image/jpeg)" },
+        "uploadedAt": { "type": "string", "format": "date-time", "description": "Data de carregamento" },
+        "ano": { "type": "number", "description": "Ano fiscal associado ao documento" },
+        "mes": { "type": "string", "description": "Mês fiscal associado" },
+        "downloadUrl": { "type": "string", "description": "URL de download pública no Storage ou simulador" },
+        "storagePath": { "type": "string", "description": "Caminho do diretório original no Storage" },
+        "isSimulated": { "type": "boolean", "description": "Indica se o arquivo é simulado ou gravado no bucket" }
+      },
+      "required": ["id", "userId", "nome", "tamanho", "uploadedAt", "ano", "mes", "downloadUrl"]
     }
   },
   "firestore": {
@@ -84,6 +103,10 @@
     "/usuarios/{userId}/vendas/{vendaId}": {
       "schema": "transactions",
       "description": "Vendas do usuário MEI na subcoleção do usuário"
+    },
+    "/documentos_mei/{documentId}": {
+      "schema": "documentos_mei",
+      "description": "Comprovantes e notas fiscais do Arquivo Digital do MEI"
     }
   }
 }

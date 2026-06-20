@@ -53,6 +53,7 @@ import CatalogManager from "./components/CatalogManager";
 import OrcamentoGenerator from "./components/OrcamentoGenerator";
 import DasModal from "./components/DasModal";
 import DasnModal from "./components/DasnModal";
+import ArquivoDigitalMei from "./components/ArquivoDigitalMei";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -853,6 +854,25 @@ export default function App() {
 
     // Abre o modal de instrução
     setShowFocusNfeModal(true);
+  };
+
+  // Emitir Nota Fiscal a partir do botão principal da dashboard
+  const handleEmitirNotaHeader = () => {
+    // Pegar as transações de entrada
+    const entradas = transacoes.filter(t => t.tipo === "entrada");
+    if (entradas.length > 0) {
+      if (isCpfEmissor) {
+        triggerToast("⚠ Emissão de NFS-e indisponível para Pessoa Física (CPF). Altere seu perfil para CNPJ para habilitar.");
+      } else if (planType === "free") {
+        setShowUpgradeModal(true);
+      } else {
+        // Pega a entrada mais recente
+        handleDownloadNFSe(entradas[0]);
+      }
+    } else {
+      triggerToast("⚠ Você precisa registrar pelo menos uma venda (Entrada) no sistema para vincular e emitir a Nota Fiscal.");
+      setShowVendaModal(true);
+    }
   };
 
   // Exportar todas as transações para relatório PDF profissional consolidado do MEI
@@ -1661,6 +1681,15 @@ ${meiName}`;
                 </button>
 
                 <button
+                  onClick={handleEmitirNotaHeader}
+                  className="px-4.5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-extrabold rounded-xl shadow-xs hover:shadow-md transition-all flex items-center gap-2 cursor-pointer"
+                  id="btn-emitir-nota-header"
+                >
+                  <FileText className="w-3.5 h-3.5 text-blue-100" />
+                  <span>Emitir Nota Fiscal (NFS-e) {planType === "free" ? "🔒" : ""}</span>
+                </button>
+
+                <button
                   onClick={() => setCurrentView("orcamentos")}
                   className="px-4.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
                 >
@@ -1819,6 +1848,14 @@ ${meiName}`;
                 </button>
               </div>
 
+            </div>
+
+            {/* SEÇÃO INTEGRADA: ARQUIVO DIGITAL DO MEI */}
+            <div className="mt-8">
+              <ArquivoDigitalMei 
+                userId={user?.uid || "demouser_49281"} 
+                userProfile={{ meiName: meiName }} 
+              />
             </div>
 
             {/* INTEGRATED BUSINESS MANAGEMENT ROW (BENTO ROW 2) */}
@@ -2017,6 +2054,24 @@ ${meiName}`;
               <p className="text-xs md:text-sm text-slate-400 mt-1 font-medium">
                 Controle simplificado oficial do seu MEI para conformidade anual do faturamento acumulado.
               </p>
+            </div>
+
+            {/* Informative Invoice Tip Banner */}
+            <div className="p-4.5 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-left">
+              <div className="space-y-1">
+                <h4 className="text-xs font-bold text-blue-950 flex items-center gap-1.5 font-sans">
+                  💡 Como emitir as suas Notas Fiscais Eletrônicas?
+                </h4>
+                <p className="text-[11px] text-slate-600 leading-relaxed font-medium">
+                  Para cada uma das suas <strong>Receitas/Vendas (Entradas)</strong> registradas na tabela abaixo, basta clicar no botão azul <span className="bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded font-mono text-[9px] font-bold">NFS-e</span> correspondente na coluna de <strong>Ações</strong> para abrir o preenchimento automático.
+                </p>
+              </div>
+              <button
+                onClick={handleEmitirNotaHeader}
+                className="w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[11px] rounded-xl tracking-wide transition-all shadow-xs cursor-pointer text-center whitespace-nowrap"
+              >
+                Nova Emissão Rápida ⚡
+              </button>
             </div>
 
             {/* SEÇÃO DA TABELA REAPROVEITADA */}
