@@ -104,9 +104,9 @@
       "schema": "transactions",
       "description": "Vendas do usuário MEI na subcoleção do usuário"
     },
-    "/documentos_mei/{documentId}": {
+    "/users/{userId}/documentos/{documentId}": {
       "schema": "documentos_mei",
-      "description": "Comprovantes e notas fiscais do Arquivo Digital do MEI"
+      "description": "Comprovantes e notas fiscais de conformidade contábil do Arquivo Digital do MEI"
     }
   }
 }

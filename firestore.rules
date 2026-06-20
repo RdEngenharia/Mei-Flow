@@ -22,6 +22,11 @@ service cloud.firestore {
       match /catalog/{itemId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
+
+      // Permite que o usuário gerencie seus documentos no Arquivo Digital
+      match /documentos/{documentId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
       
       // Mantém o acesso para qualquer outra subcoleção futura
       match /{document=**} {
