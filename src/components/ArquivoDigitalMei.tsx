@@ -17,7 +17,8 @@ import {
   X, 
   Loader2,
   RefreshCw,
-  Sparkles
+  Sparkles,
+  Printer
 } from "lucide-react";
 import { db, auth, storage } from "../firebase";
 import { collection, doc, setDoc, deleteDoc, getDocs, query, where, onSnapshot } from "firebase/firestore";
@@ -129,7 +130,7 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
   // Controle de Auditoria Silenciosa de 5 Anos
   const hasCleanedUpRef = useRef(false);
 
-  // Busca síncrona/realtime de documentos do usuário
+  // Busca síncrona/realtime de documentos do usuário para o ano selecionado
   useEffect(() => {
     const user = auth.currentUser;
     if (!user || !user.uid || userId === "demouser_49281") {
@@ -141,10 +142,11 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     setIsLoading(true);
     setErrorMsg(null);
 
-    // Consulta documentos do usuário logado diretamente na coleção raiz documentos_mei autorizada
+    // Consulta documentos do usuário logado e do ano selecionado na coleção raiz "documentos"
     const q = query(
-      collection(db, "documentos_mei"),
-      where("userId", "==", uid)
+      collection(db, "documentos"),
+      where("userId", "==", uid),
+      where("ano", "==", Number(selectedYear))
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -185,7 +187,7 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     });
 
     return () => unsubscribe();
-  }, [userId, anoMaisAntigoPermitido]);
+  }, [userId, selectedYear, anoMaisAntigoPermitido]);
 
   // Rotina silenciosa e automática de retenção legal (5 anos contábeis)
   const executarRotinaLimpezaSilenciosa = async () => {
@@ -196,9 +198,9 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     console.log(`[Regra do Fisco (5 Anos)] Iniciando varredura em segundo plano. Prazo permitido: ${anoMaisAntigoPermitido} até ${currentYear}.`);
 
     try {
-      // 1. Busca todos os documentos do usuário na coleção raiz documentos_mei autorizada
+      // 1. Busca todos os documentos do usuário na coleção raiz documentos autorizada
       const queryAll = query(
-        collection(db, "documentos_mei"),
+        collection(db, "documentos"),
         where("userId", "==", uid)
       );
       const querySnap = await getDocs(queryAll);
@@ -214,7 +216,7 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
           console.warn(`[Regra do Fisco (5 Anos)] Documento expirado encontrado: ${data.nome} (${docAno}). Excurga permanente...`);
           
           // Excluir metadado do Firestore
-          await deleteDoc(doc(db, "documentos_mei", docId));
+          await deleteDoc(doc(db, "documentos", docId));
           
           // Excluir do Storage se houver path e não for simulação
           if (data.storagePath && !data.isSimulated) {
@@ -424,6 +426,121 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     }
   };
 
+  // Imprime um documento com layout otimizado para fins tributários / contabilidade
+  const handlePrintDocument = (docItem: DocumentoMEI) => {
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      alert("Por favor, permita popups para imprimir.");
+      return;
+    }
+    
+    const formattedDate = new Date(docItem.uploadedAt).toLocaleDateString("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+    
+    const sizeStr = formatBytes(docItem.tamanho);
+    const meiNameDisplay = userProfile?.meiName || "Microempreendedor Individual";
+    const cnpjDisplay = userProfile?.cnpjPrestador || "Não Informado";
+    
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Membro MEI - Comprovante de Conformidade Fiscal</title>
+          <style>
+            body { font-family: system-ui, -apple-system, sans-serif; padding: 40px; color: #1e293b; background: #ffffff; }
+            .header { text-align: center; border-bottom: 2px solid #cbd5e1; padding-bottom: 15px; margin-bottom: 25px; }
+            .title { font-size: 22px; font-weight: 800; color: #0f172a; margin: 0; text-transform: uppercase; letter-spacing: 0.5px; }
+            .subtitle { font-size: 11px; color: #64748b; font-weight: 605; text-transform: uppercase; letter-spacing: 1px; margin-top: 6px; }
+            .info-grid { display: grid; grid-template-cols: 1fr 1fr; gap: 16px; margin-bottom: 25px; border: 1px solid #e2e8f0; padding: 18px; border-radius: 12px; background: #f8fafc; }
+            .info-item { font-size: 13px; }
+            .info-label { font-weight: 700; color: #334155; display: block; margin-bottom: 3px; }
+            .info-value { color: #475569; }
+            .document-container { text-align: center; margin-top: 25px; border: 1px dashed #cbd5e1; padding: 20px; border-radius: 12px; }
+            .preview-img { max-width: 100%; max-height: 480px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05); }
+            .footer { margin-top: 45px; text-align: center; font-size: 10px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 15px; line-height: 1.5; }
+            .no-print-bar { background: #f1f5f9; border-radius: 8px; border: 1px solid #e2e8f0; padding: 12px 18px; margin-bottom: 25px; display: flex; align-items: center; justify-between; }
+            .no-print-bar p { font-size: 12px; color: #475569; margin: 0; }
+            .btn-print { background: #2563eb; color: white; border: none; padding: 8px 16px; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 12px; }
+            .btn-print:hover { background: #1d4ed8; }
+            @media print {
+              .no-print-bar { display: none; }
+              body { padding: 0; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="no-print-bar">
+            <div>
+              <p><strong>Modo de Impressão Fiscal</strong></p>
+              <p style="font-size: 11px; margin-top: 2px;">Use este relatório para fins de escrituração do Livro Caixa e comprovação do DASN-SIMEI.</p>
+            </div>
+            <button onclick="window.print()" class="btn-print">Imprimir Agora</button>
+          </div>
+
+          <div class="header">
+            <h1 class="title">Comprovante de Arquivo Digital</h1>
+            <p class="subtitle">Guarda Documental de Conformidade do Contribuinte MEI (Prazo Legal de 5 Anos)</p>
+          </div>
+          
+          <div class="info-grid">
+            <div class="info-item">
+              <span class="info-label">Microempreendedor (Razão Social)</span>
+              <span class="info-value">${meiNameDisplay}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">CNPJ MEI</span>
+              <span class="info-value">${cnpjDisplay}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Nome do Arquivo</span>
+              <span class="info-value">${docItem.nome}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Período Contábil (Mês/Ano)</span>
+              <span class="info-value">${docItem.mes} de ${docItem.ano}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Caminho de Auditoria (Data de Protocolo)</span>
+              <span class="info-value">${formattedDate}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Tamanho / Tipo de Arquivo</span>
+              <span class="info-value">${sizeStr} (${docItem.tipo || "Não catalogado"})</span>
+            </div>
+          </div>
+
+          <div class="document-container">
+            <p style="font-size: 12px; font-weight: 700; color: #334155; margin-bottom: 15px;">Visualização Física Anexada pelo Auditor</p>
+            ${docItem.tipo.startsWith("image/") ? `
+              <img src="${docItem.downloadUrl}" class="preview-img" alt="Documento" />
+            ` : `
+              <iframe src="${docItem.downloadUrl}" style="width: 100%; height: 500px; border: none; background: white;"></iframe>
+            `}
+          </div>
+
+          <div class="footer">
+            <p>Este comprovante foi catalogado digitalmente no MEI Flow através de armazenamento em nuvem criptografado de conformidade fiscal.</p>
+            <p>A guarda dos documentos que compõem a receita bruta mensal é obrigatória por lei durante o prazo de 5 (cinco) anos a contar do primeiro dia do exercício seguinte ao da emissão.</p>
+          </div>
+          
+          <script>
+            window.onload = function() {
+              setTimeout(function() {
+                window.print();
+              }, 400);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    
+    printWindow.document.close();
+  };
+
   // Exclui um documento específico
   const deletarDocumento = async (docItem: DocumentoMEI) => {
     const user = auth.currentUser;
@@ -440,8 +557,8 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     setIsLoading(true);
 
     try {
-      // 1. Remove do Firestore na coleção raiz documentos_mei autorizada
-      await deleteDoc(doc(db, "documentos_mei", docItem.id));
+      // 1. Remove do Firestore na coleção raiz documentos autorizada
+      await deleteDoc(doc(db, "documentos", docItem.id));
 
       // 2. Remove do Storage se não for simulado
       if (!docItem.isSimulated && docItem.storagePath) {
@@ -734,15 +851,20 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
                                   <span className="text-[11px] font-semibold text-slate-500 font-mono">
                                     {formatBytes(docItem.tamanho)}
                                   </span>
-                                  <a 
-                                    href={docItem.downloadUrl} 
-                                    target="_blank" 
-                                    rel="noreferrer"
+                                  <button 
+                                    onClick={() => window.open(docItem.downloadUrl, "_blank")}
                                     className="w-8 h-8 bg-white border border-slate-200/80 hover:bg-indigo-50 hover:text-indigo-600 rounded-lg flex items-center justify-center shadow-xs text-slate-500 transition-all cursor-pointer"
-                                    title="Baixar Comprovante"
+                                    title="Visualizar / Baixar Comprovante"
                                   >
                                     <Download className="w-3.5 h-3.5" />
-                                  </a>
+                                  </button>
+                                  <button 
+                                    onClick={() => handlePrintDocument(docItem)}
+                                    className="w-8 h-8 bg-white border border-slate-200/80 hover:bg-emerald-50 hover:text-emerald-600 rounded-lg flex items-center justify-center shadow-xs text-slate-500 transition-all cursor-pointer"
+                                    title="Imprimir para Auditoria Contábil"
+                                  >
+                                    <Printer className="w-3.5 h-3.5" />
+                                  </button>
                                   <button
                                     onClick={() => deletarDocumento(docItem)}
                                     className="w-8 h-8 bg-white border border-slate-200/80 hover:bg-red-50 hover:text-red-600 rounded-lg flex items-center justify-center shadow-xs text-slate-400 hover:border-red-150 transition-all cursor-pointer animate-fade-in"

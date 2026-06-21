@@ -107,6 +107,10 @@
     "/users/{userId}/documentos/{documentId}": {
       "schema": "documentos_mei",
       "description": "Comprovantes e notas fiscais de conformidade contábil do Arquivo Digital do MEI"
+    },
+    "/documentos/{documentId}": {
+      "schema": "documentos_mei",
+      "description": "Metadados dos documentos guardados na coleção raiz"
     }
   }
 }

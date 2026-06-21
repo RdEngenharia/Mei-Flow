@@ -175,7 +175,7 @@ async function startServer() {
 
       if (db) {
         try {
-          const colRef = db.collection("documentos_mei");
+          const colRef = db.collection("documentos");
           const snapshot = await colRef.where("userId", "==", userId).get();
           const batch = db.batch();
           snapshot.forEach((docSnap: any) => {
@@ -299,8 +299,8 @@ async function startServer() {
         };
 
         try {
-          await db.collection("documentos_mei").doc(docId).set(metadataDoc);
-          console.log(`[Firestore Admin] Registro proativo gravado na raiz: documentos_mei/${docId}`);
+          await db.collection("documentos").doc(docId).set(metadataDoc);
+          console.log(`[Firestore Admin] Registro proativo gravado na raiz: documentos/${docId}`);
         } catch (dbErr: any) {
           console.error("[Firestore Admin Error] Erro ao gravar metadados:", dbErr.message);
           res.status(500).json({ success: false, message: `Erro ao salvar metadados do documento no banco de dados Firestore: ${dbErr.message}` });
@@ -370,8 +370,8 @@ async function startServer() {
       };
 
       try {
-        await db.collection("documentos_mei").doc(docId).set(metadataDoc);
-        console.log(`[Firestore Admin] Registro gravado com sucesso na raiz em: documentos_mei/${docId}`);
+        await db.collection("documentos").doc(docId).set(metadataDoc);
+        console.log(`[Firestore Admin] Registro gravado com sucesso na raiz em: documentos/${docId}`);
       } catch (dbErr: any) {
         console.error("[Firestore Admin Error]: Falha ao gravar metadados:", dbErr.message);
         res.status(500).json({ success: false, message: `Erro ao salvar metadados do documento no banco de dados Firestore: ${dbErr.message}` });
