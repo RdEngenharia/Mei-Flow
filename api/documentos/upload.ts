@@ -169,8 +169,8 @@ export default async function handler(req: any, res: any) {
       };
 
       try {
-        await db.collection("users").doc(actualUserId).collection("documentos").doc(docId).set(metadataDoc);
-        console.log(`[Firestore Admin Serverless] Registro proativo gravado: users/${actualUserId}/documentos/${docId}`);
+        await db.collection("documentos_mei").doc(docId).set(metadataDoc);
+        console.log(`[Firestore Admin Serverless] Registro proativo gravado na raiz: documentos_mei/${docId}`);
       } catch (dbErr: any) {
         console.error("[Firestore Admin Serverless Error] Erro ao gravar metadados:", dbErr.message);
         throw new Error(`Erro ao salvar metadados: ${dbErr.message}`);
@@ -235,8 +235,8 @@ export default async function handler(req: any, res: any) {
     };
 
     try {
-      await db.collection("users").doc(actualUserId).collection("documentos").doc(docId).set(metadataDoc);
-      console.log(`[Firestore Admin Serverless] Registro gravado com sucesso em: users/${actualUserId}/documentos/${docId}`);
+      await db.collection("documentos_mei").doc(docId).set(metadataDoc);
+      console.log(`[Firestore Admin Serverless] Registro gravado com sucesso na raiz em: documentos_mei/${docId}`);
     } catch (dbErr: any) {
       console.error("[Firestore Admin Serverless Error]: Falha ao gravar metadados no Firestore:", dbErr.message);
       throw new Error(`Erro ao salvar metadados do documento no banco de dados Firestore: ${dbErr.message}`);

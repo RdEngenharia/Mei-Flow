@@ -279,8 +279,8 @@ async function startServer() {
         };
 
         try {
-          await db.collection("users").doc(actualUserId).collection("documentos").doc(docId).set(metadataDoc);
-          console.log(`[Firestore Admin] Registro proativo gravado: users/${actualUserId}/documentos/${docId}`);
+          await db.collection("documentos_mei").doc(docId).set(metadataDoc);
+          console.log(`[Firestore Admin] Registro proativo gravado na raiz: documentos_mei/${docId}`);
         } catch (dbErr: any) {
           console.error("[Firestore Admin Error] Erro ao gravar metadados:", dbErr.message);
           res.status(500).json({ success: false, message: `Erro ao salvar metadados do documento no banco de dados Firestore: ${dbErr.message}` });
@@ -350,8 +350,8 @@ async function startServer() {
       };
 
       try {
-        await db.collection("users").doc(actualUserId).collection("documentos").doc(docId).set(metadataDoc);
-        console.log(`[Firestore Admin] Registro gravado com sucesso em: users/${actualUserId}/documentos/${docId}`);
+        await db.collection("documentos_mei").doc(docId).set(metadataDoc);
+        console.log(`[Firestore Admin] Registro gravado com sucesso na raiz em: documentos_mei/${docId}`);
       } catch (dbErr: any) {
         console.error("[Firestore Admin Error]: Falha ao gravar metadados:", dbErr.message);
         res.status(500).json({ success: false, message: `Erro ao salvar metadados do documento no banco de dados Firestore: ${dbErr.message}` });
@@ -386,6 +386,20 @@ async function startServer() {
         return;
       }
 
+      // Extração de userId do storagePath para validação de segurança
+      const pathParts = String(storagePath).split('/');
+      let ownerId = "";
+      if (pathParts[0] === "usuarios" && pathParts[1]) {
+        ownerId = pathParts[1];
+      }
+
+      // Validação de segurança simples: se houver usuário autenticado no req.user ou headers/queries
+      const requesterId = (req as any).user?.uid || req.headers["x-user-id"] || req.query.requesterId;
+      if (ownerId && requesterId && ownerId !== requesterId) {
+        res.status(403).send("Acesso Negado: Você não tem permissão para acessar os documentos de outro usuário.");
+        return;
+      }
+
       if (!adminStorage) {
         res.status(500).send("Serviço de Storage não está configurado ou ativo no servidor.");
         return;
@@ -401,8 +415,9 @@ async function startServer() {
       }
 
       const [metadata] = await fileRef.getMetadata();
+      const fileName = String(storagePath).split('/').pop() || 'documento';
       res.setHeader("Content-Type", metadata.contentType || "application/octet-stream");
-      res.setHeader("Content-Disposition", `inline; filename="${path.basename(String(storagePath))}"`);
+      res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
 
       fileRef.createReadStream().pipe(res);
     } catch (err: any) {

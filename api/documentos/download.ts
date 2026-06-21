@@ -82,6 +82,19 @@ export default async function handler(req: any, res: any) {
       return res.status(400).send("O parâmetro 'path' é obrigatório.");
     }
 
+    // Extração de userId do storagePath para validação de segurança
+    const pathParts = String(storagePath).split('/');
+    let ownerId = "";
+    if (pathParts[0] === "usuarios" && pathParts[1]) {
+      ownerId = pathParts[1];
+    }
+
+    // Validação de segurança simples: se houver usuário autenticado no req.user ou headers/queries
+    const requesterId = req.user?.uid || req.headers["x-user-id"] || req.query.requesterId;
+    if (ownerId && requesterId && ownerId !== requesterId) {
+      return res.status(403).send("Acesso Negado: Você não tem permissão para acessar os documentos de outro usuário.");
+    }
+
     if (!adminStorage) {
       return res.status(500).send("Serviço de Storage não está configurado ou ativo no servidor.");
     }
@@ -96,8 +109,9 @@ export default async function handler(req: any, res: any) {
     }
 
     const [metadata] = await fileRef.getMetadata();
+    const fileName = String(storagePath).split('/').pop() || 'documento';
     res.setHeader("Content-Type", metadata.contentType || "application/octet-stream");
-    res.setHeader("Content-Disposition", `inline; filename="${path.basename(String(storagePath))}"`);
+    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
 
     // Stream download direct to user
     const stream = fileRef.createReadStream();
