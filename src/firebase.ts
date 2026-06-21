@@ -91,8 +91,9 @@ if (!apiKey || !authDomain || !projectId) {
 // Inicialização segura dos componentes do Firebase
 const app = initializeApp(firebaseConfig);
 
-// CRÍTICO: Ativação limpa e direta do banco do Firestore (padrão de produção sem herdar IDs de banco de dados do sandbox do AI Studio)
-export const db = getFirestore(app);
+// CRÍTICO: Ativação limpa e direta do banco do Firestore, suportando o banco de dados dinâmico do AI Studio se presente
+const dbId = (firebaseConfigImport as any).firestoreDatabaseId || "(default)";
+export const db = dbId === "(default)" ? getFirestore(app) : getFirestore(app, dbId);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 

@@ -51,7 +51,7 @@ try {
           clientEmail: clientEmail,
           privateKey: formattedPrivateKey,
         }),
-        storageBucket: firebaseConfig.storageBucket || "mei-flow-692d9.appspot.com" // Forçado fixo correto com fallback robusto
+        storageBucket: firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app" // Forçado fixo correto com fallback robusto
       });
       console.log(`[Firebase Admin Global]: Inicializado com chaves de produção de forma segura para o projeto: ${projId}`);
     } else if (projId) {
@@ -88,6 +88,22 @@ if (adminApp) {
   } catch (storageInitErr: any) {
     console.warn("[Firebase Admin Server Storage Init Error]: Failed to retrieve storage instance:", storageInitErr.message);
     adminStorage = null;
+  }
+}
+
+async function configureBucketCors(bucketInstance: any) {
+  try {
+    await bucketInstance.setCorsConfiguration([
+      {
+        maxAgeSeconds: 3600,
+        method: ["GET", "POST", "PUT", "DELETE", "HEAD"],
+        origin: ["*"],
+        responseHeader: ["Content-Type", "Authorization", "x-goog-meta-*"],
+      },
+    ]);
+    console.log("[GCS CORS Configuration Server]: Regras injetadas com sucesso no bucket.");
+  } catch (corsErr: any) {
+    console.error("[GCS CORS Configuration Server Error]: Falha ao gravar regras de CORS:", corsErr.message);
   }
 }
 
@@ -234,8 +250,12 @@ async function startServer() {
         return;
       }
 
-      const bucketName = firebaseConfig.storageBucket || "mei-flow-692d9.appspot.com";
+      const bucketName = firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app";
       const bucket = adminStorage.bucket(bucketName);
+
+      // Garante configuração de regras de CORS diretamente no Cloud Storage para evitar bloqueios de PUT/signedURL
+      await configureBucketCors(bucket);
+
       const fileRef = bucket.file(targetStoragePath);
 
       // Se solicitado, assina a requisição retornando uma URL para upload PUT direto
