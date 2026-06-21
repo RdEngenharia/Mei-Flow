@@ -51,69 +51,42 @@ if (typeof process !== 'undefined' && !process.env) {
 // Inicializa as variáveis lendo estritamente do process.env (Vercel) com suporte a fallback de import.meta.env (Vite) ou config local
 const isProd = typeof process !== 'undefined' && (process.env.NODE_ENV === "production" || process.env.VERCEL === "1");
 
-const envApiKey = (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_API_KEY : undefined) || 
-                  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_API_KEY) || 
-                  (!isProd ? firebaseConfigImport.apiKey : undefined);
-
-const envAuthDomain = (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN : undefined) || 
-                     (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN) || 
-                     (!isProd ? firebaseConfigImport.authDomain : undefined);
-
-const envProjectId = (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID : undefined) || 
-                    (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID) || 
-                    (!isProd ? firebaseConfigImport.projectId : undefined);
-
-const envAppId = (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_APP_ID : undefined) || 
-                (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_APP_ID) || 
-                (!isProd ? firebaseConfigImport.appId : undefined);
-
-const envStorageBucket = (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET : undefined) || 
-                        (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET) || 
-                        (!isProd ? firebaseConfigImport.storageBucket : undefined);
-
-const envDatabaseURL = (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL : undefined) || 
-                      (!isProd ? `https://${envProjectId}-default-rtdb.firebaseio.com` : undefined);
-
-const envMessagingSenderId = (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID : undefined) || 
-                            (!isProd ? firebaseConfigImport.messagingSenderId : undefined);
-
-// Sincroniza process.env de forma segura para estarem disponíveis sob demanda no escopo global
-if (typeof process !== 'undefined' && process.env) {
-  process.env.NEXT_PUBLIC_FIREBASE_API_KEY = envApiKey;
-  process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN = envAuthDomain;
-  process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID = envProjectId;
-  process.env.NEXT_PUBLIC_FIREBASE_APP_ID = envAppId;
-  process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET = envStorageBucket;
-  process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL = envDatabaseURL;
-  process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID = envMessagingSenderId;
-}
-
-// Configuração estritamente protegida e lida via variáveis de ambiente
+// Configuração estritamente protegida e lida via variáveis de ambiente com fallbacks de produção e contingência fixas de segurança de carregamento do app
 const firebaseConfig: any = {
-  apiKey: envApiKey,
-  authDomain: envAuthDomain,
-  projectId: envProjectId,
-  appId: envAppId,
-  databaseURL: envDatabaseURL,
-  storageBucket: envStorageBucket || "mei-flow-692d9.firebasestorage.app",
-  messagingSenderId: envMessagingSenderId,
+  apiKey: process.env.FIREBASE_API_KEY || process.env.NEXT_PUBLIC_FIREBASE_API_KEY || (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_API_KEY) || "AIzaSyBHRKyIuNTOaYseKCeKWrMoPGL1RrXGh3c",
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN || process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN) || "mei-flow-692d9.firebaseapp.com",
+  databaseURL: process.env.FIREBASE_DATABASE_URL || process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL || "https://mei-flow-692d9-default-rtdb.firebaseio.com",
+  projectId: "mei-flow-692d9", // Forçado fixo para não herdar lixo de outras chaves
+  storageBucket: "mei-flow-692d9.firebasestorage.app", // Forçado fixo correto
+  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || "481891312358",
+  appId: process.env.FIREBASE_APP_ID || process.env.NEXT_PUBLIC_FIREBASE_APP_ID || (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_APP_ID) || "1:481891312358:web:022075fe512fc72ebe5127",
   firestoreDatabaseId: firebaseConfigImport.firestoreDatabaseId
 };
 
-// Validação de inicialização rígida para ambiente de produção (Lança erro explícito na Vercel se chaves faltarem)
+// Sincroniza process.env de forma segura para estarem disponíveis sob demanda no escopo global
+if (typeof process !== 'undefined' && process.env) {
+  process.env.NEXT_PUBLIC_FIREBASE_API_KEY = firebaseConfig.apiKey;
+  process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN = firebaseConfig.authDomain;
+  process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID = firebaseConfig.projectId;
+  process.env.NEXT_PUBLIC_FIREBASE_APP_ID = firebaseConfig.appId;
+  process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET = firebaseConfig.storageBucket;
+  process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL = firebaseConfig.databaseURL;
+  process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID = firebaseConfig.messagingSenderId;
+}
+
+// Validação de inicialização amigável de produção (Evita o crash com tela branca jogando apenas console.error)
 const apiKey = firebaseConfig.apiKey;
 const authDomain = firebaseConfig.authDomain;
 const projectId = firebaseConfig.projectId;
 
 if (!apiKey || !authDomain || !projectId) {
   const missingKeys = [];
-  if (!apiKey) missingKeys.push("apiKey (NEXT_PUBLIC_FIREBASE_API_KEY)");
-  if (!authDomain) missingKeys.push("authDomain (NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN)");
-  if (!projectId) missingKeys.push("projectId (NEXT_PUBLIC_FIREBASE_PROJECT_ID)");
+  if (!apiKey) missingKeys.push("apiKey (FIREBASE_API_KEY)");
+  if (!authDomain) missingKeys.push("authDomain (FIREBASE_AUTH_DOMAIN)");
+  if (!projectId) missingKeys.push("projectId");
   
-  const errorMsg = `[CRITICAL FIREBASE INITIALIZATION ERROR]: Chaves obrigatórias de configuração ausentes no ambiente de produção: ${missingKeys.join(", ")}. Certifique-se de configurar as variáveis de ambiente na Vercel correspondentes ao seu projeto Firebase de produção (mei-flow-692d9).`;
+  const errorMsg = `[WARNING FIREBASE INITIALIZATION]: Algumas chaves de configuração estão ausentes no ambiente: ${missingKeys.join(", ")}.`;
   console.error(errorMsg);
-  throw new Error(errorMsg);
 }
 
 // Inicialização segura dos componentes do Firebase

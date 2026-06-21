@@ -20,9 +20,7 @@ const getFirebaseConfig = () => {
 const firebaseConfig = getFirebaseConfig();
 
 const getFirebaseProjectId = () => {
-  if (process.env.FIREBASE_PROJECT_ID) return process.env.FIREBASE_PROJECT_ID;
-  if (firebaseConfig.projectId) return firebaseConfig.projectId;
-  return "mei-flow-692d9"; 
+  return "mei-flow-692d9"; // Forçado fixo correto
 };
 
 const getFirebaseDatabaseId = () => {
@@ -34,7 +32,7 @@ const getFirebaseDatabaseId = () => {
 let adminApp: any = null;
 const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
 const privateKey = process.env.FIREBASE_PRIVATE_KEY;
-const projId = getFirebaseProjectId();
+const projId = "mei-flow-692d9"; // Forçado fixo conforme orientação da Vercel
 
 // Bypass de Sandbox: Detecta se está rodando sob e-mail padrão do sandbox do AI Studio / sem chaves reais de produção
 const isSandbox = !clientEmail || !privateKey || clientEmail.includes("ais-sandbox") || (clientEmail.includes("gserviceaccount.com") && !clientEmail.includes("mei-flow-692d9"));
@@ -51,7 +49,7 @@ if (isSandbox) {
           clientEmail: clientEmail,
           privateKey: formattedPrivateKey,
         }),
-        storageBucket: firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app"
+        storageBucket: "mei-flow-692d9.firebasestorage.app" // Forçado fixo correto
       });
       console.log(`[Firebase Admin Upload API]: Inicializado com sucesso via chaves para o projeto de produção: ${projId}`);
     } else {
@@ -126,7 +124,7 @@ export default async function handler(req: any, res: any) {
       throw new Error("O Firebase Admin Storage não foi inicializado corretamente no servidor para realizar o upload.");
     }
 
-    const bucketName = firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app";
+    const bucketName = "mei-flow-692d9.firebasestorage.app";
     const bucket = adminStorage.bucket(bucketName);
     const fileRef = bucket.file(targetStoragePath);
 

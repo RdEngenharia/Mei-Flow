@@ -39,7 +39,7 @@ if (fs.existsSync(configPath)) {
 let adminApp: any = null;
 try {
   if (getApps().length === 0) {
-    const projId = process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId || "mei-flow-692d9";
+    const projId = "mei-flow-692d9"; // Forçado fixo conforme orientação de rede real da Vercel
     const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
     const privateKey = process.env.FIREBASE_PRIVATE_KEY;
 
@@ -51,7 +51,7 @@ try {
           clientEmail: clientEmail,
           privateKey: formattedPrivateKey,
         }),
-        storageBucket: firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app"
+        storageBucket: "mei-flow-692d9.firebasestorage.app" // Forçado fixo correto
       });
       console.log(`[Firebase Admin Global]: Inicializado com chaves de produção de forma segura para o projeto: ${projId}`);
     } else if (projId) {
