@@ -184,10 +184,10 @@ export default async function handler(req: any, res: any) {
 
       try {
         // Gravando de forma centralizada de acordo com a regra 4
-        await db.collection("documentos").doc(docId).set(metadataDoc);
-        console.log(`[Firestore] Registro proativo gravado na coleção 'documentos': ${docId}`);
+        await db.collection("documentos_mei").doc(docId).set(metadataDoc);
+        console.log(`[Firestore] Registro proativo gravado na coleção 'documentos_mei': ${docId}`);
       } catch (dbErr: any) {
-        console.error("[Firestore Error] Erro ao gravar metadados na coleção raiz 'documentos':", dbErr.message);
+        console.error("[Firestore Error] Erro ao gravar metadados na coleção raiz 'documentos_mei':", dbErr.message);
         throw new Error(`Erro ao salvar metadados: ${dbErr.message}`);
       }
 
@@ -244,10 +244,10 @@ export default async function handler(req: any, res: any) {
 
     try {
       // Gravando de forma centralizada de acordo com a regra 4
-      await db.collection("documentos").doc(docId).set(metadataDoc);
-      console.log(`[Firestore] Registro gravado com sucesso na coleção 'documentos': ${docId}`);
+      await db.collection("documentos_mei").doc(docId).set(metadataDoc);
+      console.log(`[Firestore] Registro gravado com sucesso na coleção 'documentos_mei': ${docId}`);
     } catch (dbErr: any) {
-      console.error("[Firestore Error]: Falha ao gravar metadados na coleção raiz 'documentos':", dbErr.message);
+      console.error("[Firestore Error]: Falha ao gravar metadados na coleção raiz 'documentos_mei':", dbErr.message);
       throw new Error(`Erro ao salvar metadados no banco: ${dbErr.message}`);
     }
 

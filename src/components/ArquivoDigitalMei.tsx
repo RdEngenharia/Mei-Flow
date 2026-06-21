@@ -141,9 +141,10 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     setIsLoading(true);
     setErrorMsg(null);
 
-    // Consulta documentos do usuário logado diretamente na subcollection correta e autorizada
+    // Consulta documentos do usuário logado diretamente na coleção raiz documentos_mei autorizada
     const q = query(
-      collection(db, "users", uid, "documentos")
+      collection(db, "documentos_mei"),
+      where("userId", "==", uid)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -195,8 +196,11 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     console.log(`[Regra do Fisco (5 Anos)] Iniciando varredura em segundo plano. Prazo permitido: ${anoMaisAntigoPermitido} até ${currentYear}.`);
 
     try {
-      // 1. Busca todos os documentos do usuário na subcoleção correta e autorizada
-      const queryAll = query(collection(db, "users", uid, "documentos"));
+      // 1. Busca todos os documentos do usuário na coleção raiz documentos_mei autorizada
+      const queryAll = query(
+        collection(db, "documentos_mei"),
+        where("userId", "==", uid)
+      );
       const querySnap = await getDocs(queryAll);
       
       let removidosCount = 0;
@@ -210,7 +214,7 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
           console.warn(`[Regra do Fisco (5 Anos)] Documento expirado encontrado: ${data.nome} (${docAno}). Excurga permanente...`);
           
           // Excluir metadado do Firestore
-          await deleteDoc(doc(db, "users", uid, "documentos", docId));
+          await deleteDoc(doc(db, "documentos_mei", docId));
           
           // Excluir do Storage se houver path e não for simulação
           if (data.storagePath && !data.isSimulated) {
@@ -436,8 +440,8 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     setIsLoading(true);
 
     try {
-      // 1. Remove do Firestore na subcoleção correta e autorizada
-      await deleteDoc(doc(db, "users", uid, "documentos", docItem.id));
+      // 1. Remove do Firestore na coleção raiz documentos_mei autorizada
+      await deleteDoc(doc(db, "documentos_mei", docItem.id));
 
       // 2. Remove do Storage se não for simulado
       if (!docItem.isSimulated && docItem.storagePath) {
