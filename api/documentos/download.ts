@@ -44,7 +44,7 @@ if (isSandbox) {
           clientEmail: clientEmail,
           privateKey: formattedPrivateKey,
         }),
-        storageBucket: firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app"
+        storageBucket: firebaseConfig.storageBucket || "mei-flow-692d9.appspot.com"
       });
       console.log(`[Firebase Admin Download API]: Inicializado com sucesso via chaves para o projeto de produção: ${projId}`);
     } else {
@@ -99,7 +99,7 @@ export default async function handler(req: any, res: any) {
       return res.status(500).send("Serviço de Storage não está configurado ou ativo no servidor.");
     }
 
-    const bucketName = firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app";
+    const bucketName = firebaseConfig.storageBucket || "mei-flow-692d9.appspot.com";
     const bucket = adminStorage.bucket(bucketName);
     const fileRef = bucket.file(String(storagePath));
     

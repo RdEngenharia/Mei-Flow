@@ -51,7 +51,7 @@ try {
           clientEmail: clientEmail,
           privateKey: formattedPrivateKey,
         }),
-        storageBucket: "mei-flow-692d9.firebasestorage.app" // Forçado fixo correto
+        storageBucket: firebaseConfig.storageBucket || "mei-flow-692d9.appspot.com" // Forçado fixo correto com fallback robusto
       });
       console.log(`[Firebase Admin Global]: Inicializado com chaves de produção de forma segura para o projeto: ${projId}`);
     } else if (projId) {
@@ -234,7 +234,7 @@ async function startServer() {
         return;
       }
 
-      const bucketName = firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app";
+      const bucketName = firebaseConfig.storageBucket || "mei-flow-692d9.appspot.com";
       const bucket = adminStorage.bucket(bucketName);
       const fileRef = bucket.file(targetStoragePath);
 
@@ -405,7 +405,7 @@ async function startServer() {
         return;
       }
 
-      const bucket = adminStorage.bucket(firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app");
+      const bucket = adminStorage.bucket(firebaseConfig.storageBucket || "mei-flow-692d9.appspot.com");
       const fileRef = bucket.file(String(storagePath));
       
       const [exists] = await fileRef.exists();

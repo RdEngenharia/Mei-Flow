@@ -51,7 +51,7 @@ if (isSandbox) {
           clientEmail: clientEmail,
           privateKey: formattedPrivateKey,
         }),
-        storageBucket: "mei-flow-692d9.firebasestorage.app" // Forçado fixo correto
+        storageBucket: firebaseConfig.storageBucket || "mei-flow-692d9.appspot.com" // Forçado fixo correto com fallback robusto
       });
       console.log(`[Firebase Admin Upload API]: Inicializado com sucesso via chaves para o projeto de produção: ${projId}`);
     } else {
@@ -126,7 +126,8 @@ export default async function handler(req: any, res: any) {
       throw new Error("O Firebase Admin Storage não foi inicializado corretamente no servidor para realizar o upload.");
     }
 
-    const bucketName = "mei-flow-692d9.firebasestorage.app";
+    // Tenta pegar do config, senão usa o ID do projeto com o sufixo padrão do Firebase
+    const bucketName = firebaseConfig.storageBucket || "mei-flow-692d9.appspot.com";
     const bucket = adminStorage.bucket(bucketName);
     const fileRef = bucket.file(targetStoragePath);
 
