@@ -74,7 +74,8 @@ let db: any = null;
 let adminStorage: any = null;
 if (adminApp) {
   try {
-    const dbId = firebaseConfig.firestoreDatabaseId || "(default)";
+    const isVercelProd = process.env.VERCEL === "1" || process.env.NODE_ENV === "production";
+    const dbId = isVercelProd ? "(default)" : (firebaseConfig.firestoreDatabaseId || "(default)");
     db = dbId === "(default)" ? getFirestore(adminApp) : getFirestore(adminApp, dbId);
     console.log(`[Firebase Admin]: Connected to Firestore database ID: ${dbId}`);
   } catch (dbInitErr: any) {

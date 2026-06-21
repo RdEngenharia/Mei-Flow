@@ -24,6 +24,8 @@ const getFirebaseProjectId = () => {
 };
 
 const getFirebaseDatabaseId = () => {
+  const isVercelProd = process.env.VERCEL === "1" || process.env.NODE_ENV === "production";
+  if (isVercelProd) return "(default)";
   if (process.env.FIREBASE_DATABASE_ID) return process.env.FIREBASE_DATABASE_ID;
   if (firebaseConfig.firestoreDatabaseId) return firebaseConfig.firestoreDatabaseId;
   return "(default)";

@@ -53,14 +53,13 @@ const isProd = typeof process !== 'undefined' && (process.env.NODE_ENV === "prod
 
 // Configuração estritamente protegida e lida via variáveis de ambiente com fallbacks de produção e contingência fixas de segurança de carregamento do app
 const firebaseConfig: any = {
-  apiKey: process.env.FIREBASE_API_KEY || process.env.NEXT_PUBLIC_FIREBASE_API_KEY || (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_API_KEY) || "AIzaSyBHRKyIuNTOaYseKCeKWrMoPGL1RrXGh3c",
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN || process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN) || "mei-flow-692d9.firebaseapp.com",
-  databaseURL: process.env.FIREBASE_DATABASE_URL || process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL || "https://mei-flow-692d9-default-rtdb.firebaseio.com",
-  projectId: "mei-flow-692d9", // Forçado fixo para não herdar lixo de outras chaves
-  storageBucket: "mei-flow-692d9.firebasestorage.app", // Forçado fixo correto
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || "481891312358",
-  appId: process.env.FIREBASE_APP_ID || process.env.NEXT_PUBLIC_FIREBASE_APP_ID || (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_FIREBASE_APP_ID) || "1:481891312358:web:022075fe512fc72ebe5127",
-  firestoreDatabaseId: firebaseConfigImport.firestoreDatabaseId
+  apiKey: process.env.FIREBASE_API_KEY || process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyBHRKyIuNTOaYseKCeKWrMoPGL1RrXGh3c",
+  authDomain: "mei-flow-692d9.firebaseapp.com",
+  databaseURL: "https://mei-flow-692d9-default-rtdb.firebaseio.com",
+  projectId: "mei-flow-692d9",
+  storageBucket: "mei-flow-692d9.firebasestorage.app",
+  messagingSenderId: "481891312358",
+  appId: process.env.FIREBASE_APP_ID || process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "1:481891312358:web:022075fe512fc72ebe5127"
 };
 
 // Sincroniza process.env de forma segura para estarem disponíveis sob demanda no escopo global
@@ -82,7 +81,7 @@ const projectId = firebaseConfig.projectId;
 if (!apiKey || !authDomain || !projectId) {
   const missingKeys = [];
   if (!apiKey) missingKeys.push("apiKey (FIREBASE_API_KEY)");
-  if (!authDomain) missingKeys.push("authDomain (FIREBASE_AUTH_DOMAIN)");
+  if (!authDomain) missingKeys.push("authDomain");
   if (!projectId) missingKeys.push("projectId");
   
   const errorMsg = `[WARNING FIREBASE INITIALIZATION]: Algumas chaves de configuração estão ausentes no ambiente: ${missingKeys.join(", ")}.`;
@@ -92,9 +91,8 @@ if (!apiKey || !authDomain || !projectId) {
 // Inicialização segura dos componentes do Firebase
 const app = initializeApp(firebaseConfig);
 
-// CRÍTICO: Ativação correta do banco do Firestore vinculando o ID do banco
-// A persistência offline por IndexedDb NÃO está habilitada para assegurar gravação/leitura estritamente online em produção sem mascarar erros de conectividade.
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// CRÍTICO: Ativação limpa e direta do banco do Firestore (padrão de produção sem herdar IDs de banco de dados do sandbox do AI Studio)
+export const db = getFirestore(app);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 
