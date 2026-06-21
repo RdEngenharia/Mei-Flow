@@ -19,52 +19,49 @@ const getFirebaseConfig = () => {
 const firebaseConfig = getFirebaseConfig();
 
 const getFirebaseProjectId = () => {
-  if (firebaseConfig.projectId) return firebaseConfig.projectId;
   if (process.env.FIREBASE_PROJECT_ID) return process.env.FIREBASE_PROJECT_ID;
-  if (process.env.GOOGLE_CLOUD_PROJECT) return process.env.GOOGLE_CLOUD_PROJECT;
-  return "mei-flow-692d9"; // fallback
+  if (firebaseConfig.projectId) return firebaseConfig.projectId;
+  return "mei-flow-692d9"; 
 };
 
 let adminApp: any = null;
-try {
-  if (getApps().length === 0) {
-    const projId = getFirebaseProjectId();
-    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-    const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+const projId = getFirebaseProjectId();
 
-    if (projId && clientEmail && privateKey) {
-      const formattedPrivateKey = privateKey.replace(/\\n/g, '\n');
+// Bypass de Sandbox: Detecta se está rodando sob e-mail padrão do sandbox do AI Studio / sem chaves reais de produção
+const isSandbox = !clientEmail || !privateKey || clientEmail.includes("ais-sandbox") || (clientEmail.includes("gserviceaccount.com") && !clientEmail.includes("mei-flow-692d9"));
+
+if (isSandbox) {
+  console.warn("[Firebase Admin Download API WARNING]: Acesso ao ambiente real bloqueado. Nenhuma credencial de produção válida foi fornecida, ou o servidor está rodando sob a conta padrão de sandbox do AI Studio.");
+} else {
+  try {
+    if (getApps().length === 0) {
+      const formattedPrivateKey = privateKey!.replace(/\\n/g, '\n');
       adminApp = initializeApp({
         credential: cert({
           projectId: projId,
           clientEmail: clientEmail,
           privateKey: formattedPrivateKey,
-        })
+        }),
+        storageBucket: firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app"
       });
-      console.log(`[Firebase Admin Download API]: Initialized securely for projectId: ${projId}`);
-    } else if (projId) {
-      adminApp = initializeApp({
-        projectId: projId,
-      });
-      console.log(`[Firebase Admin Download API]: Initialized with projectId: ${projId}`);
+      console.log(`[Firebase Admin Download API]: Inicializado com sucesso via chaves para o projeto de produção: ${projId}`);
     } else {
-      adminApp = initializeApp();
-      console.log("[Firebase Admin Download API]: Initialized with generic ADC");
+      adminApp = getApps()[0];
     }
-  } else {
-    adminApp = getApps()[0];
+  } catch (err: any) {
+    console.error("[Firebase Admin Download API Error]: Falha crítica na autenticação com chaves:", err.message);
   }
-} catch (err: any) {
-  console.error("[Firebase Admin Download API Error]: Failed to initialize:", err.message);
 }
 
 let adminStorage: any = null;
 if (adminApp) {
   try {
     adminStorage = getStorage(adminApp);
-    console.log("[Firebase Admin Download API]: Storage instance initialized successfully.");
+    console.log("[Firebase Admin Download API]: Instância do Storage ativada via credenciais autorizadas.");
   } catch (storageInitErr: any) {
-    console.warn("[Firebase Admin Download API Storage Init Warning]: Failed to retrieve storage instance:", storageInitErr.message);
+    console.error("[Firebase Admin Download API Storage Error]:", storageInitErr.message);
     adminStorage = null;
   }
 }
@@ -72,6 +69,11 @@ if (adminApp) {
 export default async function handler(req: any, res: any) {
   if (req.method !== "GET") {
     return res.status(405).send("Method not allowed. Use GET.");
+  }
+
+  // Bypass de Sandbox: Se o servidor estiver rodando no sandbox sem chaves, barra o download para prevenir erro de permissão 403 genérico
+  if (isSandbox || !adminStorage) {
+    return res.status(403).send("Acesso Negado (Ambiente Sandbox sem Credenciais Reais de Produção): O download de arquivos do Firebase Storage exige que o servidor esteja devidamente autenticado com as chaves FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL e FIREBASE_PRIVATE_KEY correspondentes às credenciais do seu projeto Firebase de produção.");
   }
 
   try {
@@ -84,7 +86,7 @@ export default async function handler(req: any, res: any) {
       return res.status(500).send("Serviço de Storage não está configurado ou ativo no servidor.");
     }
 
-    const bucketName = firebaseConfig.storageBucket || "usina-rd-solar.firebasestorage.app";
+    const bucketName = firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app";
     const bucket = adminStorage.bucket(bucketName);
     const fileRef = bucket.file(String(storagePath));
     

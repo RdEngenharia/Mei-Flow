@@ -291,7 +291,7 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     };
 
     try {
-      // 1. Converter o arquivo físico para Data URL (Base64)
+      // 1. Converter o arquivo físico para Data URL (Base64) para contingência
       let dataUrl = "";
       try {
         dataUrl = await readAsDataURL(file);
@@ -299,39 +299,90 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
         throw new Error(`Erro ao preparar o arquivo: ${readErr.message}`);
       }
 
-      // 2. Transmite via POST para o nosso endpoint seguro do backend para contornar preflight do CORS
-      const uploadResponse = await fetch("/api/documentos/upload", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          fileBase64: dataUrl,
-          fileName: file.name,
-          userId: uid,
-          ano: selectedYear,
-          mes: selectedMonth,
-          size: file.size,
-          type: file.type || "application/octet-stream"
-        })
-      });
+      let savedDoc: any = null;
+      let uploadSucceeded = false;
 
-      if (!uploadResponse.ok) {
-        const errorText = await uploadResponse.text();
-        throw new Error(errorText || `Erro no servidor (${uploadResponse.status}).`);
+      // Tenta upload de alta performance por URL assinada (Evita limites de tamanho de corpo de requisição do proxy do container)
+      try {
+        const signedResponse = await fetch("/api/documentos/upload", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            getSignedUrl: true,
+            fileName: file.name,
+            uid: uid,
+            ano: selectedYear,
+            mes: selectedMonth,
+            size: file.size,
+            type: file.type || "application/octet-stream"
+          })
+        });
+
+        if (signedResponse.ok) {
+          const signedData = await signedResponse.json();
+          if (signedData.success) {
+            const { uploadUrl, document: docMeta } = signedData;
+
+            // PUT binário diretamente no bucket do Firebase Storage usando o link assinado
+            const putResponse = await fetch(uploadUrl, {
+              method: "PUT",
+              headers: {
+                "Content-Type": file.type || "application/octet-stream"
+              },
+              body: file
+            });
+
+            if (putResponse.ok) {
+              savedDoc = docMeta;
+              uploadSucceeded = true;
+              console.log("[Modern GCS Signed Upload] Sucesso direto!");
+            } else {
+              console.warn("[GCS Signed Upload] Falha no PUT com código:", putResponse.status, ". Recorrendo a contingência Base64...");
+            }
+          }
+        }
+      } catch (signedErr: any) {
+        console.warn("[Signed Upload Fallback Match] Erro CORS/Rede no link assinado. Recorrendo a contingência Base64...", signedErr);
       }
 
-      const resJson = await uploadResponse.json();
-      if (!resJson.success) {
-        throw new Error(resJson.message || "Endpoint no servidor indicou falha no processamento.");
+      // Se falhar o upload usando link assinado direto, recorremos à contingência clássica de proxy de upload base64
+      if (!uploadSucceeded) {
+        const uploadResponse = await fetch("/api/documentos/upload", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            fileData: dataUrl,
+            fileName: file.name,
+            uid: uid,
+            id: `doc_${Date.now()}`,
+            ano: selectedYear,
+            mes: selectedMonth,
+            size: file.size,
+            type: file.type || "application/octet-stream"
+          })
+        });
+
+        if (!uploadResponse.ok) {
+          const errorText = await uploadResponse.text();
+          throw new Error(errorText || `Erro no servidor (${uploadResponse.status}).`);
+        }
+
+        const resJson = await uploadResponse.json();
+        if (!resJson.success) {
+          throw new Error(resJson.message || "O backend indicou falha no processamento do upload.");
+        }
+
+        savedDoc = resJson.document;
       }
 
-      const savedDoc = resJson.document;
-      
       setSuccessMsg(`Documento "${file.name}" guardado com sucesso na pasta de ${selectedMonth}/${selectedYear}!`);
       
-      if (savedDoc.isSimulated) {
-        setStorageWarning("Aviso de CORS/Bucket: O backend utilizou contingência local segura de visualização de link devido às políticas de acesso do bucket do Firebase.");
+      if (savedDoc && savedDoc.isSimulated) {
+        setStorageWarning("Aviso de CORS/Bucket: O backend utilizou contingência local de visualização devido a políticas estritas do bucket.");
       }
     } catch (err: any) {
       console.error("Erro ao realizar upload:", err);

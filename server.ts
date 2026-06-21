@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
-import { initializeApp, getApps } from "firebase-admin/app";
+import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import axios from "axios";
@@ -39,21 +39,35 @@ if (fs.existsSync(configPath)) {
 let adminApp: any = null;
 try {
   if (getApps().length === 0) {
-    const projId = firebaseConfig.projectId;
-    if (projId) {
+    const projId = process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId || "mei-flow-692d9";
+    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+    const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+
+    if (clientEmail && privateKey) {
+      const formattedPrivateKey = privateKey.replace(/\\n/g, '\n');
+      adminApp = initializeApp({
+        credential: cert({
+          projectId: projId,
+          clientEmail: clientEmail,
+          privateKey: formattedPrivateKey,
+        }),
+        storageBucket: firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app"
+      });
+      console.log(`[Firebase Admin Global]: Inicializado com chaves de produção de forma segura para o projeto: ${projId}`);
+    } else if (projId) {
       adminApp = initializeApp({
         projectId: projId,
       });
-      console.log(`[Firebase Admin]: Initialized securely with config projectId: ${projId}`);
+      console.log(`[Firebase Admin Global]: Inicializado de forma segura com config projectId: ${projId}`);
     } else {
       adminApp = initializeApp();
-      console.log("[Firebase Admin]: Initialized with generic ADC (no config projectId found)");
+      console.log("[Firebase Admin Global]: Inicializado via credenciais padrão de ambiente ADC");
     }
   } else {
     adminApp = getApps()[0];
   }
 } catch (err: any) {
-  console.error("[Firebase Admin Error]: Failed to initialize:", err.message);
+  console.error("[Firebase Admin Error]: Falha crítica na inicialização global:", err.message);
 }
 
 let db: any = null;
@@ -186,20 +200,111 @@ async function startServer() {
   // ==========================================
   app.post("/api/documentos/upload", async (req, res) => {
     try {
-      const { fileBase64, fileName, userId, ano, mes, size, type } = req.body;
-      if (!fileBase64 || !fileName || !userId || !ano || !mes) {
+      const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+      const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+      const isSandboxLocal = !clientEmail || !privateKey || clientEmail.includes("ais-sandbox") || (clientEmail.includes("gserviceaccount.com") && !clientEmail.includes("mei-flow-692d9"));
+
+      if (isSandboxLocal || !adminStorage || !db) {
+        res.status(403).json({
+          success: false,
+          message: "Acesso Negado (Ambiente Sandbox sem Credenciais Reais de Produção): O backend detectou que o servidor está rodando na infraestrutura sandbox do AI Studio (ais-sandbox). Para que os uploads e a persistência de documentos de faturamento funcionem com segurança no Firebase Storage do seu projeto, configure as variáveis de ambiente FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL e FIREBASE_PRIVATE_KEY nas configurações de variáveis do repositório/ambiente de execução."
+        });
+        return;
+      }
+
+      const { fileBase64, fileData, fileName, userId, uid, ano, mes, size, type, getSignedUrl } = req.body;
+      const actualFileBase64 = fileBase64 || fileData;
+      const actualUserId = userId || uid;
+
+      if (!fileName || !actualUserId || !ano || !mes) {
         res.status(400).json({ success: false, message: "Parâmetros obrigatórios ausentes para o upload." });
         return;
       }
 
       const docId = `doc_${Date.now()}`;
       const cleanFileName = fileName.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-      const targetStoragePath = `usuarios/${userId}/${ano}/${mes}/${cleanFileName}`;
-
-      let base64Data = fileBase64;
+      const targetStoragePath = `usuarios/${actualUserId}/${ano}/${mes}/${cleanFileName}`;
       let finalType = type || "application/octet-stream";
-      if (fileBase64.includes(";base64,")) {
-        const parts = fileBase64.split(";base64,");
+      const downloadUrl = `/api/documentos/download?path=${encodeURIComponent(targetStoragePath)}`;
+
+      // 1. Tentar salvar no Firebase Storage usando o Firebase Admin (Garante gravação obrigatória)
+      if (!adminStorage) {
+        res.status(500).json({ success: false, message: "O Firebase Admin Storage não foi inicializado corretamente no servidor para realizar o upload." });
+        return;
+      }
+
+      const bucketName = firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app";
+      const bucket = adminStorage.bucket(bucketName);
+      const fileRef = bucket.file(targetStoragePath);
+
+      // Se solicitado, assina a requisição retornando uma URL para upload PUT direto
+      if (getSignedUrl) {
+        let uploadUrl = "";
+        try {
+          const [signedUrl] = await fileRef.getSignedUrl({
+            version: "v4",
+            action: "write",
+            expires: Date.now() + 15 * 60 * 1000, // 15 minutos
+            contentType: finalType,
+          });
+          uploadUrl = signedUrl;
+          console.log(`[Firebase Admin Storage] URL assinada gerada com sucesso para: ${targetStoragePath}`);
+        } catch (signErr: any) {
+          console.error("[Firebase Admin Storage Error] Falha de assinatura GCS:", signErr.message);
+          res.status(500).json({ success: false, message: `Falha ao assinar requisição de upload: ${signErr.message}` });
+          return;
+        }
+
+        // De forma proativa, salva os metadados do arquivo que será enviado no Firestore
+        if (!db) {
+          res.status(500).json({ success: false, message: "O Firebase Admin Firestore não foi inicializado corretamente no servidor." });
+          return;
+        }
+
+        const metadataDoc = {
+          id: docId,
+          nome: fileName,
+          url: downloadUrl,
+          ano: ano,
+          mes: mes,
+          criadoEm: new Date().toISOString(),
+          tamanho: size || 0,
+          tipo: finalType,
+          uploadedAt: new Date().toISOString(),
+          userId: actualUserId,
+          downloadUrl: downloadUrl,
+          storagePath: targetStoragePath,
+          isSimulated: false
+        };
+
+        try {
+          await db.collection("users").doc(actualUserId).collection("documentos").doc(docId).set(metadataDoc);
+          console.log(`[Firestore Admin] Registro proativo gravado: users/${actualUserId}/documentos/${docId}`);
+        } catch (dbErr: any) {
+          console.error("[Firestore Admin Error] Erro ao gravar metadados:", dbErr.message);
+          res.status(500).json({ success: false, message: `Erro ao salvar metadados do documento no banco de dados Firestore: ${dbErr.message}` });
+          return;
+        }
+
+        res.status(200).json({
+          success: true,
+          uploadUrl,
+          downloadUrl,
+          document: metadataDoc,
+          mensagem: "Upload autorizado e assinado por 15 minutos."
+        });
+        return;
+      }
+
+      // Fallback: Upload tradicional em Base64
+      if (!actualFileBase64) {
+        res.status(400).json({ success: false, message: "Parâmetro fileBase64 ou fileData é obrigatório para upload direto clássico." });
+        return;
+      }
+
+      let base64Data = actualFileBase64;
+      if (actualFileBase64.includes(";base64,")) {
+        const parts = actualFileBase64.split(";base64,");
         base64Data = parts[1];
         if (!type && parts[0].startsWith("data:")) {
           finalType = parts[0].substring(5);
@@ -207,35 +312,26 @@ async function startServer() {
       }
 
       const buffer = Buffer.from(base64Data, "base64");
-      let downloadUrl = `/api/documentos/download?path=${encodeURIComponent(targetStoragePath)}`;
-      let isSimulated = false;
 
-      // 1. Tentar salvar no Firebase Storage usando o Firebase Admin
-      if (adminStorage) {
-        try {
-          const bucket = adminStorage.bucket(firebaseConfig.storageBucket || "usina-rd-solar.firebasestorage.app");
-          const fileRef = bucket.file(targetStoragePath);
-          await fileRef.save(buffer, {
-            metadata: {
-              contentType: finalType,
-            },
-          });
-          console.log(`[Firebase Admin Storage] Arquivo salvo com sucesso via API no path: ${targetStoragePath}`);
-        } catch (storageErr: any) {
-          console.warn("[Firebase Admin Storage Error]: Falha ao salvar no bucket, usando simulação persistida no Firestore:", storageErr.message);
-          isSimulated = true;
-        }
-      } else {
-        console.warn("[Firebase Admin Storage]: Não disponível, executando simulação contábil segura.");
-        isSimulated = true;
+      try {
+        await fileRef.save(buffer, {
+          metadata: {
+            contentType: finalType,
+          },
+        });
+        console.log(`[Firebase Admin Storage] Arquivo salvo de contingência no path: ${targetStoragePath}`);
+      } catch (storageErr: any) {
+        console.error("[Firebase Admin Storage Error]: Falha ao salvar no bucket:", storageErr.message);
+        res.status(500).json({ success: false, message: `Erro ao persistir arquivo no Firebase Storage: ${storageErr.message}` });
+        return;
       }
 
-      // Se for simulação pura, gera um link representativo
-      if (isSimulated) {
-        downloadUrl = `/api/mock-document?name=${encodeURIComponent(cleanFileName)}&ano=${ano}&mes=${encodeURIComponent(mes)}`;
+      // 2. Prepara e salva o documento no Firestore do usuário (Garante gravação obrigatória)
+      if (!db) {
+        res.status(500).json({ success: false, message: "O Firebase Admin Firestore não foi inicializado no servidor." });
+        return;
       }
 
-      // 2. Prepara e salva o documento no Firestore do usuário
       const metadataDoc = {
         id: docId,
         nome: fileName,
@@ -246,34 +342,43 @@ async function startServer() {
         tamanho: size || buffer.length,
         tipo: finalType,
         uploadedAt: new Date().toISOString(),
-        userId: userId,
+        userId: actualUserId,
         downloadUrl: downloadUrl,
         storagePath: targetStoragePath,
-        isSimulated: isSimulated
+        isSimulated: false
       };
 
-      if (db) {
-        try {
-          await db.collection("users").doc(userId).collection("documentos").doc(docId).set(metadataDoc);
-          console.log(`[Firestore Admin] Registro gravado com sucesso em: users/${userId}/documentos/${docId}`);
-        } catch (dbErr: any) {
-          console.error("[Firestore Admin Error]: Falha ao gravar metadados:", dbErr.message);
-        }
+      try {
+        await db.collection("users").doc(actualUserId).collection("documentos").doc(docId).set(metadataDoc);
+        console.log(`[Firestore Admin] Registro gravado com sucesso em: users/${actualUserId}/documentos/${docId}`);
+      } catch (dbErr: any) {
+        console.error("[Firestore Admin Error]: Falha ao gravar metadados:", dbErr.message);
+        res.status(500).json({ success: false, message: `Erro ao salvar metadados do documento no banco de dados Firestore: ${dbErr.message}` });
+        return;
       }
 
       res.status(200).json({
         success: true,
         document: metadataDoc,
-        mensagem: "Documento processado com êxito pelo proxy do servidor!"
+        mensagem: "Documento salvo e publicado com sucesso no Firebase!"
       });
     } catch (err: any) {
       console.error("[API Upload Error]:", err.message);
-      res.status(500).json({ success: false, message: `Erro interno no upload do servidor: ${err.message}` });
+      res.status(500).json({ success: false, message: `Erro no upload do servidor: ${err.message}` });
     }
   });
 
   app.get("/api/documentos/download", async (req, res) => {
     try {
+      const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+      const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+      const isSandboxLocal = !clientEmail || !privateKey || clientEmail.includes("ais-sandbox") || (clientEmail.includes("gserviceaccount.com") && !clientEmail.includes("mei-flow-692d9"));
+
+      if (isSandboxLocal || !adminStorage) {
+        res.status(403).send("Acesso Negado (Ambiente Sandbox sem Credenciais Reais de Produção): O download de arquivos do Firebase Storage exige que o servidor esteja devidamente autenticado com as chaves FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL e FIREBASE_PRIVATE_KEY correspondentes às credenciais do seu projeto Firebase de produção.");
+        return;
+      }
+
       const { path: storagePath } = req.query;
       if (!storagePath) {
         res.status(400).send("O parâmetro 'path' é obrigatório.");
@@ -285,7 +390,7 @@ async function startServer() {
         return;
       }
 
-      const bucket = adminStorage.bucket(firebaseConfig.storageBucket || "usina-rd-solar.firebasestorage.app");
+      const bucket = adminStorage.bucket(firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app");
       const fileRef = bucket.file(String(storagePath));
       
       const [exists] = await fileRef.exists();
