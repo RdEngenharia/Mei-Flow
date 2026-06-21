@@ -57,7 +57,7 @@ if (isSandbox) {
         }),
         // Força a URL nativa do seu projeto (conforme visto no seu print do console do Firebase)
         databaseURL: `https://${projId}-default-rtdb.firebaseio.com`,
-        storageBucket: firebaseConfig.storageBucket || "mei-flow-692d9.appspot.com"
+        storageBucket: firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app"
       });
       console.log(`[Firebase Admin Upload API]: Inicializado com sucesso com privilégios Admin para: ${projId}`);
     } else {
@@ -85,6 +85,23 @@ if (adminApp) {
   } catch (storageInitErr: any) {
     console.error("[Firebase Admin Upload API Storage Error]:", storageInitErr.message);
     adminStorage = null;
+  }
+}
+
+// Função auxiliar assíncrona recomendada pelo usuário para configurar regras de CORS no GCS Direct
+async function configureBucketCors(bucketInstance: any) {
+  try {
+    await bucketInstance.setCorsConfiguration([
+      {
+        maxAgeSeconds: 3600,
+        method: ["GET", "POST", "PUT", "DELETE", "HEAD"],
+        origin: ["*"],
+        responseHeader: ["Content-Type", "Authorization", "x-goog-meta-*"],
+      },
+    ]);
+    console.log("[GCS CORS Configuration]: Regras injetadas com sucesso no bucket.");
+  } catch (corsErr: any) {
+    console.error("[GCS CORS Configuration Error]: Falha ao gravar regras de CORS:", corsErr.message);
   }
 }
 
@@ -125,8 +142,12 @@ export default async function handler(req: any, res: any) {
 
     const downloadUrl = `/api/documentos/download?path=${encodeURIComponent(targetStoragePath)}`;
 
-    const bucketName = firebaseConfig.storageBucket || "mei-flow-692d9.appspot.com";
+    const bucketName = firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app";
     const bucket = adminStorage.bucket(bucketName);
+    
+    // Chamada obrigatória com configureBucketCors para habilitar o CORS na primeira execução de produção
+    await configureBucketCors(bucket);
+
     const fileRef = bucket.file(targetStoragePath);
 
     // 1. Upload Assinado
@@ -162,9 +183,11 @@ export default async function handler(req: any, res: any) {
       };
 
       try {
-        await db.collection("documentos_mei").doc(docId).set(metadataDoc);
+        // Gravando de forma centralizada de acordo com a regra 4
+        await db.collection("documentos").doc(docId).set(metadataDoc);
+        console.log(`[Firestore] Registro proativo gravado na coleção 'documentos': ${docId}`);
       } catch (dbErr: any) {
-        console.error("[Firestore Error] Erro ao gravar metadados:", dbErr.message);
+        console.error("[Firestore Error] Erro ao gravar metadados na coleção raiz 'documentos':", dbErr.message);
         throw new Error(`Erro ao salvar metadados: ${dbErr.message}`);
       }
 
@@ -197,6 +220,7 @@ export default async function handler(req: any, res: any) {
       await fileRef.save(buffer, {
         metadata: { contentType: finalType },
       });
+      console.log(`[Firebase Storage] Arquivo salvo com sucesso no path: ${targetStoragePath}`);
     } catch (storageErr: any) {
       console.error("[Firebase Storage Error]:", storageErr.message);
       throw new Error(`Erro ao persistir arquivo no Firebase Storage: ${storageErr.message}`);
@@ -219,10 +243,11 @@ export default async function handler(req: any, res: any) {
     };
 
     try {
-      // Grava diretamente na raiz mapeada nas regras públicas
-      await db.collection("documentos_mei").doc(docId).set(metadataDoc);
+      // Gravando de forma centralizada de acordo com a regra 4
+      await db.collection("documentos").doc(docId).set(metadataDoc);
+      console.log(`[Firestore] Registro gravado com sucesso na coleção 'documentos': ${docId}`);
     } catch (dbErr: any) {
-      console.error("[Firestore Error]: Falha ao gravar metadados:", dbErr.message);
+      console.error("[Firestore Error]: Falha ao gravar metadados na coleção raiz 'documentos':", dbErr.message);
       throw new Error(`Erro ao salvar metadados no banco: ${dbErr.message}`);
     }
 
