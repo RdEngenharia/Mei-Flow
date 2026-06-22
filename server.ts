@@ -74,8 +74,11 @@ let db: any = null;
 let adminStorage: any = null;
 if (adminApp) {
   try {
-    const isVercelProd = process.env.VERCEL === "1" || process.env.NODE_ENV === "production";
-    const dbId = isVercelProd ? "(default)" : (firebaseConfig.firestoreDatabaseId || "(default)");
+    // CORREÇÃO CRÍTICA: o projeto usa um banco Firestore NOMEADO (não o "(default)"),
+    // criado pelo AI Studio. Forçar "(default)" em produção fazia o backend gravar
+    // os documentos em um banco diferente do que o front-end lê, então os arquivos
+    // enviados nunca apareciam nas pastas do Arquivo Digital.
+    const dbId = process.env.FIREBASE_DATABASE_ID || firebaseConfig.firestoreDatabaseId || "(default)";
     db = dbId === "(default)" ? getFirestore(adminApp) : getFirestore(adminApp, dbId);
     console.log(`[Firebase Admin]: Connected to Firestore database ID: ${dbId}`);
   } catch (dbInitErr: any) {
@@ -286,7 +289,7 @@ async function startServer() {
           id: docId,
           nome: fileName,
           url: downloadUrl,
-          ano: ano,
+          ano: Number(ano), // Garante tipo numérico — a query do front usa Number(selectedYear)
           mes: mes,
           criadoEm: new Date().toISOString(),
           tamanho: size || 0,
@@ -357,7 +360,7 @@ async function startServer() {
         id: docId,
         nome: fileName,
         url: downloadUrl,
-        ano: ano,
+        ano: Number(ano), // Garante tipo numérico — a query do front usa Number(selectedYear)
         mes: mes,
         criadoEm: new Date().toISOString(),
         tamanho: size || buffer.length,
