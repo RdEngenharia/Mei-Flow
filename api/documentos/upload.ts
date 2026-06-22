@@ -24,8 +24,13 @@ const getFirebaseProjectId = () => {
 };
 
 const getFirebaseDatabaseId = () => {
-  const isVercelProd = process.env.VERCEL === "1" || process.env.NODE_ENV === "production";
-  if (isVercelProd) return "(default)";
+  // CORREÇÃO CRÍTICA: o banco Firestore do projeto NÃO é o "(default)" — é um banco
+  // nomeado criado pelo AI Studio (ver firestoreDatabaseId em firebase-applet-config.json).
+  // O código anterior forçava "(default)" sempre que rodava em produção na Vercel,
+  // fazendo o backend gravar os metadados em um banco diferente do que o front-end lê
+  // (src/firebase.ts usa firestoreDatabaseId corretamente). Isso fazia os documentos
+  // serem salvos em um banco e a tela do Arquivo Digital procurar em outro — por isso
+  // nada aparecia, mesmo com o upload "funcionando" no backend.
   if (process.env.FIREBASE_DATABASE_ID) return process.env.FIREBASE_DATABASE_ID;
   if (firebaseConfig.firestoreDatabaseId) return firebaseConfig.firestoreDatabaseId;
   return "(default)";
@@ -170,7 +175,7 @@ export default async function handler(req: any, res: any) {
         id: docId,
         nome: fileName,
         url: downloadUrl,
-        ano: ano,
+        ano: Number(ano), // Garante tipo numérico — a query do front usa Number(selectedYear)
         mes: mes,
         criadoEm: new Date().toISOString(),
         tamanho: size || 0,
@@ -230,7 +235,7 @@ export default async function handler(req: any, res: any) {
       id: docId,
       nome: fileName,
       url: downloadUrl,
-      ano: ano,
+      ano: Number(ano), // Garante tipo numérico — a query do front usa Number(selectedYear)
       mes: mes,
       criadoEm: new Date().toISOString(),
       tamanho: size || buffer.length,
