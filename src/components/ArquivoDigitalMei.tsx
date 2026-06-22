@@ -85,20 +85,38 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
   // Monitoramento reativo do usuário com Firebase Auth para garantir alinhamento perfeito de ID e permissões no cliente
   const [currentUser, setCurrentUser] = useState<User | null>(auth.currentUser);
 
+  // Controla se o Firebase Auth já confirmou o estado de login (logado ou deslogado).
+  // Enquanto isAuthLoading === true, NENHUMA query ao Firestore deve ser disparada,
+  // pois o token de autenticação ainda não está garantidamente pronto.
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((user) => {
       setCurrentUser(user);
+      setIsAuthLoading(false); // Auth já respondeu (com ou sem usuário)
     });
     return () => unsubscribe();
   }, []);
 
   // Busca síncrona/realtime de documentos do usuário para o ano selecionado
   useEffect(() => {
-    const usuarioLogado = currentUser || auth.currentUser;
-    const uid = usuarioLogado?.uid || (userId && userId !== "demouser_49281" ? userId : null);
+    // Enquanto o Firebase Auth ainda não confirmou o estado de login, não faz nada.
+    // Isso evita que o onSnapshot rode com o UID nulo/indefinido na inicialização,
+    // o que disparava o erro "Missing or insufficient permissions".
+    if (isAuthLoading) {
+      return;
+    }
+
+    // Usa exclusivamente o UID vindo do Firebase Auth (currentUser).
+    // Não há fallback para a prop "userId" sozinha: as regras do Firestore exigem
+    // request.auth != null, então qualquer query só é válida com o usuário
+    // efetivamente autenticado no Firebase Auth.
+    const uid = currentUser?.uid || null;
 
     if (!uid) {
-      console.log("[ArquivoDigitalMei] Inicialização abortada: Usuário não autenticado no Firebase Auth.");
+      console.log("[ArquivoDigitalMei] Usuário não autenticado no Firebase Auth. Query não será executada.");
+      setDocumentos([]);
+      setIsLoading(false);
       return;
     }
 
@@ -162,7 +180,7 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     );
 
     return () => unsubscribe();
-  }, [currentUser, userId, selectedYear, anoMaisAntigoPermitido]);
+  }, [isAuthLoading, currentUser, selectedYear, anoMaisAntigoPermitido]);
 
   // Imprime um documento com layout otimizado para fins tributários / contabilidade
   const handlePrintDocument = (docItem: DocumentoMEI) => {
@@ -281,8 +299,7 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
 
   // Upload Manual de Documentos e comprovantes
   const handleFileUpload = async (file: File) => {
-    const user = auth.currentUser;
-    const uid = user?.uid || (userId && userId !== "demouser_49281" ? userId : null);
+    const uid = currentUser?.uid || auth.currentUser?.uid || null;
 
     if (!uid) {
       setErrorMsg("Identificação não encontrada. Por favor, faça login para salvar.");
@@ -424,8 +441,7 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
 
   // Exclui um documento específico
   const deletarDocumento = async (docItem: DocumentoMEI) => {
-    const user = auth.currentUser;
-    const uid = user?.uid || (userId && userId !== "demouser_49281" ? userId : null);
+    const uid = currentUser?.uid || auth.currentUser?.uid || null;
 
     if (!uid) {
       setErrorMsg("Erro: Você precisa estar autenticado para excluir.");
@@ -573,7 +589,22 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
 
             {/* Conteúdo das Pastas */}
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              
+
+              {/* Enquanto o Firebase Auth ainda não confirmou o login, exibe um loading
+                  dedicado e não renderiza pastas/erros, evitando qualquer flash de
+                  "permission-denied" antes do token estar pronto. */}
+              {isAuthLoading ? (
+                <div className="flex flex-col items-center justify-center gap-2 py-16 text-slate-400">
+                  <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
+                  <p className="text-xs font-semibold">Verificando sua sessão...</p>
+                </div>
+              ) : !currentUser ? (
+                <div className="bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-2xl text-xs flex items-start gap-2.5 text-left">
+                  <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                  <div>Você precisa estar logado para visualizar e enviar comprovantes.</div>
+                </div>
+              ) : (
+              <>
               {/* Tratamento e Exibição de Alertas e Erros de Permissão Amigáveis */}
               {errorMsg && (
                 <div className="bg-red-50 border border-red-200 p-4 rounded-2xl flex items-start gap-3 text-red-700 animate-fade-in">
@@ -812,6 +843,9 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
                     Selecione qual pasta de mês acima você gostaria de abrir para ver arquivos ou fazer upload de novos comprovantes.
                   </p>
                 </div>
+              )}
+
+              </>
               )}
 
             </div>
