@@ -440,63 +440,77 @@ export async function registerWithEmailPassword(email: string, password: string,
       console.warn("Aviso: Falha ao atualizar o displayName no Firebase Auth:", profileError);
     }
     
-    // 3. Tenta persistir o perfil inicial do usuário no Firestore (Coleção 'users' principal)
-    try {
-      const userDocRef = doc(db, 'users', result.user.uid);
-      const initialProfile = {
-        uid: result.user.uid,
-        name: name,
-        email: email,
-        planType: 'free',
-        logoUrl: '',
-        createdAt: new Date(),
-        // backwards compatibility with old structure for App.tsx state bindings:
-        meiName: name,
-        cnpjPrestador: '',
-        inscricaoMunicipal: '',
-        telefone: '',
-        asaasAccessToken: '',
-        companyLogo: '',
-        updatedAt: new Date().toISOString()
-      };
-      
-      // AWAIT é obrigatório. Se houver falha de rede/conexão, lançará exceção e interromperá o fluxo.
-      await setDoc(userDocRef, initialProfile);
-      
-      // Também persiste na coleção legada 'usuarios' por segurança e prevenção de bugs legados
+    const initialProfile = {
+      uid: result.user.uid,
+      name: name,
+      email: email,
+      planType: 'free',
+      logoUrl: '',
+      createdAt: new Date(),
+      // backwards compatibility with old structure for App.tsx state bindings:
+      meiName: name,
+      cnpjPrestador: '',
+      inscricaoMunicipal: '',
+      telefone: '',
+      asaasAccessToken: '',
+      companyLogo: '',
+      updatedAt: new Date().toISOString()
+    };
+
+    // 3. Tenta persistir o perfil inicial do usuário no Firestore (Coleção 'users' principal).
+    // CORREÇÃO CRÍTICA: logo após createUserWithEmailAndPassword(), o token do novo usuário
+    // pode ainda não ter propagado para a conexão ativa do Firestore (race condition conhecida
+    // do SDK do Firebase). Isso fazia o primeiro setDoc falhar com "permission-denied" mesmo
+    // com a conta e as regras corretas — e o código anterior reagia a essa falha DELETANDO a
+    // conta recém-criada, fazendo cadastros desaparecerem do Authentication sem aviso real ao
+    // usuário. Agora: tentamos novamente uma vez após um pequeno delay, e se ainda assim falhar,
+    // a conta é MANTIDA (nunca apagamos a conta do usuário aqui) — o perfil pode ser
+    // criado/completado depois, no próximo login ou na tela de configuração do MEI.
+    const tentarSalvarPerfil = async (): Promise<boolean> => {
       try {
-        const legacyDocRef = doc(db, 'usuarios', result.user.uid);
-        await setDoc(legacyDocRef, {
-          uid: result.user.uid,
-          meiName: name,
-          email: email,
-          cnpjPrestador: '',
-          inscricaoMunicipal: '',
-          telefone: '',
-          asaasAccessToken: '',
-          planType: 'free',
-          companyLogo: '',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        });
-      } catch (legacyErr) {
-        console.warn("Não foi possivel persistir na coleção usuarios legada de forma secundária:", legacyErr);
+        const userDocRef = doc(db, 'users', result.user!.uid);
+        await setDoc(userDocRef, initialProfile);
+
+        // Também persiste na coleção legada 'usuarios' por segurança e prevenção de bugs legados
+        try {
+          const legacyDocRef = doc(db, 'usuarios', result.user!.uid);
+          await setDoc(legacyDocRef, {
+            uid: result.user!.uid,
+            meiName: name,
+            email: email,
+            cnpjPrestador: '',
+            inscricaoMunicipal: '',
+            telefone: '',
+            asaasAccessToken: '',
+            planType: 'free',
+            companyLogo: '',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          });
+        } catch (legacyErr) {
+          console.warn("Não foi possivel persistir na coleção usuarios legada de forma secundária:", legacyErr);
+        }
+
+        console.log("Perfil inicial do usuário persistido com sucesso no Firestore.");
+        return true;
+      } catch (firestoreError) {
+        console.warn("[Cadastro] Tentativa de salvar perfil inicial falhou:", firestoreError);
+        return false;
       }
-      
-      console.log("Perfil inicial do usuário persistido com sucesso no Firestore.");
-    } catch (firestoreError) {
-      console.error("[CRITICAL DB CONNECTIVITY ERROR]: Falha ao criar documento inicial de perfil no Firestore. Abortando cadastro e limpando registro órfão no Auth.", firestoreError);
-      
-      // Limpeza imediata do usuário do Firebase Auth para evitar órfãos!
-      try {
-        await result.user.delete();
-        console.log("Usuário correspondente limpo com sucesso do Firebase Auth.");
-      } catch (authDeleteError) {
-        console.error("Falha ao deletar usuário órfão do Auth:", authDeleteError);
+    };
+
+    const sucesso = await tentarSalvarPerfil();
+    if (!sucesso) {
+      // Pequeno delay para dar tempo do token do novo usuário propagar para o Firestore,
+      // e tenta novamente uma única vez.
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const sucessoRetry = await tentarSalvarPerfil();
+      if (!sucessoRetry) {
+        console.warn(
+          "[Cadastro] Não foi possível persistir o perfil inicial após nova tentativa. " +
+          "A conta de autenticação foi mantida — o perfil será criado/completado no próximo login."
+        );
       }
-      
-      // Repassa o erro de forma limpa
-      throw new Error("Erro 500: Falha ao persistir perfil no banco de dados. Conta não pôde ser criada por problemas de conexão com o Firestore.");
     }
   }
   
