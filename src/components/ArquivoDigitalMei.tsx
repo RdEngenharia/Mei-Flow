@@ -20,10 +20,9 @@ import {
   Sparkles,
   Printer
 } from "lucide-react";
-import { db, auth, storage } from "../firebase";
+import { db, auth } from "../firebase";
 import { User } from "firebase/auth";
-import { collection, doc, setDoc, deleteDoc, getDocs, query, where, onSnapshot } from "firebase/firestore";
-import { ref, uploadString, getDownloadURL, deleteObject } from "firebase/storage";
+import { collection, query, where, onSnapshot } from "firebase/firestore";
 
 interface DocumentoMEI {
   id: string;
@@ -453,31 +452,32 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     }
 
     setIsLoading(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
 
     try {
-      // 1. Remove do Firestore na coleção raiz documentos autorizada
-      await deleteDoc(doc(db, "documentos", docItem.id));
+      // A exclusão (registro do Firestore + arquivo físico do Storage) é feita
+      // pelo backend, via Admin SDK. As Storage Rules do projeto bloqueiam
+      // propositalmente qualquer "write" (e portanto "delete") direto do client,
+      // então tentar deleteObject() aqui sempre resultaria em "storage/unauthorized".
+      const response = await fetch("/api/documentos/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          docId: docItem.id,
+          uid: uid,
+          storagePath: docItem.storagePath
+        })
+      });
 
-      // 2. Remove do Storage se não for simulado
-      let storageDeleteFailed = false;
-      if (!docItem.isSimulated && docItem.storagePath) {
-        try {
-          const fileRef = ref(storage, docItem.storagePath);
-          await deleteObject(fileRef);
-        } catch (storageErr) {
-          // O registro já foi removido do Firestore (não aparece mais nas pastas),
-          // mas o arquivo físico pode continuar no Storage por falha de rede/CORS.
-          // Avisamos o usuário em vez de engolir o erro silenciosamente.
-          console.warn("Falha física ao remover do storage (já limpo ou inexistente):", storageErr);
-          storageDeleteFailed = true;
-        }
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.message || "Falha ao excluir o documento.");
       }
 
-      if (storageDeleteFailed) {
-        setSuccessMsg(null);
-        setErrorMsg(
-          `"${docItem.nome}" foi removido das pastas, mas o arquivo original pode ainda existir no armazenamento por uma falha temporária de conexão. Isso não afeta o uso do app.`
-        );
+      if (result.warning) {
+        setErrorMsg(result.warning);
       } else {
         setSuccessMsg(`Documento "${docItem.nome}" excluído das pastas.`);
       }
