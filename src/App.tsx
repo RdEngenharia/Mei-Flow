@@ -47,6 +47,7 @@ import {
 import { Cliente, Transacao, CatalogItem, Orcamento } from "./types";
 import ReceiptModal from "./components/ReceiptModal";
 import MeiConfigModal from "./components/MeiConfigModal";
+import ChangePasswordModal from "./components/ChangePasswordModal";
 import UpgradeModal from "./components/UpgradeModal";
 import CnpjOnboarding from "./components/CnpjOnboarding";
 import CatalogManager from "./components/CatalogManager";
@@ -71,6 +72,8 @@ import {
   deleteTransacaoFromFirebase,
   registerWithEmailPassword,
   loginWithEmailPassword,
+  resetPassword,
+  changeUserPassword,
   saveVendaToFirebase,
   fetchVendasFromFirebase,
   deleteVendaFromFirebase,
@@ -100,6 +103,7 @@ export default function App() {
     return localStorage.getItem("meiflow_asaas_access_token") || "";
   });
   const [showMeiConfigModal, setShowMeiConfigModal] = useState(false);
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
 
   // -------------------------------------------------------------------------
   // NOVO: ESTADOS INTEGRADOS DO FIREBASE & ISOLAMENTO DE USUÁRIOS (MULTITENANCY)
@@ -126,6 +130,8 @@ export default function App() {
   const [authIsSignUp, setAuthIsSignUp] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [authIsForgotPassword, setAuthIsForgotPassword] = useState(false);
+  const [authForgotSuccess, setAuthForgotSuccess] = useState(false);
 
   // -------------------------------------------------------------------------
   // NOVO: ESTADOS INTEGRADOS DO CHAMADO DE SUPORTE TÉCNICO (MENSAGEM VIA MAILTO)
@@ -555,6 +561,31 @@ export default function App() {
         errMsg = err.message;
       }
       setAuthError(errMsg);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleForgotPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authEmail) {
+      setAuthError("Por favor, digite seu e-mail para redefinir a senha.");
+      return;
+    }
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      await resetPassword(authEmail);
+      setAuthForgotSuccess(true);
+    } catch (err: any) {
+      console.error(err);
+      // Por segurança, o Firebase não informa se o e-mail existe ou não.
+      // Mostramos sucesso de forma genérica mesmo assim, exceto para erros de formato.
+      if (err.code === "auth/invalid-email") {
+        setAuthError("Por favor, digite um e-mail válido.");
+      } else {
+        setAuthForgotSuccess(true);
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -1490,14 +1521,14 @@ ${meiName}`;
                 onClick={() => setShowAuthModal(true)}
                 disabled={isFirebaseSyncing}
                 className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md shrink-0 cursor-pointer"
-                title="Acesse com sua conta para sincronização segura e backup automático"
+                title="Acesse sua conta ou cadastre-se para sincronização segura e backup automático"
               >
                 {isFirebaseSyncing ? (
                   <RefreshCw className="w-4 h-4 text-blue-100 animate-spin" />
                 ) : (
-                  <Cloud className="w-4 h-4 text-blue-100" />
+                  <LogIn className="w-4 h-4 text-blue-100" />
                 )}
-                <span>Acessar Nuvem</span>
+                <span>Acessar Conta</span>
               </button>
             </div>
           )}
@@ -2903,12 +2934,16 @@ ${meiName}`;
             <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Cloud className="w-5 h-5 text-blue-400" />
-                <h3 className="font-bold text-sm tracking-tight">Sincronização em Nuvem</h3>
+                <h3 className="font-bold text-sm tracking-tight">
+                  {authIsForgotPassword ? "Redefinir Senha" : "Sincronização em Nuvem"}
+                </h3>
               </div>
               <button
                 onClick={() => {
                   setShowAuthModal(false);
                   setAuthError("");
+                  setAuthIsForgotPassword(false);
+                  setAuthForgotSuccess(false);
                 }}
                 className="text-slate-400 hover:text-white p-1 rounded font-bold text-sm cursor-pointer"
               >
@@ -2916,7 +2951,86 @@ ${meiName}`;
               </button>
             </div>
 
-            {/* Conteúdo */}
+            {/* Conteúdo: modo "Esqueci minha senha" */}
+            {authIsForgotPassword ? (
+              <form onSubmit={handleForgotPasswordSubmit} className="p-6 space-y-4">
+                {authForgotSuccess ? (
+                  <div className="text-center space-y-3 py-2">
+                    <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto" />
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      Se houver uma conta com o e-mail <strong>{authEmail}</strong>, enviamos um link para redefinição de senha. Verifique sua caixa de entrada e o spam.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthIsForgotPassword(false);
+                        setAuthForgotSuccess(false);
+                        setAuthError("");
+                      }}
+                      className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer"
+                    >
+                      Voltar para o Login
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="text-center space-y-1">
+                      <div className="text-xs text-slate-500">
+                        Digite o e-mail da sua conta MEI Flow. Enviaremos um link para você criar uma nova senha.
+                      </div>
+                    </div>
+
+                    {authError && (
+                      <div className="p-3 bg-red-50 text-red-700 text-xs rounded-xl flex items-center gap-2 border border-red-100">
+                        <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+                        <span>{authError}</span>
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-[10px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
+                        E-mail *
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="seu@emailmeiflow.com"
+                        value={authEmail}
+                        onFocus={() => setAuthError("")}
+                        onChange={(e) => {
+                          setAuthEmail(e.target.value);
+                          setAuthError("");
+                        }}
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={authLoading}
+                      className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                    >
+                      {authLoading ? (
+                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      ) : "Enviar Link de Redefinição"}
+                    </button>
+
+                    <div className="text-center pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthIsForgotPassword(false);
+                          setAuthError("");
+                        }}
+                        className="text-xs text-blue-600 hover:underline font-bold cursor-pointer"
+                      >
+                        Voltar para o Login
+                      </button>
+                    </div>
+                  </>
+                )}
+              </form>
+            ) : (
             <form onSubmit={handleEmailAuthSubmit} className="p-6 space-y-4">
               <div className="text-center space-y-1">
                 <div className="text-xs text-slate-500">
@@ -2987,6 +3101,21 @@ ${meiName}`;
                   }}
                   className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
                 />
+                {!authIsSignUp && (
+                  <div className="text-right mt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthIsForgotPassword(true);
+                        setAuthError("");
+                        setAuthForgotSuccess(false);
+                      }}
+                      className="text-[10px] text-blue-600 hover:underline font-bold cursor-pointer"
+                    >
+                      Esqueci minha senha
+                    </button>
+                  </div>
+                )}
               </div>
 
               <button
@@ -3037,6 +3166,7 @@ ${meiName}`;
               </div>
 
             </form>
+            )}
           </div>
         </div>
       )}
@@ -3069,6 +3199,15 @@ ${meiName}`;
           onClose={() => setShowMeiConfigModal(false)}
           onSave={handleSaveMeiProfile}
           onTriggerUpgrade={() => setShowUpgradeModal(true)}
+          onOpenChangePassword={() => setShowChangePasswordModal(true)}
+        />
+      )}
+
+      {/* ALTERAR SENHA DA CONTA */}
+      {showChangePasswordModal && (
+        <ChangePasswordModal
+          onClose={() => setShowChangePasswordModal(false)}
+          onChangePassword={changeUserPassword}
         />
       )}
 
