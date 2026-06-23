@@ -13,7 +13,11 @@ import {
   User,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  updateProfile
+  updateProfile,
+  sendPasswordResetEmail,
+  updatePassword,
+  reauthenticateWithCredential,
+  EmailAuthProvider
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -533,6 +537,41 @@ export async function loginWithEmailPassword(email: string, password: string): P
     return result.user;
   } catch (error) {
     console.error("Erro de login com e-mail e senha:", error);
+    throw error;
+  }
+}
+
+/**
+ * ESQUECI MINHA SENHA: Envia um e-mail de redefinição de senha via Firebase Auth
+ * para o endereço informado. Não lança erro para "e-mail não encontrado" — o
+ * Firebase já trata isso de forma segura (não revela se o e-mail existe ou não),
+ * então o chamador deve sempre mostrar uma mensagem genérica de sucesso ao usuário.
+ */
+export async function resetPassword(email: string): Promise<void> {
+  try {
+    await sendPasswordResetEmail(auth, email);
+  } catch (error) {
+    console.error("Erro ao enviar e-mail de redefinição de senha:", error);
+    throw error;
+  }
+}
+
+/**
+ * ALTERAR SENHA (usuário já logado): Por exigência de segurança do Firebase,
+ * trocar a senha requer reautenticação recente. Por isso, pedimos a senha ATUAL
+ * para reautenticar silenciosamente antes de aplicar a nova senha.
+ */
+export async function changeUserPassword(currentPassword: string, newPassword: string): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.email) {
+    throw new Error("Nenhum usuário autenticado encontrado. Faça login novamente.");
+  }
+  try {
+    const credential = EmailAuthProvider.credential(currentUser.email, currentPassword);
+    await reauthenticateWithCredential(currentUser, credential);
+    await updatePassword(currentUser, newPassword);
+  } catch (error) {
+    console.error("Erro ao alterar a senha do usuário:", error);
     throw error;
   }
 }
