@@ -427,7 +427,7 @@ async function startServer() {
         return;
       }
 
-      const bucket = adminStorage.bucket(firebaseConfig.storageBucket || "mei-flow-692d9.appspot.com");
+      const bucket = adminStorage.bucket(firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app");
       const fileRef = bucket.file(String(storagePath));
       
       const [exists] = await fileRef.exists();
