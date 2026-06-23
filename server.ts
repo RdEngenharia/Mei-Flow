@@ -74,11 +74,10 @@ let db: any = null;
 let adminStorage: any = null;
 if (adminApp) {
   try {
-    // CORREÇÃO CRÍTICA: o projeto usa um banco Firestore NOMEADO (não o "(default)"),
-    // criado pelo AI Studio. Forçar "(default)" em produção fazia o backend gravar
-    // os documentos em um banco diferente do que o front-end lê, então os arquivos
-    // enviados nunca apareciam nas pastas do Arquivo Digital.
-    const dbId = process.env.FIREBASE_DATABASE_ID || firebaseConfig.firestoreDatabaseId || "(default)";
+    // CONFIRMADO (via testes diretos no console do Firebase e na app real): o banco
+    // Firestore em uso é o "(default)". O "firestoreDatabaseId" do AI Studio aponta
+    // para um banco nomeado secundário, paralelo, não utilizado pelo restante do app.
+    const dbId = process.env.FIREBASE_DATABASE_ID || "(default)";
     db = dbId === "(default)" ? getFirestore(adminApp) : getFirestore(adminApp, dbId);
     console.log(`[Firebase Admin]: Connected to Firestore database ID: ${dbId}`);
   } catch (dbInitErr: any) {
