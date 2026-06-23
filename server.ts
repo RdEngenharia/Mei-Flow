@@ -448,6 +448,78 @@ async function startServer() {
     }
   });
 
+  // Exclui um documento (registro no Firestore + arquivo físico no Storage).
+  // Usa o Admin SDK propositalmente: as Storage Rules do projeto bloqueiam
+  // qualquer "write" (e portanto "delete") feito direto pelo client, exigindo
+  // que a exclusão física do arquivo passe sempre pelo backend.
+  app.post("/api/documentos/delete", async (req, res) => {
+    try {
+      const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+      const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+      const isSandboxLocal = !clientEmail || !privateKey || clientEmail.includes("ais-sandbox") || (clientEmail.includes("gserviceaccount.com") && !clientEmail.includes("mei-flow-692d9"));
+
+      if (isSandboxLocal || !adminStorage || !db) {
+        res.status(403).json({ success: false, message: "Acesso Negado (Ambiente Sandbox sem Credenciais Reais de Produção)." });
+        return;
+      }
+
+      const { docId, userId, uid, storagePath } = req.body;
+      const actualUserId = userId || uid;
+
+      if (!docId || !actualUserId) {
+        res.status(400).json({ success: false, message: "Parâmetros obrigatórios ausentes: docId e userId." });
+        return;
+      }
+
+      const docRef = db.collection("documentos").doc(String(docId));
+      const docSnap = await docRef.get();
+
+      if (!docSnap.exists) {
+        res.status(200).json({ success: true, mensagem: "Documento já não existia no banco de dados." });
+        return;
+      }
+
+      const docData = docSnap.data();
+      if (docData.userId !== actualUserId) {
+        res.status(403).json({ success: false, message: "Você não tem permissão para excluir este documento." });
+        return;
+      }
+
+      await docRef.delete();
+
+      const pathToDelete = storagePath || docData.storagePath;
+      let storageDeleted = false;
+      let storageWarning: string | null = null;
+
+      if (pathToDelete) {
+        try {
+          const bucket = adminStorage.bucket(firebaseConfig.storageBucket || "mei-flow-692d9.firebasestorage.app");
+          const fileRef = bucket.file(String(pathToDelete));
+          const [exists] = await fileRef.exists();
+          if (exists) {
+            await fileRef.delete();
+          }
+          storageDeleted = true;
+        } catch (storageErr: any) {
+          console.error("[API Delete Storage Error]:", storageErr.message);
+          storageWarning = `O registro foi removido, mas o arquivo físico não pôde ser excluído: ${storageErr.message}`;
+        }
+      } else {
+        storageDeleted = true;
+      }
+
+      res.json({
+        success: true,
+        storageDeleted,
+        mensagem: storageWarning || "Documento excluído com sucesso.",
+        warning: storageWarning
+      });
+    } catch (err: any) {
+      console.error("[API Delete Error]:", err.message);
+      res.status(500).json({ success: false, message: `Erro ao excluir documento: ${err.message}` });
+    }
+  });
+
   // ==========================================
   // 1. PROXY: FOCUS NFE
   // ==========================================
