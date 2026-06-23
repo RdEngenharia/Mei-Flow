@@ -91,9 +91,16 @@ if (!apiKey || !authDomain || !projectId) {
 // Inicialização segura dos componentes do Firebase
 const app = initializeApp(firebaseConfig);
 
-// CRÍTICO: Ativação limpa e direta do banco do Firestore, suportando o banco de dados dinâmico do AI Studio se presente
-const dbId = (firebaseConfigImport as any).firestoreDatabaseId || "(default)";
-export const db = dbId === "(default)" ? getFirestore(app) : getFirestore(app, dbId);
+// CRÍTICO: o projeto usa o banco Firestore "(default)" — é onde o backend (Admin SDK) grava
+// os documentos, onde o Authentication está vinculado, e onde as regras de segurança reais
+// foram publicadas e testadas. O firebase-applet-config.json (gerado automaticamente pelo
+// AI Studio) trazia um "firestoreDatabaseId" apontando para um banco nomeado secundário
+// (ai-studio-...), criado à parte pelo AI Studio e nunca usado pelo backend em produção.
+// Usar esse banco aqui fazia o front-end ler/escrever em um Firestore diferente do que o
+// resto do app usa — por isso a tela do Arquivo Digital nunca encontrava os documentos
+// (ou recebia permission-denied, dependendo das regras daquele banco secundário vazio).
+// Está fixo em "(default)" deliberadamente; não usar firestoreDatabaseId do AI Studio aqui.
+export const db = getFirestore(app);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 
