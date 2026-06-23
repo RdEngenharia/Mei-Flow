@@ -459,16 +459,28 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
       await deleteDoc(doc(db, "documentos", docItem.id));
 
       // 2. Remove do Storage se não for simulado
+      let storageDeleteFailed = false;
       if (!docItem.isSimulated && docItem.storagePath) {
         try {
           const fileRef = ref(storage, docItem.storagePath);
           await deleteObject(fileRef);
         } catch (storageErr) {
+          // O registro já foi removido do Firestore (não aparece mais nas pastas),
+          // mas o arquivo físico pode continuar no Storage por falha de rede/CORS.
+          // Avisamos o usuário em vez de engolir o erro silenciosamente.
           console.warn("Falha física ao remover do storage (já limpo ou inexistente):", storageErr);
+          storageDeleteFailed = true;
         }
       }
 
-      setSuccessMsg(`Documento "${docItem.nome}" excluído das pastas.`);
+      if (storageDeleteFailed) {
+        setSuccessMsg(null);
+        setErrorMsg(
+          `"${docItem.nome}" foi removido das pastas, mas o arquivo original pode ainda existir no armazenamento por uma falha temporária de conexão. Isso não afeta o uso do app.`
+        );
+      } else {
+        setSuccessMsg(`Documento "${docItem.nome}" excluído das pastas.`);
+      }
     } catch (err: any) {
       console.error("Erro ao deletar:", err);
       setErrorMsg(`Erro ao deletar documento: ${err.message}`);
