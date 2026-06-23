@@ -24,15 +24,14 @@ const getFirebaseProjectId = () => {
 };
 
 const getFirebaseDatabaseId = () => {
-  // CORREÇÃO CRÍTICA: o banco Firestore do projeto NÃO é o "(default)" — é um banco
-  // nomeado criado pelo AI Studio (ver firestoreDatabaseId em firebase-applet-config.json).
-  // O código anterior forçava "(default)" sempre que rodava em produção na Vercel,
-  // fazendo o backend gravar os metadados em um banco diferente do que o front-end lê
-  // (src/firebase.ts usa firestoreDatabaseId corretamente). Isso fazia os documentos
-  // serem salvos em um banco e a tela do Arquivo Digital procurar em outro — por isso
-  // nada aparecia, mesmo com o upload "funcionando" no backend.
+  // CONFIRMADO (via testes diretos no console do Firebase e na app real): o banco
+  // Firestore em uso é o "(default)". É lá que o Authentication está vinculado, onde
+  // os documentos de upload aparecem, e onde as regras de segurança reais foram
+  // publicadas e testadas. O "firestoreDatabaseId" do firebase-applet-config.json
+  // (gerado pelo AI Studio) aponta para um banco nomeado secundário, paralelo e não
+  // utilizado pelo restante do app — usá-lo aqui faria o backend gravar em um lugar
+  // que o front-end nunca lê. Mantido fixo em "(default)" deliberadamente.
   if (process.env.FIREBASE_DATABASE_ID) return process.env.FIREBASE_DATABASE_ID;
-  if (firebaseConfig.firestoreDatabaseId) return firebaseConfig.firestoreDatabaseId;
   return "(default)";
 };
 
