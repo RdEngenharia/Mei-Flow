@@ -61,7 +61,7 @@ const firebaseConfig: any = {
   authDomain: "mei-flow-692d9.firebaseapp.com",
   databaseURL: "https://mei-flow-692d9-default-rtdb.firebaseio.com",
   projectId: "mei-flow-692d9",
-  storageBucket: "mei-flow-692d9.appspot.com",
+  storageBucket: "mei-flow-692d9.firebasestorage.app",
   messagingSenderId: "481891312358",
   appId: process.env.FIREBASE_APP_ID || process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "1:481891312358:web:022075fe512fc72ebe5127"
 };
