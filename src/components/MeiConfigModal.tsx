@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { X, Building, Check, Search, Sparkles } from "lucide-react";
+import { X, Building, Check, Search, Sparkles, KeyRound, ChevronRight } from "lucide-react";
 
 interface MeiConfigModalProps {
   currentName: string;
@@ -11,6 +11,7 @@ interface MeiConfigModalProps {
   onClose: () => void;
   onSave: (name: string, cnpj: string, inscricao: string, telefone: string, logo?: string) => Promise<void>;
   onTriggerUpgrade: () => void;
+  onOpenChangePassword: () => void;
 }
 
 export default function MeiConfigModal({
@@ -23,6 +24,7 @@ export default function MeiConfigModal({
   onClose,
   onSave,
   onTriggerUpgrade,
+  onOpenChangePassword,
 }: MeiConfigModalProps) {
   const [name, setName] = useState(currentName);
   const [cnpj, setCnpj] = useState(currentCnpj);
@@ -281,6 +283,24 @@ export default function MeiConfigModal({
                 )}
               </div>
             )}
+          </div>
+
+          {/* SEGURANÇA DA CONTA */}
+          <div className="pt-2 border-t border-slate-100">
+            <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
+              Segurança da Conta
+            </label>
+            <button
+              type="button"
+              onClick={onOpenChangePassword}
+              className="w-full bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl py-2.5 px-3 text-xs font-bold transition-all cursor-pointer flex items-center justify-between"
+            >
+              <span className="flex items-center gap-2">
+                <KeyRound className="w-3.5 h-3.5 text-slate-500" />
+                <span>Alterar Senha</span>
+              </span>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+            </button>
           </div>
 
           <div className="flex gap-2 pt-2">
