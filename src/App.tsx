@@ -719,17 +719,14 @@ export default function App() {
   const faturamentoBrutoTotal = faturamentoPrecedente + totalEntradas;
   const porcentagemLimite = Math.min((faturamentoBrutoTotal / limiteAnual) * 100, 100);
 
-  // Download do APK real/simulado de forma elegante
+  // Download do APK real, hospedado nas GitHub Releases do projeto
   const handleDownloadAPK = () => {
-    const dummyApkContent = new Uint8Array([80, 75, 3, 4, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // ZIP/APK placeholder
-    const blob = new Blob([dummyApkContent], { type: "application/vnd.android.package-archive" });
-    const url = URL.createObjectURL(blob);
+    const apkUrl = "https://github.com/RdEngenharia/Mei-Flow/releases/download/v1.0.0/app-debug.apk";
     const link = document.createElement("a");
-    link.href = url;
+    link.href = apkUrl;
     link.download = "meiflow.apk";
     link.click();
-    URL.revokeObjectURL(url);
-    triggerToast("✓ Download do APK Android (meiflow.apk) iniciado direto para o telefone!");
+    triggerToast("✓ Download do APK Android iniciado! Verifique a barra de downloads do seu celular.");
   };
 
   // Download do PDF (geração real de arquivo PDF formatado como comprovante oficial)
