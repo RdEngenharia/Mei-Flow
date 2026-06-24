@@ -175,7 +175,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
             "Sua privacidade e segurança fiscal vêm em primeiro lugar. Certifique-se de estar logado na sua conta MEI Flow para sincronizar suas pastas e visualizar arquivamentos criptografados."
           );
         } else {
-          setErrorMsg(`Erro ao sincronizar arquivos das pastas: ${error.message}`);
+          setErrorMsg("Erro ao sincronizar arquivos das pastas. Tente novamente em alguns instantes.");
         }
         setIsLoading(false);
       }
@@ -434,7 +434,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
       }
     } catch (err: any) {
       console.error("Erro ao realizar upload:", err);
-      setErrorMsg(`Falha ao registrar documento: ${err.message}`);
+      setErrorMsg("Falha ao registrar documento. Verifique sua conexão e tente novamente.");
     } finally {
       setIsLoading(false);
       if (uploadFileInputRef.current) uploadFileInputRef.current.value = "";
@@ -486,7 +486,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
       }
     } catch (err: any) {
       console.error("Erro ao deletar:", err);
-      setErrorMsg(`Erro ao deletar documento: ${err.message}`);
+      setErrorMsg("Erro ao deletar documento. Tente novamente em alguns instantes.");
     } finally {
       setIsLoading(false);
     }
