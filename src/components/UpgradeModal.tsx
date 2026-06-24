@@ -28,6 +28,7 @@ interface UpgradeModalProps {
 }
 
 type CheckoutStep = "details" | "payment_method" | "pix" | "card";
+type BillingCycle = "monthly" | "annual";
 
 export default function UpgradeModal({ 
   isOpen, 
@@ -54,6 +55,19 @@ export default function UpgradeModal({
   const [success, setSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState(false);
+
+  // Ciclo de cobrança escolhido: mensal (assinatura recorrente) ou anual
+  // (cobrança única equivalente a 12 meses, com desconto/conveniência).
+  const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly");
+
+  // Preços buscados dinamicamente do backend (fonte única de verdade em
+  // /api/plans/pricing), em vez de hardcoded no front-end.
+  const [pricing, setPricing] = useState<{ monthly: number; annual: number; annualMonthlyEquivalent: number }>({
+    monthly: 14.0,
+    annual: 168.0,
+    annualMonthlyEquivalent: 14.0
+  });
+  const [pricingLoaded, setPricingLoaded] = useState(false);
   
   // Real Asaas billing state
   const [pixQrCodeBase64, setPixQrCodeBase64] = useState<string | null>(null);
@@ -92,6 +106,40 @@ export default function UpgradeModal({
     }
     return `https://mei-flow-flax.vercel.app${path}`;
   };
+
+  // Busca os preços reais do backend ao abrir o modal, em vez de usar valores
+  // hardcoded — garante que o front nunca fique desatualizado em relação ao
+  // que o servidor realmente cobra.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch(getApiUrl("/api/plans/pricing"));
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!cancelled && data?.success) {
+          setPricing({
+            monthly: data.monthly,
+            annual: data.annual,
+            annualMonthlyEquivalent: data.annualMonthlyEquivalent
+          });
+        }
+      } catch (err) {
+        console.warn("[UpgradeModal]: Falha ao buscar preços dinâmicos, usando valores padrão.", err);
+      } finally {
+        if (!cancelled) setPricingLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
+
+  const currentPrice = billingCycle === "annual" ? pricing.annual : pricing.monthly;
+  const currentPriceLabel = billingCycle === "annual"
+    ? `R$ ${pricing.annual.toFixed(2).replace(".", ",")}`
+    : `R$ ${pricing.monthly.toFixed(2).replace(".", ",")}`;
 
   // Watch for premium activation in real-time from parent profile listener
   useEffect(() => {
@@ -158,7 +206,8 @@ export default function UpgradeModal({
           name: meiName || "Microempreendedor MEI",
           documentNumber: documentNumber.replace(/\D/g, ""),
           email: email || "contato@meiflow.com",
-          paymentMethod: "PIX"
+          paymentMethod: "PIX",
+          billingCycle
         })
       });
       
@@ -307,6 +356,7 @@ export default function UpgradeModal({
           cpfCnpj: cnpjPrestador ? cnpjPrestador.replace(/\D/g, "") : "44837190000183",
           email: email || "contato@meiflow.com",
           paymentMethod: "CREDIT_CARD",
+          billingCycle,
           creditCard: {
             holderName: cardName.trim(),
             number: cardNumber.replace(/\s/g, ""),
@@ -321,7 +371,11 @@ export default function UpgradeModal({
       if (!isMounted.current || success) return;
 
       if (response.ok && data.success) {
-        if (data.planType === "premium" || data.status === "approved") {
+        // No ciclo mensal a resposta vem como assinatura (status "authorized");
+        // no ciclo anual vem como pagamento único (status "approved").
+        const isAuthorizedSubscription = data.subscriptionType === "recurring" && data.status === "authorized";
+        const isApprovedOneTime = data.status === "approved";
+        if (data.planType === "premium" || isAuthorizedSubscription || isApprovedOneTime) {
           console.log("[Card Payment SUCCESS]: Redirecionando de forma nativa instantaneamente.");
           // Redirecionamento nativo instantâneo para evitar que a árvore do React quebre ao desmontar elementos de forma assíncrona
           window.location.replace("/");
@@ -407,26 +461,49 @@ export default function UpgradeModal({
               {/* STEP 1: General Details */}
               {checkoutStep === "details" && (
                 <div key="step-details" className="space-y-6 animate-fade-in" id="step-details">
-                  <div className="flex items-baseline gap-1.5 justify-center pb-2 border-b border-slate-100">
-                    <span className="text-2xl font-extrabold text-slate-900">R$ 29,90</span>
-                    <span className="text-xs text-slate-500 font-medium">/ mensal</span>
+
+                  {/* Seletor de ciclo: Mensal (assinatura recorrente) ou Anual (cobrança única) */}
+                  <div className="flex bg-slate-100 rounded-xl p-1 gap-1" role="tablist">
+                    <button
+                      type="button"
+                      onClick={() => setBillingCycle("monthly")}
+                      className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        billingCycle === "monthly" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                      }`}
+                      id="select-billing-monthly"
+                    >
+                      Mensal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBillingCycle("annual")}
+                      className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer relative ${
+                        billingCycle === "annual" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                      }`}
+                      id="select-billing-annual"
+                    >
+                      Anual
+                      <span className="absolute -top-2 -right-1 bg-emerald-500 text-white text-[8px] font-extrabold px-1.5 py-0.5 rounded-full">
+                        12x de uma vez
+                      </span>
+                    </button>
                   </div>
 
-                  <h4 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">Recursos Ativados imediatamente</h4>
+                  <div className="flex items-baseline gap-1.5 justify-center pb-2 border-b border-slate-100">
+                    <span className="text-2xl font-extrabold text-slate-900">{currentPriceLabel}</span>
+                    <span className="text-xs text-slate-500 font-medium">
+                      {billingCycle === "annual" ? "/ ano (pagamento único)" : "/ mês"}
+                    </span>
+                  </div>
+                  {billingCycle === "annual" && (
+                    <p className="text-center text-[11px] text-emerald-600 font-bold -mt-3">
+                      Equivalente a R$ {pricing.annualMonthlyEquivalent.toFixed(2).replace(".", ",")}/mês
+                    </p>
+                  )}
+
+                  <h4 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">Recursos Exclusivos do Premium</h4>
 
                   <div className="space-y-4">
-                    <div className="flex gap-3 text-left">
-                      <div className="w-9 h-9 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center shrink-0 border border-blue-100/50">
-                        <FileText className="w-4.5 h-4.5" />
-                      </div>
-                      <div className="space-y-0.5 min-w-0">
-                        <span className="text-xs font-bold text-slate-800 block">Emissão de NFS-e (Até 30 Notas/mês)</span>
-                        <p className="text-[11px] text-slate-500 leading-normal">
-                          Emita suas notas fiscais de serviço de maneira simplificada diretamente no app, com limite de 30 emissões mensais inclusas.
-                        </p>
-                      </div>
-                    </div>
-
                     <div className="flex gap-3 text-left">
                       <div className="w-9 h-9 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center shrink-0 border border-indigo-100/50">
                         <ImageIcon className="w-4.5 h-4.5" />
@@ -434,7 +511,31 @@ export default function UpgradeModal({
                       <div className="space-y-0.5 min-w-0">
                         <span className="text-xs font-bold text-slate-800 block">Identidade Visual (Logo Própria)</span>
                         <p className="text-[11px] text-slate-500 leading-normal">
-                          Adicione o logotipo da sua empresa em todos os recibos, PDF de vendas e no gerador de orçamentos profissionais.
+                          Seus recibos, orçamentos e relatórios saem com a sua logo — sem a marca MEI Flow nos documentos.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-3 text-left">
+                      <div className="w-9 h-9 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center shrink-0 border border-blue-100/50">
+                        <FileText className="w-4.5 h-4.5" />
+                      </div>
+                      <div className="space-y-0.5 min-w-0">
+                        <span className="text-xs font-bold text-slate-800 block">Arquivo Digital de Comprovantes</span>
+                        <p className="text-[11px] text-slate-500 leading-normal">
+                          Guarde suas notas fiscais e comprovantes na nuvem, organizados por mês, prontos para download quando precisar.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-3 text-left">
+                      <div className="w-9 h-9 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center shrink-0 border border-emerald-100/50">
+                        <ShieldCheck className="w-4.5 h-4.5" />
+                      </div>
+                      <div className="space-y-0.5 min-w-0">
+                        <span className="text-xs font-bold text-slate-800 block">Sem Anúncios</span>
+                        <p className="text-[11px] text-slate-500 leading-normal">
+                          Use o app sem nenhum banner ou anúncio na tela.
                         </p>
                       </div>
                     </div>
@@ -443,7 +544,9 @@ export default function UpgradeModal({
                   <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100/50 flex items-center gap-3">
                     <div className="text-left leading-normal font-sans text-xs text-emerald-950">
                       <span className="font-extrabold text-emerald-950 block text-sm">Liberação Automatizada</span>
-                      Assinatura 100% livre de fidelidade. Você pode cancelar a qualquer momento sem burocracia ou taxas de cancelamento.
+                      {billingCycle === "monthly"
+                        ? "Assinatura mensal 100% livre de fidelidade. Você pode cancelar a qualquer momento sem burocracia ou taxas de cancelamento."
+                        : "Pagamento único, válido por 12 meses. Sem renovação automática nesse período."}
                     </div>
                   </div>
 
@@ -453,7 +556,9 @@ export default function UpgradeModal({
                       className="w-full bg-slate-900 hover:bg-slate-800 text-white font-extrabold py-3.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 border border-slate-950 shadow-lg transition-all cursor-pointer active:scale-95"
                       id="upgrade-start-checkout-btn"
                     >
-                      <span>Contratar Plano Premium - R$ 29,90/mês</span>
+                      <span>
+                        Contratar Plano Premium - {currentPriceLabel}{billingCycle === "monthly" ? "/mês" : "/ano"}
+                      </span>
                       <ArrowRight className="w-4 h-4 text-emerald-400" />
                     </button>
                     
@@ -481,7 +586,9 @@ export default function UpgradeModal({
 
                   <div className="text-center space-y-1">
                     <h4 className="text-sm font-black text-slate-900">Escolha a Forma de Pagamento</h4>
-                    <p className="text-xs text-slate-500">Valor da assinatura mensal: R$ 29,90</p>
+                    <p className="text-xs text-slate-500">
+                      Valor: {currentPriceLabel} {billingCycle === "monthly" ? "(assinatura mensal)" : "(pagamento único anual)"}
+                    </p>
                   </div>
 
                   <div className="space-y-3 pt-2">
@@ -496,7 +603,9 @@ export default function UpgradeModal({
                         </div>
                         <div>
                           <span className="text-xs font-black text-slate-800 block">Pagar via Pix</span>
-                          <span className="text-[10px] text-emerald-600 font-bold block">Aprovação em segundos</span>
+                          <span className="text-[10px] text-emerald-600 font-bold block">
+                            {billingCycle === "monthly" ? "Aprovação em segundos · renovação manual todo mês" : "Aprovação em segundos"}
+                          </span>
                         </div>
                       </div>
                       <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-emerald-500 transition-all" />
@@ -513,7 +622,9 @@ export default function UpgradeModal({
                         </div>
                         <div>
                           <span className="text-xs font-black text-slate-800 block">Cartão de Crédito</span>
-                          <span className="text-[10px] text-blue-600 font-bold block">Renovação segura e mensal</span>
+                          <span className="text-[10px] text-blue-600 font-bold block">
+                            {billingCycle === "monthly" ? "Renovação automática todo mês" : "Cobrança única"}
+                          </span>
                         </div>
                       </div>
                       <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-blue-500 transition-all" />
@@ -602,7 +713,9 @@ export default function UpgradeModal({
                           />
                         </div>
                         <div className="text-[10px] font-bold text-slate-700 bg-slate-200/50 py-1 px-2 rounded-md">
-                          Valor: <strong className="text-emerald-700">R$ 29,90 Por Mês</strong>
+                          Valor: <strong className="text-emerald-700">
+                            {currentPriceLabel} {billingCycle === "monthly" ? "Por Mês" : "Pagamento Único"}
+                          </strong>
                         </div>
                       </div>
  
@@ -629,6 +742,12 @@ export default function UpgradeModal({
                       <p className="text-[10px] text-slate-400 font-medium">
                         O plano Premium será liberado automaticamente em tela assim que o pagamento for detectado pelo webhook.
                       </p>
+
+                      {billingCycle === "monthly" && (
+                        <p className="text-[10px] text-amber-600 font-bold bg-amber-50 border border-amber-100 rounded-xl py-2 px-3 max-w-xs mx-auto">
+                          Atenção: pagamentos via Pix não renovam automaticamente. Você precisará gerar um novo Pix todo mês para manter o Premium ativo.
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -647,7 +766,11 @@ export default function UpgradeModal({
 
                   <div className="space-y-1 text-center">
                     <h4 className="text-sm font-black text-slate-900">Cadastro de Cartão</h4>
-                    <p className="text-xs text-slate-500">Transação recorrente de R$ 29,90 em ambiente protegido Mercado Pago.</p>
+                    <p className="text-xs text-slate-500">
+                      {billingCycle === "monthly"
+                        ? `Assinatura recorrente de ${currentPriceLabel}/mês em ambiente protegido Mercado Pago.`
+                        : `Cobrança única de ${currentPriceLabel} em ambiente protegido Mercado Pago.`}
+                    </p>
                   </div>
 
                   <form onSubmit={handleCardSubmit} className="space-y-3.5">
@@ -735,7 +858,9 @@ export default function UpgradeModal({
                           </span>
                         ) : (
                           <span key="normal-label" className="flex items-center gap-2">
-                            <span>Efetuar Assinatura — R$ 29,90</span>
+                            <span>
+                              {billingCycle === "monthly" ? "Efetuar Assinatura" : "Efetuar Pagamento"} — {currentPriceLabel}
+                            </span>
                             <ShieldCheck className="w-4 h-4 text-emerald-400" />
                           </span>
                         )}
