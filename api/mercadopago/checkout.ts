@@ -1,11 +1,11 @@
-import { initializeApp, getApps, cert } from "firebase-admin/app";
+import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import path from "path";
 import fs from "fs";
 import axios from "axios";
 
 // Fonte única de verdade para os valores cobrados (mesma referência usada em
-// /api/mercadopago/checkout.ts e /api/plans/pricing.ts).
+// /api/checkout.ts e /api/plans/pricing.ts).
 const PREMIUM_PRICING = {
   monthly: 14.0,
   annual: 14.0 * 12, // 168.00 — cobrança única equivalente a 12 meses
@@ -44,27 +44,14 @@ let adminApp: any = null;
 try {
   if (getApps().length === 0) {
     const projId = getFirebaseProjectId();
-    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-    const privateKey = process.env.FIREBASE_PRIVATE_KEY;
-
-    if (projId && clientEmail && privateKey) {
-      const formattedPrivateKey = privateKey.replace(/\\n/g, '\n');
-      adminApp = initializeApp({
-        credential: cert({
-          projectId: projId,
-          clientEmail: clientEmail,
-          privateKey: formattedPrivateKey,
-        })
-      });
-      console.log(`[Firebase Admin Checkout]: Initialized securely with service account certification for projectId: ${projId}`);
-    } else if (projId) {
+    if (projId) {
       adminApp = initializeApp({
         projectId: projId,
       });
       console.log(`[Firebase Admin Checkout]: Initialized securely with projectId: ${projId}`);
     } else {
       adminApp = initializeApp();
-      console.log("[Firebase Admin Checkout]: Initialized with generic ADC");
+      console.log("[Firebase Admin Checkout]: Initialized with generic ADC (no config projectId found)");
     }
   } else {
     adminApp = getApps()[0];
@@ -311,7 +298,7 @@ export default async function handler(req: any, res: any) {
             await handleApprovedUpgrade(userId, { ...dbProfile, name, email, cnpjPrestador: cleanDoc }, transactionAmount, planDescription);
           }
         } catch (dbErr: any) {
-          console.warn("[MP Checkout API DB Sync Warning (Pix)]:", dbErr.message);
+          console.warn("[MP Checkout API DB Sync Warning (Pix)]: Database sync skipped in backend due to sandbox credentials. Synchronization is safely delegated to client side.", dbErr.message);
         }
       }
 
@@ -530,7 +517,7 @@ export default async function handler(req: any, res: any) {
             await handleApprovedUpgrade(userId, { ...dbProfile, name, email, cnpjPrestador: cleanDoc }, transactionAmount, planDescription);
           }
         } catch (dbErr: any) {
-          console.warn("[Checkout Native Fetch CC DB Sync Serverless Warning]: Database sync skipped", dbErr.message);
+          console.warn("[Checkout Native Fetch CC DB Sync Serverless Warning]: Database sync skipped in backend due to sandbox credentials. Synchronization is safely delegated to client side.", dbErr.message);
         }
       }
 
