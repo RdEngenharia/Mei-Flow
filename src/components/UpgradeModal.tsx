@@ -409,7 +409,8 @@ export default function UpgradeModal({
           
           <button
             onClick={onClose}
-            className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-all cursor-pointer"
+            className="absolute right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-all cursor-pointer"
+            style={{ top: "calc(var(--safe-top) + 1rem)" }}
             id="upgrade-modal-close-btn"
           >
             <X className="w-5 h-5" />
