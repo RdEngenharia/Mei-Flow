@@ -2517,7 +2517,7 @@ ${meiName}`;
       {showVendaModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden">
-            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+            <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
                 Registrar Nova Venda (Receita MEI)
@@ -2652,7 +2652,7 @@ ${meiName}`;
       {showDespesaModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden">
-            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+            <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
                 Adicionar Despesa (Saída do Caixa)
@@ -2772,7 +2772,7 @@ ${meiName}`;
       {showClienteModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden">
-            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+            <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
                 <UserPlus className="w-5 h-5 text-blue-600" />
                 Cadastrar Novo Cliente Tomador
@@ -2981,7 +2981,7 @@ ${meiName}`;
             </div>
 
             {/* Footer */}
-            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row gap-3 items-center justify-between" id="footer-nfse">
+            <div className="px-6 pt-4 pb-safe bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row gap-3 items-center justify-between" id="footer-nfse">
               <button
                 type="button"
                 onClick={() => setShowFocusNfeModal(false)}
@@ -3018,7 +3018,7 @@ ${meiName}`;
           <div className="bg-white rounded-2xl max-w-sm w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col">
             
             {/* Header */}
-            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+            <div className="pt-safe px-6 pb-4 bg-slate-900 text-white flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Cloud className="w-5 h-5 text-blue-400" />
                 <h3 className="font-bold text-sm tracking-tight">
@@ -3336,7 +3336,7 @@ ${meiName}`;
       {showSupportModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden text-left">
-            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+            <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
                 <AlertCircle className="w-5 h-5 text-red-600 animate-pulse" />
                 <span>Chamado do Suporte Técnico</span>
