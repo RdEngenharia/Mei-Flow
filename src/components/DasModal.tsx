@@ -54,7 +54,7 @@ export default function DasModal({ cnpjUsuario, onClose, triggerToast }: DasModa
       <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-slate-200/80 overflow-hidden text-left animate-in fade-in zoom-in-95 duration-200">
         
         {/* Header */}
-        <div className="px-6 py-5 bg-slate-50 border-b border-slate-200/60 flex items-center justify-between">
+        <div className="pt-safe px-6 pb-5 bg-slate-50 border-b border-slate-200/60 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center">
               <FileText className="w-5 h-5" />
