@@ -185,7 +185,16 @@ export default function ReceiptModal({
       const textY = currentY + 28;
       doc.text("Este recibo serve de lastro documental para fins do preenchimento obrigatório do Relatório", 15, textY);
       doc.text("Mensal de Receitas Brutas, conforme diretivas do Art. 26 da Lei Complementar nº 123/2006.", 15, textY + 4);
-      
+
+      // MARCA D'ÁGUA (PLANO FREE): identifica que o documento foi gerado pelo
+      // MEI Flow quando o usuário não tem o plano Premium (que usa logo própria).
+      if (planType !== "premium") {
+        doc.setTextColor(180, 188, 200);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8);
+        doc.text("Gerado eletronicamente via MEI Flow • Ative o Premium para usar sua própria logo", 105, 287, { align: "center" });
+      }
+
       doc.save(`comprovante_mei_flow_${transaction.id}.pdf`);
     } catch (err) {
       console.error("Erro ao gerar PDF:", err);
