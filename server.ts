@@ -25,6 +25,17 @@ function sanitizeDBError(err: any): string {
 // Global tracking of the latest paymentId mapped to userId for polling query fallback
 const userLastPaymentIdMap = new Map<string, string>();
 
+// ==========================================
+// CONFIGURAÇÃO DE PREÇOS DO PLANO PREMIUM
+// ==========================================
+// Fonte única de verdade para os valores cobrados. Qualquer alteração de preço
+// deve ser feita apenas aqui — o front-end (UpgradeModal) busca esses valores
+// dinamicamente via GET /api/plans/pricing, em vez de ter os valores hardcoded.
+const PREMIUM_PRICING = {
+  monthly: 14.0,
+  annual: 14.0 * 12, // 168.00 — cobrança única equivalente a 12 meses
+};
+
 // Initialize Firebase Admin securely
 const configPath = path.join(process.cwd(), "firebase-applet-config.json");
 let firebaseConfig: any = {};
@@ -160,6 +171,57 @@ async function startServer() {
   // Use JSON middleware with increased payload size limit for handling base64 document uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // ==========================================
+  // EXPIRAÇÃO AUTOMÁTICA DO PLANO PREMIUM
+  // ==========================================
+  // Verifica se o premium do usuário já passou da data de validade (premiumUntil)
+  // e, se sim, reverte para "free" automaticamente. Isso é necessário porque
+  // pagamentos via Pix não renovam sozinhos (diferente de assinatura por cartão,
+  // que é cobrada automaticamente pelo Mercado Pago). Retorna o estado atual
+  // (já corrigido, se necessário) para quem chamou.
+  async function checkAndExpirePremium(userId: string): Promise<{ planType: "free" | "premium"; expired: boolean }> {
+    if (!db || !userId || userId === "user_49281") {
+      return { planType: "free", expired: false };
+    }
+    try {
+      const docRef = db.collection("users").doc(String(userId));
+      const docSnap = await docRef.get();
+      if (!docSnap.exists) {
+        return { planType: "free", expired: false };
+      }
+      const data = docSnap.data() || {};
+      const itemPlanType = data.planType || "free";
+      const itemPlan = data.plan || data.planType || "free";
+      const itemStatus = data.status || "inactive";
+      const isPremiumNow = (itemPlanType === "premium" || itemPlan === "premium" || itemStatus === "active" || data.isPremium === true);
+
+      if (isPremiumNow && data.premiumUntil) {
+        const isExpired = new Date(data.premiumUntil).getTime() < Date.now();
+        if (isExpired) {
+          const downgradeUpdate = {
+            planType: "free",
+            plan: "free",
+            status: "inactive",
+            updatedAt: new Date().toISOString()
+          };
+          console.log(`[AUDIT] [AUTO-DOWNGRADE]: Plano premium do usuário ${userId} expirou em ${data.premiumUntil}. Revertendo para free.`);
+          await docRef.set(downgradeUpdate, { merge: true });
+          try {
+            await db.collection("usuarios").doc(String(userId)).set(downgradeUpdate, { merge: true });
+          } catch {
+            // segue mesmo se a coleção legada falhar
+          }
+          return { planType: "free", expired: true };
+        }
+      }
+
+      return { planType: isPremiumNow ? "premium" : "free", expired: false };
+    } catch (err: any) {
+      console.warn(`[checkAndExpirePremium]: Falha ao verificar expiração para ${userId}:`, sanitizeDBError(err));
+      return { planType: "free", expired: false };
+    }
+  }
 
   // ==========================================
   // ARQUIVO DIGITAL MEI: REMOÇÃO DE DOCUMENTOS EXPIRADOS (RETENÇÃO LEGAL DE 5 ANOS)
@@ -934,8 +996,15 @@ async function startServer() {
         documentNumber,
         email,
         paymentMethod,
-        creditCard
+        creditCard,
+        billingCycle // "monthly" (padrão) ou "annual"
       } = req.body;
+
+      const cycle: "monthly" | "annual" = billingCycle === "annual" ? "annual" : "monthly";
+      const transactionAmount = cycle === "annual" ? PREMIUM_PRICING.annual : PREMIUM_PRICING.monthly;
+      const planDescription = cycle === "annual"
+        ? "Plano Premium MEI Flow - Pacote Anual (12 meses)"
+        : "Plano Premium MEI Flow - Mensal";
 
       if (!userId || !email) {
         res.status(400).json({ success: false, mensagem: "Parâmetros obrigatórios ausentes: userId e email são obrigatórios." });
@@ -984,8 +1053,8 @@ async function startServer() {
         const payersLastName = (name || "MEIFlow").split(" ").slice(1).join(" ") || "MEIFlow";
 
         const pixPayload = {
-          transaction_amount: 29.90,
-          description: "Plano Premium - MEI Flow - Pix",
+          transaction_amount: transactionAmount,
+          description: `${planDescription} - Pix`,
           payment_method_id: "pix",
           payer: {
             email: email.trim(),
@@ -1029,6 +1098,8 @@ async function startServer() {
               mercadoPagoPaymentId: paymentId,
               mercadoPagoStatus: paymentData.status || "pending",
               planType: "free",
+              billingCycle: cycle,
+              paymentMethod: "PIX",
               updatedAt: new Date().toISOString()
             };
             await db.collection("users").doc(userId).set(syncUpdate, { merge: true });
@@ -1095,14 +1166,109 @@ async function startServer() {
         }
 
         const cardTokenId = tokenData.id;
-        const detectedBrand = getPaymentMethodId(creditCard.number);
         const payersFirstName = (name || "Comprador").split(" ")[0] || "Comprador";
         const payersLastName = (name || "MEIFlow").split(" ").slice(1).join(" ") || "MEIFlow";
 
+        // ====================================================
+        // CICLO MENSAL: cria uma ASSINATURA recorrente real (Preapproval).
+        // O Mercado Pago cobra automaticamente todo mês no cartão, sem
+        // o usuário precisar fazer nada — diferente do PIX, que exige
+        // pagamento manual mensal.
+        // ====================================================
+        if (cycle === "monthly") {
+          const preapprovalPayload = {
+            reason: planDescription,
+            external_reference: userId,
+            payer_email: email.trim(),
+            card_token_id: cardTokenId,
+            auto_recurring: {
+              frequency: 1,
+              frequency_type: "months",
+              transaction_amount: transactionAmount,
+              currency_id: "BRL"
+            },
+            back_url: "https://mei-flow-flax.vercel.app",
+            status: "authorized"
+          };
+
+          console.log(`[Checkout Native Fetch CC]: Criando assinatura (Preapproval) recorrente mensal...`);
+          const preapprovalResp = await fetch("https://api.mercadopago.com/preapproval", {
+            method: "POST",
+            headers,
+            body: JSON.stringify(preapprovalPayload)
+          });
+
+          const preapprovalData: any = await preapprovalResp.json();
+
+          if (!preapprovalResp.ok) {
+            const errorMsg = preapprovalData.message || JSON.stringify(preapprovalData);
+            console.error(`[Checkout Native Fetch CC Preapproval Error]: ${errorMsg}`);
+            return res.status(preapprovalResp.status).json({
+              success: false,
+              mensagem: `Mercado Pago (Assinatura): ${errorMsg}`
+            });
+          }
+
+          const preapprovalId = preapprovalData.id;
+          const preapprovalStatus = preapprovalData.status; // "authorized" | "pending" | ...
+          const isAuthorized = preapprovalStatus === "authorized";
+          const planType = isAuthorized ? "premium" : "free";
+
+          userLastPaymentIdMap.set(String(userId), String(preapprovalId));
+
+          if (db) {
+            try {
+              const expirationDate = new Date();
+              expirationDate.setDate(expirationDate.getDate() + 30);
+              const syncUpdate: any = {
+                mercadoPagoPreapprovalId: preapprovalId,
+                mercadoPagoStatus: preapprovalStatus,
+                planType,
+                billingCycle: "monthly",
+                paymentMethod: "CREDIT_CARD",
+                subscriptionType: "recurring",
+                updatedAt: new Date().toISOString()
+              };
+              if (isAuthorized) {
+                syncUpdate.premiumUntil = expirationDate.toISOString();
+              }
+              await db.collection("users").doc(userId).set(syncUpdate, { merge: true });
+              await db.collection("usuarios").doc(userId).set(syncUpdate, { merge: true });
+
+              if (isAuthorized) {
+                await handleMercadoPagoApproved(userId);
+              }
+            } catch (dbErr: any) {
+              console.warn("[Checkout Native Fetch CC Preapproval DB Sync Warning]:", sanitizeDBError(dbErr));
+            }
+          }
+
+          if (!isAuthorized) {
+            return res.status(400).json({
+              success: false,
+              mensagem: `Assinatura não autorizada pelo Mercado Pago (status: ${preapprovalStatus}).`
+            });
+          }
+
+          return res.status(200).json({
+            success: true,
+            preapprovalId,
+            status: preapprovalStatus,
+            planType,
+            subscriptionType: "recurring"
+          });
+        }
+
+        // ====================================================
+        // CICLO ANUAL: cobrança única (12 meses pagos de uma vez).
+        // Não cria assinatura recorrente — é um pagamento só.
+        // ====================================================
+        const detectedBrand = getPaymentMethodId(creditCard.number);
+
         const cardPayload = {
           token: cardTokenId,
-          transaction_amount: 29.90,
-          description: "Plano Premium - MEI Flow",
+          transaction_amount: transactionAmount,
+          description: planDescription,
           installments: 1,
           payment_method_id: detectedBrand,
           payer: {
@@ -1117,7 +1283,7 @@ async function startServer() {
           external_reference: userId
         };
 
-        console.log(`[Checkout Native Fetch CC]: Creating payment via fetch...`);
+        console.log(`[Checkout Native Fetch CC]: Creating annual one-time payment via fetch...`);
         const mpPaymentResp = await fetch("https://api.mercadopago.com/v1/payments", {
           method: "POST",
           headers,
@@ -1145,12 +1311,20 @@ async function startServer() {
 
         if (db) {
           try {
-            const syncUpdate = {
+            const expirationDate = new Date();
+            expirationDate.setDate(expirationDate.getDate() + 365);
+            const syncUpdate: any = {
               mercadoPagoPaymentId: paymentId,
               mercadoPagoStatus: paymentStatus,
               planType,
+              billingCycle: "annual",
+              paymentMethod: "CREDIT_CARD",
+              subscriptionType: "one_time",
               updatedAt: new Date().toISOString()
             };
+            if (isApproved) {
+              syncUpdate.premiumUntil = expirationDate.toISOString();
+            }
             await db.collection("users").doc(userId).set(syncUpdate, { merge: true });
             await db.collection("usuarios").doc(userId).set(syncUpdate, { merge: true });
 
@@ -1175,7 +1349,8 @@ async function startServer() {
           success: true,
           paymentId,
           status: paymentStatus,
-          planType
+          planType,
+          subscriptionType: "one_time"
         });
       }
 
@@ -1198,6 +1373,56 @@ async function startServer() {
           const body = req.body;
           console.log(`[MP Webhook Router Notification]:`, JSON.stringify(body));
 
+          const systemToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
+          const mpToken = (systemToken || "").replace(/^["']|["']$/g, "").trim();
+          if (!mpToken) return;
+
+          // ====================================================
+          // EVENTO DE ASSINATURA (Preapproval): criação, autorização
+          // ou cancelamento da assinatura recorrente em si (não é o
+          // pagamento mensal — é o "contrato" da assinatura).
+          // ====================================================
+          const isPreapprovalEvent =
+            body.type === "subscription_preapproval" ||
+            body.topic === "subscription_preapproval" ||
+            (body.action && body.action.startsWith("subscription_preapproval"));
+
+          if (isPreapprovalEvent) {
+            const preapprovalId = body.data?.id || body.id;
+            if (!preapprovalId) return;
+
+            const preapprovalRes = await axios.get(`https://api.mercadopago.com/preapproval/${preapprovalId}`, {
+              headers: { "Authorization": `Bearer ${mpToken}` }
+            });
+            const preapprovalData = preapprovalRes.data;
+            const preapprovalStatus = preapprovalData.status; // authorized | paused | cancelled
+            const userId = preapprovalData.external_reference;
+            if (!userId || !db) return;
+
+            if (preapprovalStatus === "cancelled" || preapprovalStatus === "paused") {
+              // Assinatura cancelada/pausada pelo usuário ou pelo Mercado Pago:
+              // revoga o premium imediatamente, sem esperar a data de expiração.
+              const statusUpdate = {
+                mercadoPagoStatus: preapprovalStatus,
+                planType: "free",
+                plan: "free",
+                status: "inactive",
+                updatedAt: new Date().toISOString()
+              };
+              console.log(`[AUDIT] [WEBHOOK PREAPPROVAL CANCELLED]: user ${userId} status "${preapprovalStatus}".`);
+              await db.collection("users").doc(userId).set(statusUpdate, { merge: true });
+              await db.collection("usuarios").doc(userId).set(statusUpdate, { merge: true });
+            }
+            // Quando authorized, a liberação do premium já foi feita no momento
+            // da criação da assinatura no /api/checkout; a confirmação contínua
+            // das cobranças mensais chega via eventos "payment" (tratados abaixo).
+            return;
+          }
+
+          // ====================================================
+          // EVENTO DE PAGAMENTO (cobrança única OU renovação mensal
+          // automática gerada por uma assinatura ativa)
+          // ====================================================
           let paymentId = "";
           if (body.type === "payment" && body.data?.id) {
             paymentId = String(body.data.id);
@@ -1212,10 +1437,6 @@ async function startServer() {
 
           if (!paymentId) return;
 
-          const systemToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
-          const mpToken = (systemToken || "").replace(/^["']|["']$/g, "").trim();
-          if (!mpToken) return;
-
           const mpPaymentRes = await axios.get(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
             headers: { "Authorization": `Bearer ${mpToken}` }
           });
@@ -1227,8 +1448,22 @@ async function startServer() {
           if (!userId) return;
 
           if (db) {
+            // Usa o billingCycle previamente salvo no checkout para calcular a
+            // duração correta da validade (30 dias para mensal, 365 para anual).
+            // Isso também cobre renovações automáticas de assinatura: cada nova
+            // cobrança mensal aprovada estende o "premiumUntil" por mais 30 dias.
+            let billingCycle: "monthly" | "annual" = "monthly";
+            try {
+              const existingDoc = await db.collection("users").doc(userId).get();
+              if (existingDoc.exists && existingDoc.data()?.billingCycle === "annual") {
+                billingCycle = "annual";
+              }
+            } catch {
+              // se não conseguir ler o ciclo salvo, assume mensal (mais conservador)
+            }
+
             const expirationDate = new Date();
-            expirationDate.setDate(expirationDate.getDate() + 30);
+            expirationDate.setDate(expirationDate.getDate() + (billingCycle === "annual" ? 365 : 30));
             const statusUpdate: any = {
               mercadoPagoPaymentId: paymentId,
               mercadoPagoStatus: status,
@@ -1272,22 +1507,22 @@ async function startServer() {
       // NOTE: Bypass quick DB check for public fallback user "user_49281" since it's a shared demo ID
       if (db && userId !== "user_49281") {
         try {
-          const docRef = db.collection("users").doc(String(userId));
-          const docSnap = await docRef.get();
-          if (docSnap.exists) {
-            const data = docSnap.data() || {};
-            const itemPlanType = data.planType || "free";
-            const itemPlan = data.plan || data.planType || "free";
-            const itemStatus = data.status || "inactive";
-            const localIsPremium = (itemPlanType === "premium" || itemPlan === "premium" || itemStatus === "active" || data.isPremium === true);
-            if (localIsPremium) {
-              return res.json({
-                success: true,
-                isPremium: true,
-                planType: "premium",
-                status: "approved"
-              });
-            }
+          const { planType: currentPlanType, expired } = await checkAndExpirePremium(String(userId));
+          if (expired) {
+            return res.json({
+              success: true,
+              isPremium: false,
+              planType: "free",
+              status: "expired"
+            });
+          }
+          if (currentPlanType === "premium") {
+            return res.json({
+              success: true,
+              isPremium: true,
+              planType: "premium",
+              status: "approved"
+            });
           }
         } catch (dbErr: any) {
           const errorMsg = sanitizeDBError(dbErr);
@@ -1488,6 +1723,41 @@ async function startServer() {
         message: "Aguardando confirmação do banco"
       });
     }
+  });
+
+  // ==========================================
+  // 4C. EXPIRAÇÃO LEVE: chamada uma vez ao carregar o app (ex: junto do
+  // onAuthStateChanged), para garantir que o downgrade de premium expirado
+  // (pagamentos Pix sem renovação) aconteça mesmo sem o usuário passar pelo
+  // fluxo de checkout/polling. Bem mais leve que /api/user/status: não
+  // consulta a API do Mercado Pago, só confere a data salva no Firestore.
+  // ==========================================
+  app.get("/api/user/check-expiration", async (req: any, res: any) => {
+    try {
+      const userId = req.query?.userId as string;
+      if (!userId) {
+        return res.status(400).json({ success: false, error: "userId is required." });
+      }
+      const { planType, expired } = await checkAndExpirePremium(String(userId));
+      return res.json({ success: true, planType, expired });
+    } catch (err: any) {
+      console.warn("[Check Expiration API Error]:", err.message);
+      return res.json({ success: true, planType: "free", expired: false });
+    }
+  });
+
+  // ==========================================
+  // 4D. PREÇOS DO PLANO PREMIUM: fonte única de verdade consumida pelo
+  // front-end (UpgradeModal), evitando hardcode de valores no client.
+  // ==========================================
+  app.get("/api/plans/pricing", (req, res) => {
+    res.json({
+      success: true,
+      currency: "BRL",
+      monthly: PREMIUM_PRICING.monthly,
+      annual: PREMIUM_PRICING.annual,
+      annualMonthlyEquivalent: Number((PREMIUM_PRICING.annual / 12).toFixed(2))
+    });
   });
 
   // DEPRECATED ORIGINAL ASAAS WEBHOOK HANDLER BELOW
