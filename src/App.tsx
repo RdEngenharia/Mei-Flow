@@ -340,7 +340,7 @@ export default function App() {
           if (dbClientes.length > 0 || mergedTransacoes.length > 0) {
             setClientes(dbClientes);
             setTransacoes(mergedTransacoes);
-            triggerToast(`✓ Conexão estável! Lançamentos carregados remotamente via Firebase.`);
+            triggerToast(`✓ Conexão estável! Lançamentos carregados com sucesso.`);
           } else {
             // Se cloud estiver vazia, realizamos o upload amigável das informações locais atuais para o Firebase (Facilita a transição)
             // Para evitar colisões de ID de sementes compartilhadas (ex: cli_1, tx_1), mapeamos os IDs para incluir o UID do usuário.
@@ -1233,7 +1233,7 @@ DADOS DE INFRAESTRUTURA & DIAGNÓSTICO (AUTOMÁTICO):
 --------------------------------------------------
 - ID do MEI ativo: ${userId}
 - Nome do Emissor MEI: ${meiName}
-- Modo Banco de Dados: ${user ? "Firebase Cloud (Nuvem Autenticada)" : "Offline LocalStorage"}
+- Modo Banco de Dados: ${user ? "Conta Sincronizada (Nuvem)" : "Offline (Armazenamento Local)"}
 - Total de Lançamentos de Caixa: ${transacoes.length}
 - Total de Clientes Catalogados: ${clientes.length}
 - Identificador de Agent/Web: ${navigator.userAgent}
