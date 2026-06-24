@@ -161,7 +161,7 @@ export default function RulesSimulator() {
             Simulador de Auditoria de Regras (Zero-Trust)
           </h3>
           <p className="text-sm text-slate-500">
-            Simulador do motor de segurança do Firestore testando contra os ataques de vazamento lateral e shadow updates.
+            Simulador do motor de segurança de regras testando contra os ataques de vazamento lateral e shadow updates.
           </p>
         </div>
         <button
