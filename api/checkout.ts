@@ -4,6 +4,13 @@ import path from "path";
 import fs from "fs";
 import axios from "axios";
 
+// Fonte única de verdade para os valores cobrados (mesma referência usada em
+// /api/mercadopago/checkout.ts e /api/plans/pricing.ts).
+const PREMIUM_PRICING = {
+  monthly: 14.0,
+  annual: 14.0 * 12, // 168.00 — cobrança única equivalente a 12 meses
+};
+
 // Securely initialize Firebase Admin in serverless environment
 const getFirebaseProjectId = () => {
   const configPath = path.join(process.cwd(), "firebase-applet-config.json");
@@ -25,15 +32,8 @@ const getFirebaseProjectId = () => {
 };
 
 const getFirebaseDatabaseId = () => {
-  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-  if (fs.existsSync(configPath)) {
-    try {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      if (config.firestoreDatabaseId) return config.firestoreDatabaseId;
-    } catch (err) {
-      console.error("Error reading firebase-applet-config.json for database ID inside checkout API:", err);
-    }
-  }
+  // CONFIRMADO: o banco Firestore em uso é o "(default)". O firestoreDatabaseId
+  // do AI Studio aponta para um banco nomeado secundário, não utilizado.
   if (process.env.FIREBASE_DATABASE_ID) {
     return process.env.FIREBASE_DATABASE_ID;
   }
@@ -98,7 +98,7 @@ export function getPaymentMethodId(cardNumber: string): string {
 }
 
 // Helper to trigger Focus NFe on immediate card approvals
-async function handleApprovedUpgrade(userId: string, existingProfile: any) {
+async function handleApprovedUpgrade(userId: string, existingProfile: any, transactionAmount: number, planDescription: string) {
   if (!db) return;
   try {
     console.log(`[MP Checkout Approved Helper]: Triggering Focus NFe for user ${userId}`);
@@ -127,7 +127,7 @@ async function handleApprovedUpgrade(userId: string, existingProfile: any) {
       numero_rps: randomRps,
       serie_rps: "1",
       tipo_rps: "1",
-      valor_servicos: 29.90,
+      valor_servicos: transactionAmount,
       tomador: {
         ...tomadorBody,
         razao_social: cleanName,
@@ -135,7 +135,7 @@ async function handleApprovedUpgrade(userId: string, existingProfile: any) {
       },
       servico: {
         aliquota: 0,
-        discriminacao: `Assinatura de Softwares e Serviços Premium MEI Flow - Faturamento Integrado Mensal. Referente ao pagamento aprovado de R$ 29,90.`,
+        discriminacao: `${planDescription} - Faturamento Integrado. Referente ao pagamento aprovado de R$ ${transactionAmount.toFixed(2)}.`,
         codigo_municipio: "3550308",
         item_lista_servico: "01.01"
       }
@@ -188,8 +188,15 @@ export default async function handler(req: any, res: any) {
       documentNumber,
       email,
       paymentMethod,
-      creditCard
+      creditCard,
+      billingCycle
     } = req.body;
+
+    const cycle: "monthly" | "annual" = billingCycle === "annual" ? "annual" : "monthly";
+    const transactionAmount = cycle === "annual" ? PREMIUM_PRICING.annual : PREMIUM_PRICING.monthly;
+    const planDescription = cycle === "annual"
+      ? "Plano Premium MEI Flow - Pacote Anual (12 meses)"
+      : "Plano Premium MEI Flow - Mensal";
 
     if (!userId || !email) {
       res.status(400).json({ success: false, mensagem: "Parâmetros obrigatórios ausentes: userId e email são obrigatórios." });
@@ -250,8 +257,8 @@ export default async function handler(req: any, res: any) {
       const payersLastName = (name || "MEIFlow").split(" ").slice(1).join(" ") || "MEIFlow";
 
       const pixPayload = {
-        transaction_amount: 29.90,
-        description: "Plano Premium - MEI Flow - Pix",
+        transaction_amount: transactionAmount,
+        description: `${planDescription} - Pix`,
         payment_method_id: "pix",
         payer: {
           email: email.trim(),
@@ -293,13 +300,15 @@ export default async function handler(req: any, res: any) {
             mercadoPagoPaymentId: paymentId,
             mercadoPagoStatus: paymentData.status,
             planType: paymentData.status === "approved" ? "premium" : "free",
+            billingCycle: cycle,
+            paymentMethod: "PIX",
             updatedAt: new Date().toISOString()
           };
           await db.collection("users").doc(userId).set(syncUpdate, { merge: true });
           await db.collection("usuarios").doc(userId).set(syncUpdate, { merge: true });
           
           if (paymentData.status === "approved") {
-            await handleApprovedUpgrade(userId, { ...dbProfile, name, email, cnpjPrestador: cleanDoc });
+            await handleApprovedUpgrade(userId, { ...dbProfile, name, email, cnpjPrestador: cleanDoc }, transactionAmount, planDescription);
           }
         } catch (dbErr: any) {
           console.warn("[MP Checkout API DB Sync Warning (Pix)]:", dbErr.message);
@@ -363,14 +372,101 @@ export default async function handler(req: any, res: any) {
       }
 
       const cardTokenId = tokenData.id;
-      const detectedBrand = getPaymentMethodId(creditCard.number);
       const payersFirstName = (name || "Comprador").split(" ")[0] || "Comprador";
       const payersLastName = (name || "MEIFlow").split(" ").slice(1).join(" ") || "MEIFlow";
 
+      // CICLO MENSAL: cria assinatura recorrente real (Preapproval). O Mercado
+      // Pago cobra automaticamente todo mês no cartão, sem ação do usuário.
+      if (cycle === "monthly") {
+        const preapprovalPayload = {
+          reason: planDescription,
+          external_reference: userId,
+          payer_email: email.trim(),
+          card_token_id: cardTokenId,
+          auto_recurring: {
+            frequency: 1,
+            frequency_type: "months",
+            transaction_amount: transactionAmount,
+            currency_id: "BRL"
+          },
+          back_url: "https://mei-flow-flax.vercel.app",
+          notification_url: "https://mei-flow-flax.vercel.app/api/mercadopago/webhook",
+          status: "authorized"
+        };
+
+        console.log(`[Checkout Native Fetch CC Serverless]: Criando assinatura (Preapproval) recorrente mensal...`);
+        const preapprovalResp = await fetch("https://api.mercadopago.com/preapproval", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(preapprovalPayload)
+        });
+
+        const preapprovalData: any = await preapprovalResp.json();
+
+        if (!preapprovalResp.ok) {
+          const errorMsg = preapprovalData.message || JSON.stringify(preapprovalData);
+          console.error(`[Checkout Native Fetch CC Preapproval Serverless Error]: ${errorMsg}`);
+          return res.status(preapprovalResp.status).json({
+            success: false,
+            mensagem: `Mercado Pago (Assinatura): ${errorMsg}`
+          });
+        }
+
+        const preapprovalId = preapprovalData.id;
+        const preapprovalStatus = preapprovalData.status;
+        const isAuthorized = preapprovalStatus === "authorized";
+        const planType: "free" | "premium" = isAuthorized ? "premium" : "free";
+
+        if (db) {
+          try {
+            const expirationDate = new Date();
+            expirationDate.setDate(expirationDate.getDate() + 30);
+            const syncUpdate: any = {
+              mercadoPagoPreapprovalId: preapprovalId,
+              mercadoPagoStatus: preapprovalStatus,
+              planType,
+              billingCycle: "monthly",
+              paymentMethod: "CREDIT_CARD",
+              subscriptionType: "recurring",
+              updatedAt: new Date().toISOString()
+            };
+            if (isAuthorized) {
+              syncUpdate.premiumUntil = expirationDate.toISOString();
+            }
+            await db.collection("users").doc(userId).set(syncUpdate, { merge: true });
+            await db.collection("usuarios").doc(userId).set(syncUpdate, { merge: true });
+
+            if (isAuthorized) {
+              await handleApprovedUpgrade(userId, { ...dbProfile, name, email, cnpjPrestador: cleanDoc }, transactionAmount, planDescription);
+            }
+          } catch (dbErr: any) {
+            console.warn("[Checkout Native Fetch CC Preapproval DB Sync Serverless Warning]:", dbErr.message);
+          }
+        }
+
+        if (!isAuthorized) {
+          return res.status(400).json({
+            success: false,
+            mensagem: `Assinatura não autorizada pelo Mercado Pago (status: ${preapprovalStatus}).`
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          preapprovalId,
+          status: preapprovalStatus,
+          planType,
+          subscriptionType: "recurring"
+        });
+      }
+
+      // CICLO ANUAL: cobrança única (12 meses pagos de uma vez), sem assinatura.
+      const detectedBrand = getPaymentMethodId(creditCard.number);
+
       const cardPayload = {
         token: cardTokenId,
-        transaction_amount: 29.90,
-        description: "Plano Premium - MEI Flow",
+        transaction_amount: transactionAmount,
+        description: planDescription,
         installments: 1,
         payment_method_id: detectedBrand,
         payer: {
@@ -385,7 +481,7 @@ export default async function handler(req: any, res: any) {
         external_reference: userId
       };
 
-      console.log(`[Checkout Native Fetch CC Serverless]: Creating payment via fetch...`);
+      console.log(`[Checkout Native Fetch CC Serverless]: Creating annual one-time payment via fetch...`);
       const mpPaymentResp = await fetch("https://api.mercadopago.com/v1/payments", {
         method: "POST",
         headers,
@@ -413,17 +509,25 @@ export default async function handler(req: any, res: any) {
 
       if (db) {
         try {
-          const syncUpdate = {
+          const expirationDate = new Date();
+          expirationDate.setDate(expirationDate.getDate() + 365);
+          const syncUpdate: any = {
             mercadoPagoPaymentId: paymentId,
             mercadoPagoStatus: paymentData.status,
             planType,
+            billingCycle: "annual",
+            paymentMethod: "CREDIT_CARD",
+            subscriptionType: "one_time",
             updatedAt: new Date().toISOString()
           };
+          if (isApproved) {
+            syncUpdate.premiumUntil = expirationDate.toISOString();
+          }
           await db.collection("users").doc(userId).set(syncUpdate, { merge: true });
           await db.collection("usuarios").doc(userId).set(syncUpdate, { merge: true });
 
           if (isApproved) {
-            await handleApprovedUpgrade(userId, { ...dbProfile, name, email, cnpjPrestador: cleanDoc });
+            await handleApprovedUpgrade(userId, { ...dbProfile, name, email, cnpjPrestador: cleanDoc }, transactionAmount, planDescription);
           }
         } catch (dbErr: any) {
           console.warn("[Checkout Native Fetch CC DB Sync Serverless Warning]: Database sync skipped", dbErr.message);
@@ -442,7 +546,8 @@ export default async function handler(req: any, res: any) {
         success: true,
         paymentId,
         status: paymentData.status,
-        planType
+        planType,
+        subscriptionType: "one_time"
       });
     }
 
