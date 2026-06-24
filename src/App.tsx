@@ -851,8 +851,13 @@ export default function App() {
       const disclaimerY = finalY + 35;
       doc.text("Este recibo serve de lastro de autenticidade documental eletrônica para fins do preenchimento das", 15, disclaimerY);
       doc.text("obrigações do MEI de transações mensais brutas em conformidade com o Art. 26 da Lei Complementar nº 123/2006.", 15, disclaimerY + 4.5);
-      doc.text("Gerado automaticamente via MEI Flow - Planejamento e Inteligência Tributária.", 15, disclaimerY + 9);
-      
+
+      // MARCA D'ÁGUA (PLANO FREE): identifica o comprovante como gerado pelo
+      // MEI Flow quando o usuário não tem o plano Premium.
+      if (planType !== "premium") {
+        doc.text("Gerado automaticamente via MEI Flow - Ative o Premium para usar sua própria logo.", 15, disclaimerY + 9);
+      }
+
       doc.save(`comprovante_mei_${tx.id}.pdf`);
       triggerToast(`✓ Comprovante em PDF de alta qualidade para ${tx.id} gerado e baixado!`);
     } catch (err) {
@@ -1144,7 +1149,16 @@ export default function App() {
       const randomRevId = Math.random().toString(36).substring(2, 8).toUpperCase();
       const shortKey = `MEIFLOW_REV_${randomRevId}_${Math.floor(Math.random() * 90000 + 10000)}`;
       doc.text(`Chave: ${shortKey}`, 195, footerY + 10, { align: "right" });
-      
+
+      // MARCA D'ÁGUA (PLANO FREE): identifica o relatório como gerado pelo
+      // MEI Flow quando o usuário não tem o plano Premium.
+      if (planType !== "premium") {
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8);
+        doc.setTextColor(180, 188, 200);
+        doc.text("Gerado eletronicamente via MEI Flow • Ative o Premium para usar sua própria logo", 105, 287, { align: "center" });
+      }
+
       doc.save(`relatorio_faturamento_mei_flow.pdf`);
       triggerToast("✓ Relatório Fiscal Completo em PDF emitido e baixado com sucesso!");
     } catch (err) {
@@ -1660,10 +1674,10 @@ ${meiName}`;
                   </div>
                   <div className="space-y-0.5 text-left">
                     <h3 className="font-extrabold tracking-tight text-white text-sm sm:text-base">
-                      ✨ Evolua para o Premium para emitir notas fiscais e usar seu próprio logotipo!
+                      ✨ Evolua para o Premium: sua logo nos documentos e Arquivo Digital de comprovantes!
                     </h3>
                     <p className="text-xs text-slate-300">
-                      Desbloqueie todo o potencial financeiro e profissional do seu MEI por apenas R$ 29,90/mês. Clique para saber mais.
+                      Desbloqueie todo o potencial financeiro e profissional do seu MEI por apenas R$ 14,00/mês. Clique para saber mais.
                     </p>
                   </div>
                 </div>
@@ -1673,6 +1687,33 @@ ${meiName}`;
                 >
                   Conhecer Premium 🚀
                 </button>
+              </div>
+            )}
+
+            {/* ESPAÇO RESERVADO PARA ANÚNCIOS (PLANO FREE) */}
+            {planType === "free" && (
+              <div
+                className="bg-slate-50 border border-dashed border-slate-300 rounded-2xl p-4 flex items-center justify-between gap-4 text-left"
+                id="dashboard-ad-slot"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-slate-200 text-slate-400 flex items-center justify-center shrink-0 text-[10px] font-extrabold uppercase">
+                    AD
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold text-slate-500">Espaço Publicitário</p>
+                    <p className="text-[10px] text-slate-400">
+                      Anúncios aparecem aqui no plano gratuito.{" "}
+                      <button
+                        type="button"
+                        onClick={() => setShowUpgradeModal(true)}
+                        className="text-indigo-600 hover:underline font-bold cursor-pointer"
+                      >
+                        Remova com o Premium
+                      </button>
+                    </p>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1720,7 +1761,7 @@ ${meiName}`;
                   id="btn-emitir-nota-header"
                 >
                   <FileText className="w-3.5 h-3.5 text-blue-100" />
-                  <span>Emitir Nota Fiscal (NFS-e) {planType === "free" ? "🔒" : ""}</span>
+                  <span>Emitir Nota Fiscal (NFS-e)</span>
                 </button>
 
                 <button
@@ -1750,7 +1791,13 @@ ${meiName}`;
                 </button>
 
                 <button
-                  onClick={() => setCurrentView("catalogo")}
+                  onClick={() => {
+                    if (planType === "free") {
+                      setShowUpgradeModal(true);
+                    } else {
+                      setCurrentView("catalogo");
+                    }
+                  }}
                   className="px-4.5 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
                 >
                   <BookOpen className="w-3.5 h-3.5 text-slate-400" />
@@ -1889,6 +1936,8 @@ ${meiName}`;
               <ArquivoDigitalMei 
                 userId={user?.uid || "demouser_49281"} 
                 userProfile={{ meiName: meiName }} 
+                planType={planType}
+                onTriggerUpgrade={() => setShowUpgradeModal(true)}
               />
             </div>
 
@@ -1919,16 +1968,24 @@ ${meiName}`;
                 </div>
               </div>
 
-              {/* CARD: CATÁLOGO */}
+              {/* CARD: CATÁLOGO (EXCLUSIVO PREMIUM) */}
               <div 
-                onClick={() => setCurrentView("catalogo")}
+                onClick={() => {
+                  if (planType === "free") {
+                    setShowUpgradeModal(true);
+                  } else {
+                    setCurrentView("catalogo");
+                  }
+                }}
                 className="bg-white p-10 md:p-12 rounded-3xl border border-slate-200/50 shadow-xs flex flex-col justify-between cursor-pointer hover:border-blue-300 hover:shadow-md transition-all duration-300 transform hover:-translate-y-0.5"
-                title="Clique para cadastrar produtos ou serviços recorrentes"
+                title={planType === "free" ? "Catálogo é exclusivo do plano Premium" : "Clique para cadastrar produtos ou serviços recorrentes"}
               >
                 <div className="space-y-4">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block flex items-center justify-between">
                     <span>Catálogo de Itens {planType === "free" ? "🔒" : ""}</span>
-                    <span className="text-blue-600 font-semibold text-[11px] normal-case">Configurar Catálogo &rarr;</span>
+                    <span className="text-blue-600 font-semibold text-[11px] normal-case">
+                      {planType === "free" ? "Premium →" : "Configurar Catálogo →"}
+                    </span>
                   </span>
                   <div className="space-y-1.5 text-left">
                     <h3 className="text-2xl font-semibold text-slate-800 tracking-tight flex items-center gap-2">
@@ -1949,6 +2006,33 @@ ${meiName}`;
                 </div>
               </div>
             </div>
+
+            {/* CARD DE UPSELL PREMIUM (PLANO FREE) */}
+            {planType === "free" && (
+              <div
+                onClick={() => setShowUpgradeModal(true)}
+                className="bg-gradient-to-br from-indigo-600 via-indigo-700 to-slate-900 text-white p-8 md:p-10 rounded-3xl border border-indigo-800 shadow-lg cursor-pointer hover:shadow-xl transition-all duration-300 transform hover:-translate-y-0.5 flex flex-col md:flex-row items-center justify-between gap-6 text-left"
+                id="home-premium-upsell-card"
+              >
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className="w-14 h-14 rounded-2xl bg-white/10 flex items-center justify-center shrink-0 border border-white/15">
+                    <Sparkles className="w-7 h-7 text-yellow-300" />
+                  </div>
+                  <div className="space-y-1 min-w-0">
+                    <h3 className="text-lg font-extrabold tracking-tight">Sua marca, seus documentos.</h3>
+                    <p className="text-xs text-indigo-100 leading-relaxed">
+                      No Premium, recibos e orçamentos saem com a sua logo, você guarda comprovantes no Arquivo Digital e navega sem anúncios — por R$ 14,00/mês.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="px-5 py-2.5 bg-white text-indigo-700 font-extrabold text-[10px] rounded-lg shadow-md hover:bg-indigo-50 transition-all shrink-0 uppercase tracking-widest cursor-pointer"
+                >
+                  Quero ser Premium 🚀
+                </button>
+              </div>
+            )}
 
           </>
         )}
@@ -2274,8 +2358,6 @@ ${meiName}`;
                                       e.stopPropagation();
                                       if (isCpfEmissor) {
                                         triggerToast("⚠ Emissão de NFS-e indisponível para Pessoa Física (CPF). Altere seu perfil para CNPJ para habilitar.");
-                                      } else if (planType === "free") {
-                                        setShowUpgradeModal(true);
                                       } else {
                                         handleDownloadNFSe(tx, e);
                                       }
@@ -2287,7 +2369,7 @@ ${meiName}`;
                                     }`}
                                     title={isCpfEmissor ? "NFS-e indisponível para CPF" : "Gerar Nota NFS-e"}
                                   >
-                                    <span>NFS-e</span> {isCpfEmissor ? "🚫" : planType === "free" ? "🔒" : ""}
+                                    <span>NFS-e</span> {isCpfEmissor ? "🚫" : ""}
                                   </button>
                                 )}
 
