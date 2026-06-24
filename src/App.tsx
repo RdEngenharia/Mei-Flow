@@ -112,11 +112,8 @@ export default function App() {
   const [isFirebaseSyncing, setIsFirebaseSyncing] = useState(false);
   const [showConfigGuide, setShowConfigGuide] = useState(false);
 
-  // TIERS & PREMIUM PLAN STATES (FORÇADO PREMIUM TEMPORARIAMENTE PARA TESTES)
-  const [planType, _setPlanType] = useState<"free" | "premium">("premium");
-  const setPlanType = (val: "free" | "premium") => {
-    _setPlanType("premium");
-  };
+  // TIERS & PREMIUM PLAN STATES
+  const [planType, setPlanType] = useState<"free" | "premium">("free");
   const [invoiceLimit, setInvoiceLimit] = useState<number>(30);
   const [invoiceUsed, setInvoiceUsed] = useState<number>(0);
   const [companyLogo, setCompanyLogo] = useState("");
