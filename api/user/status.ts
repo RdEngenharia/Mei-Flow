@@ -24,15 +24,8 @@ const getFirebaseProjectId = () => {
 };
 
 const getFirebaseDatabaseId = () => {
-  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-  if (fs.existsSync(configPath)) {
-    try {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      if (config.firestoreDatabaseId) return config.firestoreDatabaseId;
-    } catch (err) {
-      console.error("Error reading firebase-applet-config.json for database ID inside status API:", err);
-    }
-  }
+  // CONFIRMADO: o banco Firestore em uso é o "(default)". O firestoreDatabaseId
+  // do AI Studio aponta para um banco nomeado secundário, não utilizado.
   if (process.env.FIREBASE_DATABASE_ID) {
     return process.env.FIREBASE_DATABASE_ID;
   }
@@ -94,13 +87,16 @@ const sanitizeDBError = (err: any): string => {
 };
 
 // Helper inside status to process live promotion on verified approvals
-async function upgradeToPremium(userId: string, paymentId: string) {
+async function upgradeToPremium(userId: string, paymentId: string, billingCycle: "monthly" | "annual" = "monthly") {
   if (!db) return;
   try {
+    const expirationDate = new Date();
+    expirationDate.setDate(expirationDate.getDate() + (billingCycle === "annual" ? 365 : 30));
     const syncUpdate = {
       plan: "premium",
       planType: "premium",
       status: "active",
+      premiumUntil: expirationDate.toISOString(),
       mercadoPagoStatus: "approved",
       mercadoPagoPaymentId: paymentId,
       updatedAt: new Date().toISOString()
@@ -127,14 +123,43 @@ export default async function handler(req: any, res: any) {
     // 1. Check if user already has premium plan in Firestore database
     if (db) {
       try {
-        const uDoc = await db.collection("users").doc(userId).get();
+        const uDocRef = db.collection("users").doc(userId);
+        const uDoc = await uDocRef.get();
         if (uDoc.exists) {
           const data = uDoc.data() || {};
           const itemPlanType = data.planType || "free";
           const itemPlan = data.plan || data.planType || "free";
           const itemStatus = data.status || "inactive";
           const isPremium = (itemPlanType === "premium" || itemPlan === "premium" || itemStatus === "active" || data.isPremium === true);
-          
+
+          // EXPIRAÇÃO AUTOMÁTICA: se o premium já passou da data de validade
+          // (premiumUntil) sem renovação confirmada, reverte para "free" aqui
+          // mesmo. Cobre o caso do Pix, que não renova sozinho.
+          if (isPremium && data.premiumUntil) {
+            const isExpired = new Date(data.premiumUntil).getTime() < Date.now();
+            if (isExpired) {
+              const downgradeUpdate = {
+                planType: "free",
+                plan: "free",
+                status: "inactive",
+                updatedAt: new Date().toISOString()
+              };
+              console.log(`[Status API AUTO-DOWNGRADE]: Premium do usuário ${userId} expirou em ${data.premiumUntil}.`);
+              await uDocRef.set(downgradeUpdate, { merge: true });
+              try {
+                await db.collection("usuarios").doc(userId).set(downgradeUpdate, { merge: true });
+              } catch {
+                // segue mesmo se a coleção legada falhar
+              }
+              return res.status(200).json({
+                success: true,
+                isPremium: false,
+                planType: "free",
+                status: "expired"
+              });
+            }
+          }
+
           if (isPremium) {
             return res.status(200).json({
               success: true,
@@ -237,7 +262,18 @@ export default async function handler(req: any, res: any) {
     // 5. Update user to Premium if approved
     if (isApprovedOnMP) {
       try {
-        await upgradeToPremium(userId, paymentId);
+        let billingCycle: "monthly" | "annual" = "monthly";
+        if (db) {
+          try {
+            const existingDoc = await db.collection("users").doc(userId).get();
+            if (existingDoc.exists && existingDoc.data()?.billingCycle === "annual") {
+              billingCycle = "annual";
+            }
+          } catch {
+            // assume mensal se não conseguir ler
+          }
+        }
+        await upgradeToPremium(userId, paymentId, billingCycle);
       } catch (updErr: any) {
         const errorMsg = sanitizeDBError(updErr);
         console.warn("[Status API Promotion Error caught gracefully]:", errorMsg);
