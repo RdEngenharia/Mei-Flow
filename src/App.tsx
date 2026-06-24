@@ -721,7 +721,7 @@ export default function App() {
 
   // Download do APK real, hospedado nas GitHub Releases do projeto
   const handleDownloadAPK = () => {
-    const apkUrl = "https://github.com/RdEngenharia/Mei-Flow/releases/download/v1.0.0/app-debug.apk";
+    const apkUrl = "https://github.com/RdEngenharia/Mei-Flow/releases/download/v1.0.1/app-debug.apk";
     const link = document.createElement("a");
     link.href = apkUrl;
     link.download = "meiflow.apk";
