@@ -139,7 +139,7 @@ export default async function handler(req: any, res: any) {
         }
       } catch (storageErr: any) {
         console.error("[Firebase Admin Delete API Storage Error]: Falha ao remover arquivo físico:", storageErr.message);
-        storageWarning = `O registro foi removido, mas o arquivo físico não pôde ser excluído: ${storageErr.message}`;
+        storageWarning = "O registro foi removido, mas o arquivo físico não pôde ser excluído. Tente novamente mais tarde.";
       }
     } else {
       storageDeleted = true; // não havia caminho de storage associado (ex: registro legado)
