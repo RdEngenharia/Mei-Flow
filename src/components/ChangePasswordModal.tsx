@@ -60,7 +60,7 @@ export default function ChangePasswordModal({
     <div className="fixed inset-0 z-[60] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl max-w-sm w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col">
         {/* Header */}
-        <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+        <div className="pt-safe px-6 pb-4 bg-slate-900 text-white flex items-center justify-between">
           <div className="flex items-center gap-2">
             <KeyRound className="w-4 h-4 text-blue-400" />
             <h3 className="font-bold text-xs tracking-tight uppercase">Alterar Senha</h3>
