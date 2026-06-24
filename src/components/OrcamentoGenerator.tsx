@@ -604,7 +604,7 @@ export default function OrcamentoGenerator({
       {showCatalogModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col max-h-[500px]">
-            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+            <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-indigo-600 animate-pulse" />
                 <span>Escolher do seu Catálogo Comercial</span>
@@ -675,7 +675,7 @@ export default function OrcamentoGenerator({
           <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col my-4 sm:my-8 animate-scale-up">
             
             {/* Modal Controls Bar (hidden during standard browser print because we configure printable element) */}
-            <div className="px-6 py-4 bg-slate-100 border-b border-slate-200 flex items-center justify-between print:hidden">
+            <div className="pt-safe px-6 pb-4 bg-slate-100 border-b border-slate-200 flex items-center justify-between print:hidden">
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
                 <CheckCircle2 className="w-5 h-5 text-emerald-500" />
                 <span>Visualizador de Proposta Oficial</span>
