@@ -6,3 +6,40 @@
   --font-display: "Outfit", "Inter", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
+
+/* ==========================================================================
+   SAFE AREA (Android edge-to-edge + notch do iOS)
+   ==========================================================================
+   A partir do Android 15/16, o comportamento "edge-to-edge" é obrigatório:
+   o WebView do Capacitor passa a renderizar por trás da barra de status e da
+   barra de navegação do sistema. Sem isso, cabeçalhos de modais/drawers em
+   tela cheia (com botão de fechar no topo) ficam escondidos atrás da barra
+   de status, exigindo viewport-fit=cover (já adicionado no index.html) +
+   estas variáveis para reservar o espaço necessário.
+   ========================================================================== */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+/* Aplicar no topo de qualquer cabeçalho fixo (modal, drawer) para garantir
+   que o conteúdo (ex: botão de fechar) nunca fique atrás da barra de status. */
+.pt-safe {
+  padding-top: calc(var(--safe-top) + 0.75rem);
+}
+
+/* Aplicar no rodapé de qualquer rodapé fixo (botões de ação, footer de modal)
+   para garantir que não fique atrás da barra de navegação/gestos do Android. */
+.pb-safe {
+  padding-bottom: calc(var(--safe-bottom) + 0.75rem);
+}
+
+.pl-safe {
+  padding-left: var(--safe-left);
+}
+
+.pr-safe {
+  padding-right: var(--safe-right);
+}
