@@ -1188,6 +1188,7 @@ async function startServer() {
               currency_id: "BRL"
             },
             back_url: "https://mei-flow-flax.vercel.app",
+            notification_url: "https://mei-flow-flax.vercel.app/api/mercadopago/webhook",
             status: "authorized"
           };
 
