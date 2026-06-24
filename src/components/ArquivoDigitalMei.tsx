@@ -48,6 +48,8 @@ interface UserProfile {
 interface ArquivoDigitalMeiProps {
   userId: string;
   userProfile?: UserProfile;
+  planType?: "free" | "premium";
+  onTriggerUpgrade?: () => void;
 }
 
 // Meses do ano em formato padrão
@@ -56,7 +58,7 @@ const MESES = [
   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
 ];
 
-export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigitalMeiProps) {
+export default function ArquivoDigitalMei({ userId, userProfile, planType = "free", onTriggerUpgrade }: ArquivoDigitalMeiProps) {
   const currentYear = new Date().getFullYear(); // 2026 no contexto atual
   
   // Limite legal de 5 anos fiscais (ex: 2026, 2025, 2024, 2023, 2022)
@@ -79,6 +81,7 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
   
   // Controle de Diálogo no Mobile (Drawer)
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
+  const [showFreeLockModal, setShowFreeLockModal] = useState(false);
   const uploadFileInputRef = useRef<HTMLInputElement>(null);
 
   // Monitoramento reativo do usuário com Firebase Auth para garantir alinhamento perfeito de ID e permissões no cliente
@@ -539,7 +542,13 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
     <div className="w-full">
       {/* 1. SEÇÃO DE ATALHO DIRETO DO COMPROVANTE (EXIBIDO NA DASHBOARD/HOME) */}
       <div 
-        onClick={() => setIsMobileDrawerOpen(true)}
+        onClick={() => {
+          if (planType === "free") {
+            setShowFreeLockModal(true);
+          } else {
+            setIsMobileDrawerOpen(true);
+          }
+        }}
         className="w-full bg-white p-6 rounded-3xl border border-slate-200/50 shadow-xs cursor-pointer hover:border-indigo-300 hover:shadow-md transition-all duration-300 flex items-center justify-between group"
         id="dashboard-documentos-compact-card"
       >
@@ -550,9 +559,15 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
           <div className="text-left space-y-0.5">
             <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
               <span>Arquivo Digital do MEI</span>
-              <span className="inline-flex items-center gap-1 bg-indigo-100/60 text-indigo-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">
-                Conformidade Contábil
-              </span>
+              {planType === "free" ? (
+                <span className="inline-flex items-center gap-1 bg-amber-100/60 text-amber-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">
+                  🔒 Premium
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 bg-indigo-100/60 text-indigo-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">
+                  Conformidade Contábil
+                </span>
+              )}
             </h4>
             <p className="text-xs text-slate-400 font-medium">
               Organize seus comprovantes mensais, recibos e notas de compras divididas por pastas do ano fiscal do SIMEI.
@@ -560,13 +575,54 @@ export default function ArquivoDigitalMei({ userId, userProfile }: ArquivoDigita
           </div>
         </div>
         <div className="flex items-center gap-2 text-indigo-600 font-semibold text-xs shrink-0 pl-2">
-          <span>Abrir Pastas</span>
+          <span>{planType === "free" ? "Desbloquear" : "Abrir Pastas"}</span>
           <ChevronRight className="w-4 h-4 transform group-hover:translate-x-0.5 transition-transform" />
         </div>
       </div>
 
+      {/* 1B. MODAL DE UPSELL — exibido quando o plano free clica no Arquivo Digital */}
+      {showFreeLockModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full shadow-2xl border border-slate-200 overflow-hidden text-center">
+            <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-950 text-white p-7 relative">
+              <button
+                onClick={() => setShowFreeLockModal(false)}
+                className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+              <div className="w-12 h-12 bg-indigo-500/20 rounded-2xl flex items-center justify-center mx-auto mb-3 border border-indigo-400/30">
+                <Folder className="w-6 h-6 text-indigo-300" />
+              </div>
+              <h3 className="text-lg font-extrabold tracking-tight">Arquivo Digital é Premium</h3>
+              <p className="text-xs text-slate-300 mt-1.5 max-w-xs mx-auto">
+                Guarde notas fiscais e comprovantes na nuvem por 5 anos, organizados por mês e prontos para baixar quando precisar.
+              </p>
+            </div>
+            <div className="p-6 space-y-3">
+              <button
+                onClick={() => {
+                  setShowFreeLockModal(false);
+                  onTriggerUpgrade?.();
+                }}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Sparkles className="w-4 h-4 text-yellow-300" />
+                <span>Quero ser Premium</span>
+              </button>
+              <button
+                onClick={() => setShowFreeLockModal(false)}
+                className="w-full py-2.5 text-slate-500 hover:text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
+              >
+                Agora não
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 2. DRAWER COMPLETO DO ARQUIVO DIGITAL */}
-      {isMobileDrawerOpen && (
+      {isMobileDrawerOpen && planType === "premium" && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex justify-end transition-opacity duration-300 animate-fade-in">
           <div 
             className="w-full max-w-2xl bg-slate-50 h-full flex flex-col shadow-2xl relative overflow-hidden"
