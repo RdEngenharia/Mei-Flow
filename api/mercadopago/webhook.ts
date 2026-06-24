@@ -4,6 +4,13 @@ import path from "path";
 import fs from "fs";
 import axios from "axios";
 
+// Fonte única de verdade para os valores cobrados (mesma referência usada em
+// /api/checkout.ts, /api/mercadopago/checkout.ts e /api/plans/pricing.ts).
+const PREMIUM_PRICING = {
+  monthly: 14.0,
+  annual: 14.0 * 12, // 168.00
+};
+
 // Securely initialize Firebase Admin in serverless environment
 const getFirebaseProjectId = () => {
   const configPath = path.join(process.cwd(), "firebase-applet-config.json");
@@ -25,15 +32,8 @@ const getFirebaseProjectId = () => {
 };
 
 const getFirebaseDatabaseId = () => {
-  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-  if (fs.existsSync(configPath)) {
-    try {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      if (config.firestoreDatabaseId) return config.firestoreDatabaseId;
-    } catch (err) {
-      console.error("Error reading firebase-applet-config.json for database ID inside webhook API:", err);
-    }
-  }
+  // CONFIRMADO: o banco Firestore em uso é o "(default)". O firestoreDatabaseId
+  // do AI Studio aponta para um banco nomeado secundário, não utilizado.
   if (process.env.FIREBASE_DATABASE_ID) {
     return process.env.FIREBASE_DATABASE_ID;
   }
@@ -85,7 +85,7 @@ if (adminApp) {
   }
 }
 
-async function handleApprovedUpgrade(userId: string) {
+async function handleApprovedUpgrade(userId: string, billingCycle: "monthly" | "annual", transactionAmount: number, planDescription: string) {
   if (!db) {
     console.error("[MP Webhook Error]: No DB instance initialized inside webhook.");
     return;
@@ -99,10 +99,13 @@ async function handleApprovedUpgrade(userId: string) {
     const existingProfile = userDoc.exists ? userDoc.data() : {};
 
     // 1. UPDATE USER TO PREMIUM CONTROLS
+    const expirationDate = new Date();
+    expirationDate.setDate(expirationDate.getDate() + (billingCycle === "annual" ? 365 : 30));
     const premiumUpdate = {
       planType: "premium",
       plan: "premium",
       status: "active",
+      premiumUntil: expirationDate.toISOString(),
       invoiceLimit: 30,
       invoiceUsed: 0,
       updatedAt: new Date().toISOString()
@@ -112,7 +115,7 @@ async function handleApprovedUpgrade(userId: string) {
     await db.collection("usuarios").doc(userId).set(premiumUpdate, { merge: true });
     console.log(`[MP Webhook]: Updated user profile in Firestore to premium / limits set!`);
 
-    // 2. EMIT NOTA FISCAL (FOCUS NFE) FOR R$ 29,90 PREMIUM PAYMENT
+    // 2. EMIT NOTA FISCAL (FOCUS NFE) PARA O PAGAMENTO PREMIUM APROVADO
     try {
       console.log(`[MP Webhook FocusNFe]: Triggering subscription invoice emission for user ${userId}`);
       const tokenToUse = process.env.FOCUS_NFE_KEY || "wCTTGnYwEXXqCYskYtswVMBCQIHP8e8w";
@@ -140,7 +143,7 @@ async function handleApprovedUpgrade(userId: string) {
         numero_rps: randomRps,
         serie_rps: "1",
         tipo_rps: "1",
-        valor_servicos: 29.90,
+        valor_servicos: transactionAmount,
         tomador: {
           ...tomadorBody,
           razao_social: cleanName,
@@ -148,7 +151,7 @@ async function handleApprovedUpgrade(userId: string) {
         },
         servico: {
           aliquota: 0,
-          discriminacao: `Assinatura de Softwares e Serviços Premium MEI Flow - Faturamento Integrado Mensal. Referente ao pagamento aprovado de R$ 29,90.`,
+          discriminacao: `${planDescription} - Faturamento Integrado. Referente ao pagamento aprovado de R$ ${transactionAmount.toFixed(2)}.`,
           codigo_municipio: "3550308",
           item_lista_servico: "01.01"
         }
@@ -199,6 +202,57 @@ export default async function handler(req: any, res: any) {
         const body = req.body;
         console.log(`[MP Webhook Received]:`, JSON.stringify(body));
 
+        const systemToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
+        const mpToken = (systemToken || "").replace(/^["']|["']$/g, "").trim();
+
+        if (!mpToken) {
+          console.error("[MP Webhook Error]: Token MERCADO_PAGO_ACCESS_TOKEN is missing in environment.");
+          return;
+        }
+
+        // ====================================================
+        // EVENTO DE ASSINATURA (Preapproval): criação, autorização ou
+        // cancelamento da assinatura recorrente em si.
+        // ====================================================
+        const isPreapprovalEvent =
+          body.type === "subscription_preapproval" ||
+          body.topic === "subscription_preapproval" ||
+          (body.action && body.action.startsWith("subscription_preapproval"));
+
+        if (isPreapprovalEvent) {
+          const preapprovalId = body.data?.id || body.id;
+          if (!preapprovalId) return;
+
+          const preapprovalRes = await axios.get(`https://api.mercadopago.com/preapproval/${preapprovalId}`, {
+            headers: { "Authorization": `Bearer ${mpToken}` }
+          });
+          const preapprovalData = preapprovalRes.data;
+          const preapprovalStatus = preapprovalData.status; // authorized | paused | cancelled
+          const userId = preapprovalData.external_reference;
+          if (!userId || !db) return;
+
+          if (preapprovalStatus === "cancelled" || preapprovalStatus === "paused") {
+            // Assinatura cancelada/pausada: revoga o premium imediatamente.
+            const statusUpdate = {
+              mercadoPagoStatus: preapprovalStatus,
+              planType: "free",
+              plan: "free",
+              status: "inactive",
+              updatedAt: new Date().toISOString()
+            };
+            console.log(`[MP Webhook]: Preapproval ${preapprovalId} status "${preapprovalStatus}" para user ${userId}. Revogando premium.`);
+            await db.collection("users").doc(userId).set(statusUpdate, { merge: true });
+            await db.collection("usuarios").doc(userId).set(statusUpdate, { merge: true });
+          }
+          // "authorized" já é tratado no momento da criação (checkout); a
+          // confirmação contínua de cada cobrança mensal chega via "payment".
+          return;
+        }
+
+        // ====================================================
+        // EVENTO DE PAGAMENTO (cobrança única OU renovação mensal
+        // automática gerada por uma assinatura ativa)
+        // ====================================================
         let paymentId = "";
         
         // Handle standard MP Webhook topics representation
@@ -216,15 +270,6 @@ export default async function handler(req: any, res: any) {
 
         if (!paymentId) {
           console.warn("[MP Webhook Notification Warning]: Could not extract paymentId from body.");
-          return;
-        }
-
-        // Fetch official payment from Mercado Pago
-        const systemToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
-        const mpToken = (systemToken || "").replace(/^["']|["']$/g, "").trim();
-
-        if (!mpToken) {
-          console.error("[MP Webhook Error]: Token MERCADO_PAGO_ACCESS_TOKEN is missing in environment.");
           return;
         }
 
@@ -246,7 +291,21 @@ export default async function handler(req: any, res: any) {
           return;
         }
 
+        // Lê o billingCycle previamente salvo no checkout para calcular a
+        // duração correta da validade (também cobre renovações automáticas:
+        // cada nova cobrança mensal aprovada estende o premiumUntil por mais
+        // 30 dias).
+        let billingCycle: "monthly" | "annual" = "monthly";
         if (db) {
+          try {
+            const existingDoc = await db.collection("users").doc(userId).get();
+            if (existingDoc.exists && existingDoc.data()?.billingCycle === "annual") {
+              billingCycle = "annual";
+            }
+          } catch {
+            // assume mensal se não conseguir ler
+          }
+
           // Sync current status to Firestore
           const statusUpdate = {
             mercadoPagoPaymentId: paymentId,
@@ -258,7 +317,11 @@ export default async function handler(req: any, res: any) {
         }
 
         if (status === "approved") {
-          await handleApprovedUpgrade(userId);
+          const transactionAmount = billingCycle === "annual" ? PREMIUM_PRICING.annual : PREMIUM_PRICING.monthly;
+          const planDescription = billingCycle === "annual"
+            ? "Plano Premium MEI Flow - Pacote Anual (12 meses)"
+            : "Plano Premium MEI Flow - Mensal";
+          await handleApprovedUpgrade(userId, billingCycle, transactionAmount, planDescription);
         }
       } catch (innerErr: any) {
         console.error("[MP Webhook Notification Background processing Error]:", innerErr.response?.data || innerErr.message);
