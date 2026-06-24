@@ -109,6 +109,13 @@ export default function App() {
   // NOVO: ESTADOS INTEGRADOS DO FIREBASE & ISOLAMENTO DE USUÁRIOS (MULTITENANCY)
   // -------------------------------------------------------------------------
   const [user, setUser] = useState<User | null>(null);
+
+  // Detecta se o app está rodando dentro do APK nativo (via Capacitor) ou no
+  // navegador comum (web). O Capacitor injeta o objeto global window.Capacitor
+  // apenas quando empacotado como app nativo — não existe na versão web.
+  // Usado para esconder o botão "Baixar Aplicativo" quando já se está dentro
+  // do próprio app instalado (não faz sentido o app oferecer baixar a si mesmo).
+  const isNativeApp = typeof window !== "undefined" && !!(window as any).Capacitor?.isNativePlatform?.();
   const [isFirebaseSyncing, setIsFirebaseSyncing] = useState(false);
   const [showConfigGuide, setShowConfigGuide] = useState(false);
 
@@ -2426,7 +2433,8 @@ ${meiName}`;
         )}
       </main>
 
-      {/* SEÇÃO AMIGÁVEL DE ACESSO MOBILE PARA MEI FLOW */}
+      {/* SEÇÃO AMIGÁVEL DE ACESSO MOBILE PARA MEI FLOW (oculta dentro do próprio app instalado) */}
+      {!isNativeApp && (
       <div className="max-w-7xl mx-auto px-4 md:px-8 mt-12 animate-fade-in">
         <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-6 md:p-8 flex flex-col md:flex-row items-center justify-between gap-6 text-left">
           <div className="space-y-1.5 text-left">
@@ -2448,6 +2456,7 @@ ${meiName}`;
           </button>
         </div>
       </div>
+      )}
 
 
 
@@ -2475,6 +2484,7 @@ ${meiName}`;
               <AlertCircle className="w-3.5 h-3.5" />
               <span>Suporte Técnico</span>
             </button>
+            {!isNativeApp && (
             <button
               onClick={handleDownloadAPK}
               className="text-xs text-emerald-600 hover:underline font-bold transition-all cursor-pointer flex items-center gap-1"
@@ -2482,6 +2492,7 @@ ${meiName}`;
               <Smartphone className="w-3.5 h-3.5" />
               <span>Baixar App (APK)</span>
             </button>
+            )}
           </div>
         </div>
       </footer>
