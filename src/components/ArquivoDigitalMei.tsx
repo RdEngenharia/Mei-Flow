@@ -587,7 +587,8 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
             <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-950 text-white p-7 relative">
               <button
                 onClick={() => setShowFreeLockModal(false)}
-                className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-all cursor-pointer"
+                className="absolute right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-all cursor-pointer"
+                style={{ top: "calc(var(--safe-top) + 1rem)" }}
               >
                 <X className="w-5 h-5" />
               </button>
@@ -629,7 +630,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
             id="mei-arquivo-drawer-container"
           >
             {/* Header do Drawer */}
-            <div className="bg-white border-b border-slate-100 px-6 py-5 flex items-center justify-between">
+            <div className="pt-safe bg-white border-b border-slate-100 px-6 pb-5 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center border border-indigo-100">
                   <FolderOpen className="w-5 h-5 text-indigo-600" />
