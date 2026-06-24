@@ -207,7 +207,7 @@ export default function ReceiptModal({
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
         {/* Modal Header */}
-        <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+        <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
           <div className="flex items-center gap-2 text-slate-800">
             <Receipt className="w-5 h-5 text-blue-600" />
             <span className="font-bold tracking-tight">Comprovante de Operação</span>
