@@ -399,8 +399,8 @@ export default function UpgradeModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto" id="upgrade-modal-overlay">
-      <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col animate-scale-in">
+    <div className="fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-md flex items-start sm:items-center justify-center p-4 overflow-y-auto" id="upgrade-modal-overlay">
+      <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col animate-scale-in my-auto">
         
         {/* Banner Superior Premium */}
         <div className="relative bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white p-7 overflow-hidden shrink-0">
