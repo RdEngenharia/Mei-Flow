@@ -662,11 +662,27 @@ export async function saveUserProfileToFirebase(
   const path = `users/${userId}`;
   try {
     const docRef = doc(db, 'users', userId);
+
+    // PROTEÇÃO DEFENSIVA: o Firestore tem um limite de ~1 MiB por documento.
+    // Uma logo em base64 (data:image/...;base64,...) pode facilmente passar
+    // disso, travando QUALQUER atualização futura do perfil (não só a logo)
+    // até alguém limpar o campo manualmente. A logo deve sempre ser enviada
+    // ao Storage antes de chegar aqui — isto é só uma rede de segurança para
+    // nunca deixar uma string base64 bruta ser persistida no documento.
+    let safeCompanyLogo = profileData.companyLogo || '';
+    if (safeCompanyLogo.startsWith('data:') && safeCompanyLogo.length > 50000) {
+      console.error(
+        "[saveUserProfileToFirebase] companyLogo recebido como base64 bruto (tamanho:",
+        safeCompanyLogo.length,
+        "). Isso deveria ter sido convertido em URL do Storage antes de chegar aqui. Descartando para não corromper o documento."
+      );
+      safeCompanyLogo = '';
+    }
     
     const dataToSave = {
       name: profileData.meiName,
       email: auth.currentUser?.email || '',
-      logoUrl: profileData.companyLogo || '',
+      logoUrl: safeCompanyLogo,
       updatedAt: new Date().toISOString(),
       isCpfEmissor: profileData.isCpfEmissor || false,
       
@@ -676,7 +692,7 @@ export async function saveUserProfileToFirebase(
       inscricaoMunicipal: profileData.inscricaoMunicipal || '',
       telefone: profileData.telefone || '',
       asaasAccessToken: profileData.asaasAccessToken || '',
-      companyLogo: profileData.companyLogo || ''
+      companyLogo: safeCompanyLogo
     };
 
     await setDoc(docRef, dataToSave, { merge: true });
@@ -830,4 +846,3 @@ export async function onboardUserMeiWithFocusNFe(
     };
   }
 }
-
