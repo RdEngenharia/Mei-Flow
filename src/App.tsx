@@ -80,8 +80,10 @@ import {
   fetchVendasFromFirebase,
   deleteVendaFromFirebase,
   saveUserProfileToFirebase,
-  fetchUserProfileFromFirebase
+  fetchUserProfileFromFirebase,
+  storage
 } from "./firebase";
+import { ref as storageRef, uploadString, getDownloadURL } from "firebase/storage";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { onSnapshot, doc, setDoc } from "firebase/firestore";
 
@@ -611,9 +613,30 @@ export default function App() {
       setInscricaoMunicipal(newInscricao);
       setTelefonePrestador(newTelefone);
       setIsCpfEmissor(false);
-      if (logo !== undefined) {
-        setCompanyLogo(logo);
+
+      // RESOLUÇÃO DA LOGO: o Firestore tem um limite rígido de ~1 MiB por
+      // documento. Uma imagem em base64 (mesmo pequena, ~700KB+) facilmente
+      // excede esse limite, causando o erro "The value of property
+      // companyLogo is longer than 1048487 bytes" e impedindo QUALQUER
+      // atualização de perfil (não só a logo) até o usuário limpar o campo.
+      // A correção correta é nunca salvar a imagem em si no Firestore: ela
+      // vai para o Firebase Storage, e só a URL (uma string curta) é salva
+      // no documento do usuário.
+      let resolvedLogoUrl: string | undefined = logo !== undefined ? logo : companyLogo;
+
+      if (logo && logo.startsWith("data:") && user) {
+        try {
+          const logoStorageRef = storageRef(storage, `usuarios/${user.uid}/logo/company_logo.png`);
+          await uploadString(logoStorageRef, logo, "data_url");
+          resolvedLogoUrl = await getDownloadURL(logoStorageRef);
+        } catch (uploadErr) {
+          console.error("Erro ao enviar logo para o Storage:", uploadErr);
+          triggerToast("⚠ Não foi possível enviar a logo. As demais informações foram salvas normalmente.");
+          resolvedLogoUrl = companyLogo; // mantém a logo anterior em caso de falha
+        }
       }
+
+      setCompanyLogo(resolvedLogoUrl || "");
       
       localStorage.setItem("meiflow_mei_name", newName);
       localStorage.setItem("meiflow_cnpj_prestador", newCnpj);
@@ -628,7 +651,7 @@ export default function App() {
           inscricaoMunicipal: newInscricao,
           telefone: newTelefone,
           planType: planType,
-          companyLogo: logo !== undefined ? logo : companyLogo,
+          companyLogo: resolvedLogoUrl,
           isCpfEmissor: false
         });
         triggerToast("✓ Dados de perfil atualizados com sucesso e sincronizados na nuvem!");
