@@ -23,6 +23,7 @@ import {
 import { db, auth } from "../firebase";
 import { User } from "firebase/auth";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
+import { downloadRemoteFileCrossPlatform, isNativePlatform } from "../utils/nativeFile";
 
 interface DocumentoMEI {
   id: string;
@@ -185,7 +186,29 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
   }, [isAuthLoading, currentUser, selectedYear, anoMaisAntigoPermitido]);
 
   // Imprime um documento com layout otimizado para fins tributários / contabilidade
-  const handlePrintDocument = (docItem: DocumentoMEI) => {
+  const handlePrintDocument = async (docItem: DocumentoMEI) => {
+    // window.open()/window.print() não funcionam de forma confiável dentro do
+    // WebView do Capacitor no Android. Como o documento já existe como
+    // arquivo pronto (PDF ou imagem) no Storage, a forma mais simples e
+    // robusta no APK é baixar o arquivo original direto para a pasta de
+    // Downloads do celular, em vez de tentar abrir uma janela de impressão.
+    if (isNativePlatform()) {
+      setIsLoading(true);
+      try {
+        const extension = docItem.tipo?.includes("pdf") ? "pdf" : (docItem.tipo?.split("/")[1] || "jpg");
+        const safeName = (docItem.nome || `comprovante_${docItem.id}`).replace(/[^\w.\-]+/g, "_");
+        const fileName = safeName.includes(".") ? safeName : `${safeName}.${extension}`;
+        await downloadRemoteFileCrossPlatform(docItem.downloadUrl, fileName, docItem.tipo || "application/octet-stream");
+        setSuccessMsg(`"${docItem.nome}" baixado com sucesso para a pasta Downloads do seu celular.`);
+      } catch (err: any) {
+        console.error("Erro ao baixar documento no Android:", err);
+        setErrorMsg("Não foi possível baixar o documento. Verifique sua conexão e tente novamente.");
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
     const printWindow = window.open("", "_blank");
     if (!printWindow) {
       alert("Por favor, habilite a permissão de popups para imprimir seus comprovantes.");
@@ -582,8 +605,8 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
 
       {/* 1B. MODAL DE UPSELL — exibido quando o plano free clica no Arquivo Digital */}
       {showFreeLockModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full shadow-2xl border border-slate-200 overflow-hidden text-center">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-sm w-full shadow-2xl border border-slate-200 overflow-hidden text-center my-auto">
             <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-950 text-white p-7 relative">
               <button
                 onClick={() => setShowFreeLockModal(false)}
@@ -626,11 +649,13 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
       {isMobileDrawerOpen && planType === "premium" && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex justify-end transition-opacity duration-300 animate-fade-in">
           <div 
-            className="w-full max-w-2xl bg-slate-50 h-full flex flex-col shadow-2xl relative overflow-hidden"
+            className="w-full max-w-2xl bg-slate-50 h-full overflow-y-auto relative"
             id="mei-arquivo-drawer-container"
           >
-            {/* Header do Drawer */}
-            <div className="pt-safe bg-white border-b border-slate-100 px-6 pb-5 flex items-center justify-between">
+            {/* Header do Drawer (agora rola junto com o conteúdo, em vez de fixo —
+                garante que o botão de fechar nunca fique inacessível em telas onde
+                a barra de status/notch reduz o espaço disponível) */}
+            <div className="pt-safe bg-white border-b border-slate-100 px-6 pb-5 flex items-center justify-between sticky top-0 z-10">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center border border-indigo-100">
                   <FolderOpen className="w-5 h-5 text-indigo-600" />
@@ -657,7 +682,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
             </div>
 
             {/* Conteúdo das Pastas */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="p-6 space-y-6">
 
               {/* Enquanto o Firebase Auth ainda não confirmou o login, exibe um loading
                   dedicado e não renderiza pastas/erros, evitando qualquer flash de
@@ -880,11 +905,11 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
                                 <span>Visualizar</span>
                               </button>
                               
-                              {/* Botão de Impressão Especial */}
+                              {/* Botão de Impressão Especial (no APK, baixa o arquivo direto) */}
                               <button 
                                 onClick={() => handlePrintDocument(docItem)}
                                 className="w-8 h-8 bg-white border border-slate-200/80 hover:bg-emerald-50 hover:text-emerald-600 rounded-lg flex items-center justify-center shadow-xs text-slate-500 transition-all cursor-pointer"
-                                title="Imprimir Comprovante Fiscal"
+                                title={isNativePlatform() ? "Baixar Comprovante Fiscal" : "Imprimir Comprovante Fiscal"}
                               >
                                 <Printer className="w-3.5 h-3.5" />
                               </button>
@@ -920,7 +945,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
             </div>
 
             {/* Footer do Drawer com Contador Real de Documentos */}
-            <div className="bg-white px-6 py-4.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400 font-medium">
+            <div className="pb-safe bg-white px-6 pt-4.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400 font-medium">
               <span className="flex items-center gap-1.5 font-semibold text-indigo-600">
                 <span className="w-2 h-2 rounded-full bg-indigo-500 animate-ping"></span>
                 Espelho em Nuvem Sincronizado
