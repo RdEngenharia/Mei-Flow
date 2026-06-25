@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   Sparkles, 
   Plus, 
@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { db, auth, handleFirestoreError, OperationType } from "../firebase";
 import { collection, getDocs } from "firebase/firestore";
+import { saveHtmlElementAsPdf, isNativePlatform } from "../utils/nativeFile";
 import { CatalogItem, Cliente, Orcamento } from "../types";
 
 interface OrcamentoGeneratorProps {
@@ -204,7 +205,28 @@ export default function OrcamentoGenerator({
   };
 
   // Print function
-  const handlePrintQuote = () => {
+  const printableRef = useRef<HTMLDivElement>(null);
+  const [isSavingQuotePdf, setIsSavingQuotePdf] = useState(false);
+
+  const handlePrintQuote = async () => {
+    // window.print() não funciona dentro do WebView do Android (Capacitor) —
+    // não há motor de impressão do navegador nesse contexto. Nesse caso,
+    // convertemos o próprio elemento visível em PDF (via html2canvas, já
+    // incluso no jsPDF) e salvamos direto na pasta de Downloads do celular.
+    if (isNativePlatform()) {
+      if (!printableRef.current || isSavingQuotePdf) return;
+      setIsSavingQuotePdf(true);
+      try {
+        const fileName = `orcamento_${activePreviewQuote?.cliente?.nome || "mei_flow"}_${Date.now()}.pdf`
+          .replace(/\s+/g, "_");
+        await saveHtmlElementAsPdf(printableRef.current, fileName);
+      } catch (err) {
+        console.error("Erro ao gerar PDF do orçamento:", err);
+      } finally {
+        setIsSavingQuotePdf(false);
+      }
+      return;
+    }
     window.print();
   };
 
@@ -602,8 +624,8 @@ export default function OrcamentoGenerator({
 
       {/* CATALOG AUTO FILL MODAL (Premium item picker) */}
       {showCatalogModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col max-h-[500px]">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col max-h-[500px] my-auto">
             <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-indigo-600 animate-pulse" />
@@ -685,10 +707,20 @@ export default function OrcamentoGenerator({
                 <button
                   type="button"
                   onClick={handlePrintQuote}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+                  disabled={isSavingQuotePdf}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <Printer className="w-4 h-4 text-blue-100" />
-                  <span>Imprimir / Salvar PDF</span>
+                  {isSavingQuotePdf ? (
+                    <>
+                      <Loader2 className="w-4 h-4 text-blue-100 animate-spin" />
+                      <span>Salvando PDF...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Printer className="w-4 h-4 text-blue-100" />
+                      <span>Imprimir / Salvar PDF</span>
+                    </>
+                  )}
                 </button>
                 <button
                   onClick={() => setActivePreviewQuote(null)}
@@ -700,7 +732,7 @@ export default function OrcamentoGenerator({
             </div>
 
             {/* PRINT CONTAINER SHEET PANEL */}
-            <div className="p-8 md:p-12 space-y-8 bg-white font-sans text-slate-800 relative bg-[radial-gradient(#f1f5f9_1.2px,transparent_1.2px)] [background-size:16px_16px] print:p-0 print:border-0 print:shadow-none">
+            <div ref={printableRef} className="p-8 md:p-12 space-y-8 bg-white font-sans text-slate-800 relative bg-[radial-gradient(#f1f5f9_1.2px,transparent_1.2px)] [background-size:16px_16px] print:p-0 print:border-0 print:shadow-none">
               
               {/* Quote Sheet Header */}
               <div className="flex flex-col sm:flex-row justify-between items-start gap-6 border-b border-slate-300/80 pb-6">
