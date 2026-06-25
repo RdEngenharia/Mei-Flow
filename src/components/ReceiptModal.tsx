@@ -4,10 +4,11 @@
  */
 
 import React from "react";
-import { X, Printer, Receipt, FileText, CheckCircle2, Download } from "lucide-react";
+import { X, Printer, Receipt, FileText, CheckCircle2, Download, Loader2 } from "lucide-react";
 import { Transacao } from "../types";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import { savePdfCrossPlatform, isNativePlatform } from "../utils/nativeFile";
 
 interface ReceiptModalProps {
   transaction: Transacao | null;
@@ -38,8 +39,17 @@ export default function ReceiptModal({
 
   const [formaPgto, setFormaPgto] = React.useState<string>(transaction.formaPagamento || "Pix");
   const [parcelado, setParcelado] = React.useState<string>("Não (À vista)");
+  const [isSavingPdf, setIsSavingPdf] = React.useState(false);
 
   const handlePrint = () => {
+    // window.print() não é suportado dentro do WebView do Android (Capacitor) —
+    // o diálogo de impressão do sistema simplesmente não existe nesse contexto.
+    // Nesse caso, direcionamos o usuário para baixar o PDF, que ele pode então
+    // imprimir através de outro app (leitor de PDF, Google Drive, etc).
+    if (isNativePlatform()) {
+      handleDownload();
+      return;
+    }
     try {
       window.print();
     } catch (e) {
@@ -47,7 +57,9 @@ export default function ReceiptModal({
     }
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
+    if (isSavingPdf) return;
+    setIsSavingPdf(true);
     try {
       const doc = new jsPDF();
       const isEntrada = transaction.tipo === "entrada";
@@ -195,17 +207,19 @@ export default function ReceiptModal({
         doc.text("Gerado eletronicamente via MEI Flow • Ative o Premium para usar sua própria logo", 105, 287, { align: "center" });
       }
 
-      doc.save(`comprovante_mei_flow_${transaction.id}.pdf`);
+      await savePdfCrossPlatform(doc, `comprovante_mei_flow_${transaction.id}.pdf`);
     } catch (err) {
       console.error("Erro ao gerar PDF:", err);
+    } finally {
+      setIsSavingPdf(false);
     }
   };
 
   const isEntrada = transaction.tipo === "entrada";
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh] my-auto">
         {/* Modal Header */}
         <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
           <div className="flex items-center gap-2 text-slate-800">
@@ -379,9 +393,18 @@ export default function ReceiptModal({
           
           <button
             onClick={handleDownload}
-            className="flex-1 sm:flex-initial bg-slate-900 hover:bg-slate-800 text-white font-bold py-2 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all text-xs shadow-md cursor-pointer"
+            disabled={isSavingPdf}
+            className="flex-1 sm:flex-initial bg-slate-900 hover:bg-slate-800 text-white font-bold py-2 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all text-xs shadow-md cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            <Download className="w-4 h-4" /> Baixar Comprovante (PDF)
+            {isSavingPdf ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" /> Salvando...
+              </>
+            ) : (
+              <>
+                <Download className="w-4 h-4" /> Baixar Comprovante (PDF)
+              </>
+            )}
           </button>
 
           <button
