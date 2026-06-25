@@ -15,6 +15,7 @@ import {
   Lock 
 } from "lucide-react";
 import { auth } from "../firebase";
+import { getApiUrl } from "../utils/nativeFile";
 
 interface UpgradeModalProps {
   isOpen: boolean;
@@ -99,13 +100,9 @@ export default function UpgradeModal({
 
   const activeUserId = propUserId || auth.currentUser?.uid || "user_49281";
 
-  const getApiUrl = (path: string): string => {
-    // Dynamic absolute resolution for production build / client env compatibility
-    if (typeof window !== "undefined" && window.location) {
-      return `${window.location.origin}${path}`;
-    }
-    return `https://mei-flow-flax.vercel.app${path}`;
-  };
+  // getApiUrl agora vem de "../utils/nativeFile" — resolve corretamente tanto
+  // na web quanto dentro do APK nativo (onde window.location.origin sempre
+  // seria "https://localhost", o que quebrava silenciosamente os pagamentos).
 
   // Busca os preços reais do backend ao abrir o modal, em vez de usar valores
   // hardcoded — garante que o front nunca fique desatualizado em relação ao
