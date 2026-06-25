@@ -50,8 +50,8 @@ export default function DasnModal({ cnpjUsuario, onClose, triggerToast }: DasnMo
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-slate-200/80 overflow-hidden text-left animate-in fade-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-slate-200/80 overflow-hidden text-left animate-in fade-in zoom-in-95 duration-200 my-auto">
         
         {/* Header */}
         <div className="pt-safe px-6 pb-5 bg-slate-50 border-b border-slate-200/60 flex items-center justify-between">
