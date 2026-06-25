@@ -27,13 +27,13 @@
 /* Aplicar no topo de qualquer cabeçalho fixo (modal, drawer) para garantir
    que o conteúdo (ex: botão de fechar) nunca fique atrás da barra de status. */
 .pt-safe {
-  padding-top: calc(var(--safe-top) + 0.75rem);
+  padding-top: calc(var(--safe-top) + 1rem);
 }
 
 /* Aplicar no rodapé de qualquer rodapé fixo (botões de ação, footer de modal)
    para garantir que não fique atrás da barra de navegação/gestos do Android. */
 .pb-safe {
-  padding-bottom: calc(var(--safe-bottom) + 0.75rem);
+  padding-bottom: calc(var(--safe-bottom) + 1rem);
 }
 
 .pl-safe {
