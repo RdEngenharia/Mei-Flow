@@ -23,7 +23,7 @@ import {
 import { db, auth } from "../firebase";
 import { User } from "firebase/auth";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
-import { downloadRemoteFileCrossPlatform, isNativePlatform } from "../utils/nativeFile";
+import { downloadRemoteFileCrossPlatform, isNativePlatform, getApiUrl } from "../utils/nativeFile";
 
 interface DocumentoMEI {
   id: string;
@@ -375,7 +375,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
 
       // 1. Tentar upload de alta performance por URL assinada no Storage
       try {
-        const signedResponse = await fetch("/api/documentos/upload", {
+        const signedResponse = await fetch(getApiUrl("/api/documentos/upload"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
@@ -420,7 +420,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
 
       // 2. Fallback caso falhe o upload assinado
       if (!uploadSucceeded) {
-        const uploadResponse = await fetch("/api/documentos/upload", {
+        const uploadResponse = await fetch(getApiUrl("/api/documentos/upload"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
@@ -486,7 +486,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
       // pelo backend, via Admin SDK. As Storage Rules do projeto bloqueiam
       // propositalmente qualquer "write" (e portanto "delete") direto do client,
       // então tentar deleteObject() aqui sempre resultaria em "storage/unauthorized".
-      const response = await fetch("/api/documentos/delete", {
+      const response = await fetch(getApiUrl("/api/documentos/delete"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
