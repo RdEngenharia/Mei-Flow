@@ -42,12 +42,12 @@ export function isNativePlatform(): boolean {
  */
 export function getApiUrl(path: string): string {
   if (isNativePlatform()) {
-    return `https://mei-flow-flax.vercel.app${path}`;
+    return `https://meiflow.rdhomologacao.com.br${path}`;
   }
   if (typeof window !== "undefined" && window.location) {
     return `${window.location.origin}${path}`;
   }
-  return `https://mei-flow-flax.vercel.app${path}`;
+  return `https://meiflow.rdhomologacao.com.br${path}`;
 }
 
 /**
