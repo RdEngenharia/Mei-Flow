@@ -18,6 +18,7 @@ import {
   EyeOff,
   CheckCircle2,
   FileDown,
+  Loader2,
   Download,
   Check,
   Smartphone,
@@ -56,6 +57,7 @@ import DasModal from "./components/DasModal";
 import DasnModal from "./components/DasnModal";
 import ArquivoDigitalMei from "./components/ArquivoDigitalMei";
 import { jsPDF } from "jspdf";
+import { savePdfCrossPlatform, isNativePlatform } from "./utils/nativeFile";
 import autoTable from "jspdf-autotable";
 
 // IMPORTAÇÕES DO FIREBASE AUTH & FIRESTORE PARA SEGURANÇA MULTI-USUÁRIO
@@ -116,6 +118,7 @@ export default function App() {
   // Usado para esconder o botão "Baixar Aplicativo" quando já se está dentro
   // do próprio app instalado (não faz sentido o app oferecer baixar a si mesmo).
   const isNativeApp = typeof window !== "undefined" && !!(window as any).Capacitor?.isNativePlatform?.();
+  const [isSavingPdf, setIsSavingPdf] = useState(false);
   const [isFirebaseSyncing, setIsFirebaseSyncing] = useState(false);
   const [showConfigGuide, setShowConfigGuide] = useState(false);
 
@@ -721,7 +724,7 @@ export default function App() {
 
   // Download do APK real, hospedado nas GitHub Releases do projeto
   const handleDownloadAPK = () => {
-    const apkUrl = "https://github.com/RdEngenharia/Mei-Flow/releases/download/v1.0.1/app-debug.apk";
+    const apkUrl = "https://github.com/RdEngenharia/Mei-Flow/releases/download/v1.0.2/app-debug.apk";
     const link = document.createElement("a");
     link.href = apkUrl;
     link.download = "meiflow.apk";
@@ -730,9 +733,11 @@ export default function App() {
   };
 
   // Download do PDF (geração real de arquivo PDF formatado como comprovante oficial)
-  const handleDownloadPDF = (tx: Transacao, e?: React.MouseEvent) => {
+  const handleDownloadPDF = async (tx: Transacao, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    
+    if (isSavingPdf) return;
+    setIsSavingPdf(true);
+
     try {
       const doc = new jsPDF();
       
@@ -859,11 +864,13 @@ export default function App() {
         doc.text("Gerado automaticamente via MEI Flow - Ative o Premium para usar sua própria logo.", 15, disclaimerY + 9);
       }
 
-      doc.save(`comprovante_mei_${tx.id}.pdf`);
+      await savePdfCrossPlatform(doc, `comprovante_mei_${tx.id}.pdf`);
       triggerToast(`✓ Comprovante em PDF de alta qualidade para ${tx.id} gerado e baixado!`);
     } catch (err) {
       console.error("Erro ao gerar PDF:", err);
       triggerToast("⚠ Ocorreu um erro ao gerar o comprovante em PDF.");
+    } finally {
+      setIsSavingPdf(false);
     }
   };
 
@@ -916,7 +923,9 @@ export default function App() {
   };
 
   // Exportar todas as transações para relatório PDF profissional consolidado do MEI
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
+    if (isSavingPdf) return;
+    setIsSavingPdf(true);
     try {
       const doc = new jsPDF();
       
@@ -1160,11 +1169,13 @@ export default function App() {
         doc.text("Gerado eletronicamente via MEI Flow • Ative o Premium para usar sua própria logo", 105, 287, { align: "center" });
       }
 
-      doc.save(`relatorio_faturamento_mei_flow.pdf`);
+      await savePdfCrossPlatform(doc, `relatorio_faturamento_mei_flow.pdf`);
       triggerToast("✓ Relatório Fiscal Completo em PDF emitido e baixado com sucesso!");
     } catch (err) {
       console.error("Erro ao exportar PDF:", err);
       triggerToast("⚠ Ocorreu um erro ao exportar o relatório consolidado em PDF.");
+    } finally {
+      setIsSavingPdf(false);
     }
   };
 
@@ -2277,11 +2288,21 @@ ${meiName}`;
 
                   <button
                     onClick={handleExportPDF}
-                    className="px-4 py-2 bg-slate-950 hover:bg-slate-900 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 border border-slate-950 transition-all shadow-md cursor-pointer"
+                    disabled={isSavingPdf}
+                    className="px-4 py-2 bg-slate-950 hover:bg-slate-900 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 border border-slate-950 transition-all shadow-md cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                     title="Baixar Livro Caixa Consolidado em PDF"
                   >
-                    <FileDown className="w-3.5 h-3.5 text-slate-350" />
-                    <span>Baixar PDF</span>
+                    {isSavingPdf ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 text-slate-350 animate-spin" />
+                        <span>Salvando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <FileDown className="w-3.5 h-3.5 text-slate-350" />
+                        <span>Baixar PDF</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
@@ -2515,8 +2536,8 @@ ${meiName}`;
       
       {/* MODAL 1: REGISTRAR VENDA (ENTRADA) */}
       {showVendaModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden my-auto">
             <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
@@ -2650,8 +2671,8 @@ ${meiName}`;
 
       {/* MODAL 2: ADICIONAR DESPESA (SAÍDA/DESPESA) */}
       {showDespesaModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden my-auto">
             <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
@@ -2770,8 +2791,8 @@ ${meiName}`;
 
       {/* MODAL 3: CADASTRAR CLIENTE */}
       {showClienteModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden my-auto">
             <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
                 <UserPlus className="w-5 h-5 text-blue-600" />
@@ -3014,8 +3035,8 @@ ${meiName}`;
 
       {/* MODAL 5: REGISTRO E LOGIN MEI (EMAIL/SENHA & GOOGLE) */}
       {showAuthModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-sm w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-sm w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col my-auto">
             
             {/* Header */}
             <div className="pt-safe px-6 pb-4 bg-slate-900 text-white flex items-center justify-between">
@@ -3334,8 +3355,8 @@ ${meiName}`;
 
       {/* MODAL SUPORTE TÉCNICO (MENSAGENS ROBUSTAS INTEGRADAS DE DIAGNÓSTICO) */}
       {showSupportModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden text-left">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden text-left my-auto">
             <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
                 <AlertCircle className="w-5 h-5 text-red-600 animate-pulse" />
