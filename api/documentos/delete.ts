@@ -80,6 +80,15 @@ if (adminApp) {
 }
 
 export default async function handler(req: any, res: any) {
+  // CORS: necessário para o app empacotado como APK (Capacitor), que chama
+  // a API a partir da origem fixa "https://localhost".
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
   if (req.method !== "POST") {
     return res.status(405).json({ success: false, message: "Method not allowed. Use POST." });
   }

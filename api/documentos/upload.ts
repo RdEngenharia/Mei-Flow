@@ -118,6 +118,21 @@ export const config = {
 };
 
 export default async function handler(req: any, res: any) {
+  // CORS: necessário para que o app empacotado como APK (Capacitor) consiga
+  // chamar esta API. Dentro do WebView do Android, a página é servida a
+  // partir da origem fixa "https://localhost" — diferente do domínio real
+  // (meiflow.rdhomologacao.com.br) usado na versão web. Sem esses headers,
+  // o navegador bloqueia a requisição no preflight (OPTIONS) antes mesmo
+  // dela chegar à lógica da rota, com o erro:
+  // "No 'Access-Control-Allow-Origin' header is present on the requested resource".
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
   if (req.method !== "POST") {
     return res.status(405).json({ success: false, error: "Method not allowed. Use POST." });
   }

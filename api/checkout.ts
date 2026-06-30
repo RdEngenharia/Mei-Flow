@@ -170,6 +170,15 @@ async function handleApprovedUpgrade(userId: string, existingProfile: any, trans
 }
 
 export default async function handler(req: any, res: any) {
+  // CORS: necessário para o app empacotado como APK (Capacitor), que chama
+  // a API a partir da origem fixa "https://localhost".
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
   if (req.method === "GET") {
     return res.status(200).json({
       publicKey: process.env.NEXT_PUBLIC_MP_PUBLIC_KEY || "",
