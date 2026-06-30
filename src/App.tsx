@@ -354,44 +354,21 @@ export default function App() {
             setTransacoes(mergedTransacoes);
             triggerToast(`✓ Conexão estável! Lançamentos carregados com sucesso.`);
           } else {
-            // Se cloud estiver vazia, realizamos o upload amigável das informações locais atuais para o Firebase (Facilita a transição)
-            // Para evitar colisões de ID de sementes compartilhadas (ex: cli_1, tx_1), mapeamos os IDs para incluir o UID do usuário.
-            const mappedClientes = clientes.map(c => {
-              const needsMapping = c.id.startsWith("cli_") && !c.id.includes(currentUser.uid);
-              return needsMapping ? { ...c, id: `${c.id}_${currentUser.uid}` } : c;
-            });
-
-            const mappedTransacoes = transacoes.map(tx => {
-              const txNeedsMapping = tx.id.startsWith("tx_") && !tx.id.includes(currentUser.uid);
-              const nextTxId = txNeedsMapping ? `${tx.id}_${currentUser.uid}` : tx.id;
-              
-              let nextClienteId = tx.clienteId;
-              if (tx.clienteId && tx.clienteId.startsWith("cli_") && !tx.clienteId.includes(currentUser.uid)) {
-                nextClienteId = `${tx.clienteId}_${currentUser.uid}`;
-              }
-              
-              return { ...tx, id: nextTxId, clienteId: nextClienteId };
-            });
-
-            // Atualiza o estado em tempo real para refletir os novos IDs que serão persistidos de forma segura
-            setClientes(mappedClientes);
-            setTransacoes(mappedTransacoes);
-
-            if (mappedClientes.length > 0) {
-              for (const c of mappedClientes) {
-                await saveClienteToFirebase(currentUser.uid, c);
-              }
-            }
-            if (mappedTransacoes.length > 0) {
-              for (const tx of mappedTransacoes) {
-                if (tx.tipo === "entrada") {
-                  await saveVendaToFirebase(currentUser.uid, tx);
-                } else {
-                  await saveTransacaoToFirebase(currentUser.uid, tx);
-                }
-              }
-            }
-            triggerToast(`✓ Sincronização inicial! Seus dados offline foram isolados com segurança na nuvem.`);
+            // O Firestore é a fonte da verdade: se ele retornar vazio para este
+            // usuário, o estado correto é "sem dados" — mesmo que o cache local
+            // (localStorage) deste dispositivo específico ainda tenha dados
+            // antigos. NUNCA reenviamos o cache local de volta automaticamente
+            // aqui: isso causava um bug grave em que dados apagados de propósito
+            // pelo usuário (em outro dispositivo, ex: na versão web) "reviviam"
+            // sozinhos sempre que o app era aberto num aparelho com cache antigo
+            // (ex: o celular), porque o Firestore vazio era tratado como
+            // "primeira sincronização" em vez de "o usuário esvaziou os dados".
+            setClientes([]);
+            setTransacoes([]);
+            // Garante que o cache local deste dispositivo também fique
+            // sincronizado com o estado vazio real do servidor.
+            localStorage.removeItem("meiflow_clientes");
+            localStorage.removeItem("meiflow_transacoes");
           }
         } catch (err: any) {
           console.error("Falha ao ler dados do Firestore:", err);
