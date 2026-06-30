@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+﻿import React, { useState } from "react";
 import { X, Building, Check, Search, Sparkles, KeyRound, ChevronRight } from "lucide-react";
 
 interface MeiConfigModalProps {
@@ -55,69 +55,44 @@ export default function MeiConfigModal({
   const handleLookupCnpj = async () => {
     const cleaned = cnpj.replace(/\D/g, "");
     if (cleaned.length !== 14) {
-      setSearchError("Por favor, digite um CNPJ válido com 14 dígitos.");
+      setSearchError("Por favor, digite um CNPJ vÃ¡lido com 14 dÃ­gitos.");
       return;
     }
     setSearchingCnpj(true);
     setSearchError("");
 
     try {
-      let data: any = null;
-      let ok = false;
+      // Consulta via rota prÃ³pria do backend (em vez de chamar BrasilAPI/Speedio
+      // diretamente do navegador), porque dentro do APK (Capacitor) a origem
+      // "https://localhost" Ã© bloqueada pelo CORS dessas APIs externas, sobre o
+      // qual nÃ£o temos controle. Nossa rota faz essa consulta servidor-a-servidor.
+      const isNative = typeof window !== "undefined" && !!(window as any).Capacitor?.isNativePlatform?.();
+      const apiBase = isNative ? "https://meiflow.rdhomologacao.com.br" : window.location.origin;
+      const response = await fetch(`${apiBase}/api/cnpj/lookup?cnpj=${cleaned}`);
+      const data = await response.json();
 
-      // Try BrasilAPI first
-      try {
-        const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cleaned}`);
-        if (response.ok) {
-          data = await response.json();
-          ok = true;
-        }
-      } catch (e) {
-        console.warn("[MeiConfig Fetch] BrasilAPI bypassed:", e);
-      }
-
-      // Try Speedio as fallback
-      if (!ok) {
-        try {
-          const response = await fetch(`https://api-publica.speedio.com.br/buscarcnpj?cnpj=${cleaned}`);
-          if (response.ok) {
-            const speedioData = await response.json();
-            if (speedioData && !speedioData.error) {
-              data = {
-                nome_fantasia: speedioData["NOME FANTASIA"] || speedioData["RAZAO SOCIAL"],
-                razao_social: speedioData["RAZAO SOCIAL"],
-                ddd_telefone_1: speedioData["TELEFONE"] || ""
-              };
-              ok = true;
-            }
-          }
-        } catch (e) {
-          console.warn("[MeiConfig Fetch] Speedio bypassed:", e);
-        }
-      }
-
-      if (ok && data) {
-        if (data.razao_social || data.nome_fantasia) {
-          const finalName = data.nome_fantasia || data.razao_social;
+      if (response.ok && data.success) {
+        const finalName = data.nome_fantasia || data.razao_social;
+        if (finalName) {
           setName(finalName);
-          
-          if (data.ddd_telefone_1) {
-            const rawTel = data.ddd_telefone_1.replace(/\D/g, "");
-            if (rawTel.length >= 10) {
-              setTelefone(`(${rawTel.substring(0, 2)}) ${rawTel.substring(2, 6)}-${rawTel.substring(6)}`);
-            } else {
-              setTelefone(data.ddd_telefone_1);
-            }
+        }
+        if (data.ddd_telefone_1) {
+          const rawTel = data.ddd_telefone_1.replace(/\D/g, "");
+          if (rawTel.length >= 10) {
+            setTelefone(`(${rawTel.substring(0, 2)}) ${rawTel.substring(2, 6)}-${rawTel.substring(6)}`);
+          } else {
+            setTelefone(data.ddd_telefone_1);
           }
-        } else {
+        }
+        if (!finalName) {
           setSearchError("Dados obtidos incompletos, preencha manualmente.");
         }
       } else {
-        setSearchError("Não foi possível buscar automaticamente. Por favor, digite os dados abaixo.");
+        setSearchError("NÃ£o foi possÃ­vel buscar automaticamente. Por favor, digite os dados abaixo.");
       }
     } catch (err: any) {
       console.warn("[MeiConfig lookup bypassed gracefully]");
-      setSearchError("Não foi possível buscar automaticamente. Por favor, digite os dados abaixo.");
+      setSearchError("NÃ£o foi possÃ­vel buscar automaticamente. Por favor, digite os dados abaixo.");
     } finally {
       setSearchingCnpj(false);
     }
@@ -137,27 +112,27 @@ export default function MeiConfigModal({
         <div className="pt-safe px-6 pb-4 bg-slate-900 text-white flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Building className="w-4 h-4 text-blue-400" />
-            <h3 className="font-bold text-xs tracking-tight uppercase">Configurações do MEI</h3>
+            <h3 className="font-bold text-xs tracking-tight uppercase">ConfiguraÃ§Ãµes do MEI</h3>
           </div>
           <button
             onClick={onClose}
             className="text-slate-400 hover:text-white p-1 rounded font-bold text-sm cursor-pointer"
           >
-            ✕
+            âœ•
           </button>
         </div>
 
         {/* Content */}
         <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
           <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
-            Preencha os dados do seu CNPJ MEI. Estas informações são utilizadas para a identificação da sua atividade em recibos, relatórios e emissões de notas fiscais.
+            Preencha os dados do seu CNPJ MEI. Estas informaÃ§Ãµes sÃ£o utilizadas para a identificaÃ§Ã£o da sua atividade em recibos, relatÃ³rios e emissÃµes de notas fiscais.
           </p>
 
           {/* AUTO LOOKUP CNPJ PANEL */}
           <div className="p-3 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-100/60 rounded-xl space-y-2">
             <div className="flex items-center gap-1.5 text-blue-800 font-bold text-[10px] uppercase tracking-wide">
               <Sparkles className="w-3.5 h-3.5 text-blue-600 animate-pulse" />
-              <span>Consulta de CNPJ Automática</span>
+              <span>Consulta de CNPJ AutomÃ¡tica</span>
             </div>
             
             <div className="flex gap-1.5">
@@ -189,28 +164,28 @@ export default function MeiConfigModal({
               <p className="text-[9px] text-rose-500 font-bold leading-tight">{searchError}</p>
             ) : (
               <p className="text-[9px] text-slate-400 font-medium leading-tight">
-                Insira apenas números e clique em buscar para preencher Razão Social e Telefone de forma instantânea.
+                Insira apenas nÃºmeros e clique em buscar para preencher RazÃ£o Social e Telefone de forma instantÃ¢nea.
               </p>
             )}
           </div>
 
           <div>
             <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
-              Razão Social (Nome da Empresa) *
+              RazÃ£o Social (Nome da Empresa) *
             </label>
             <input
               type="text"
               required
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Ex: João da Silva MEI"
+              placeholder="Ex: JoÃ£o da Silva MEI"
               className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white"
             />
           </div>
 
           <div>
             <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
-              Inscrição Municipal (IM)
+              InscriÃ§Ã£o Municipal (IM)
             </label>
             <input
               type="text"
@@ -237,7 +212,7 @@ export default function MeiConfigModal({
           {/* LOGOTIPO DA EMPRESA */}
           <div className="pt-2 border-t border-slate-100">
             <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1 flex items-center justify-between">
-              <span>Logotipo da Empresa {planType === "free" ? "🔒" : ""}</span>
+              <span>Logotipo da Empresa {planType === "free" ? "ðŸ”’" : ""}</span>
               {planType === "free" && (
                 <span className="text-[8px] text-blue-600 font-bold lowercase bg-blue-50 px-1.5 py-0.5 rounded-full">premium</span>
               )}
@@ -249,8 +224,8 @@ export default function MeiConfigModal({
                 className="w-full bg-slate-50 border border-dashed border-slate-200 text-slate-400 rounded-xl py-3 px-3 text-center text-xs cursor-pointer hover:bg-blue-50/50 hover:border-blue-200 transition-all flex flex-col items-center gap-1"
                 id="logo-upload-locked-trigger"
               >
-                <div className="font-bold text-xs text-slate-600">🔒 Configurar Logo Personalizada</div>
-                <div className="text-[9px] text-slate-400">Exclusivo para usuários Premium</div>
+                <div className="font-bold text-xs text-slate-600">ðŸ”’ Configurar Logo Personalizada</div>
+                <div className="text-[9px] text-slate-400">Exclusivo para usuÃ¡rios Premium</div>
               </div>
             ) : (
               <div className="space-y-2">
@@ -285,10 +260,10 @@ export default function MeiConfigModal({
             )}
           </div>
 
-          {/* SEGURANÇA DA CONTA */}
+          {/* SEGURANÃ‡A DA CONTA */}
           <div className="pt-2 border-t border-slate-100">
             <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
-              Segurança da Conta
+              SeguranÃ§a da Conta
             </label>
             <button
               type="button"
@@ -321,7 +296,7 @@ export default function MeiConfigModal({
               ) : (
                 <>
                   <Check className="w-3.5 h-3.5" />
-                  <span>Salvar Alterações</span>
+                  <span>Salvar AlteraÃ§Ãµes</span>
                 </>
               )}
             </button>
@@ -331,3 +306,4 @@ export default function MeiConfigModal({
     </div>
   );
 }
+
