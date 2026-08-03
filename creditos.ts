@@ -79,7 +79,7 @@
 import axios from "axios";
 import https from "https";
 import crypto from "crypto";
-import { getAuth } from "firebase-admin/auth";
+import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
 
 const env = (k: string) => (process.env[k] || "").trim();
 const APP_URL = env("APP_URL") || "https://meiflow.rdhomologacao.com.br";
@@ -321,14 +321,9 @@ export async function estornarCredito(
 // ============================================================================
 
 async function exigirUsuario(req: any): Promise<string> {
-  const h = String(req.headers.authorization || "");
-  const idToken = h.startsWith("Bearer ") ? h.slice(7) : "";
-  if (!idToken) throw new Error("NAO_AUTENTICADO");
-  try {
-    return (await getAuth().verifyIdToken(idToken)).uid;
-  } catch {
-    throw new Error("NAO_AUTENTICADO");
-  }
+  // Verificacao feita em auth-firebase.ts, sem firebase-admin/auth:
+  // aquele pacote arrasta jwks-rsa + jose 6, que quebram na Vercel.
+  return verificarLogin(req);
 }
 
 function explicar(err: any): { status: number; mensagem: string } {

@@ -50,7 +50,7 @@
 import axios from "axios";
 import https from "https";
 import crypto from "crypto";
-import { getAuth } from "firebase-admin/auth";
+import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
 
 /** URL pública do sistema — usada em webhooks e no retorno do banco. */
 export const APP_URL = process.env.APP_URL || "https://meiflow.rdhomologacao.com.br";
@@ -159,15 +159,9 @@ export function getEfiAgent(): https.Agent {
  * Substitui o padrão inseguro de confiar num userId vindo no corpo da requisição.
  */
 async function exigirUsuarioAutenticado(req: any): Promise<string> {
-  const header = String(req.headers.authorization || "");
-  const idToken = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (!idToken) throw new Error("NAO_AUTENTICADO");
-  try {
-    const decoded = await getAuth().verifyIdToken(idToken);
-    return decoded.uid;
-  } catch {
-    throw new Error("NAO_AUTENTICADO");
-  }
+  // Verificacao feita em auth-firebase.ts, sem firebase-admin/auth:
+  // aquele pacote arrasta jwks-rsa + jose 6, que quebram na Vercel.
+  return verificarLogin(req);
 }
 
 // ============================================================================

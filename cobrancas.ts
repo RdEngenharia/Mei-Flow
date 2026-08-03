@@ -30,7 +30,7 @@
  * Nenhuma variável de ambiente é necessária.
  */
 
-import { getAuth } from "firebase-admin/auth";
+import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
 
 // ============================================================================
 // CLASSIFICAÇÃO DE STATUS
@@ -58,14 +58,9 @@ export function classificar(status: string, diasParaVencer: number): Situacao {
 // ============================================================================
 
 async function exigirUsuario(req: any): Promise<string> {
-  const h = String(req.headers.authorization || "");
-  const idToken = h.startsWith("Bearer ") ? h.slice(7) : "";
-  if (!idToken) throw new Error("NAO_AUTENTICADO");
-  try {
-    return (await getAuth().verifyIdToken(idToken)).uid;
-  } catch {
-    throw new Error("NAO_AUTENTICADO");
-  }
+  // Verificacao feita em auth-firebase.ts, sem firebase-admin/auth:
+  // aquele pacote arrasta jwks-rsa + jose 6, que quebram na Vercel.
+  return verificarLogin(req);
 }
 
 /**
