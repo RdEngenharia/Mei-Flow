@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/api/efi/:path*", "destination": "/api/mf?__rota=efi/:path*" },
+    { "source": "/api/cobrancas/:path*", "destination": "/api/mf?__rota=cobrancas/:path*" },
+    { "source": "/api/creditos/:path*", "destination": "/api/mf?__rota=creditos/:path*" }
+  ]
+}
