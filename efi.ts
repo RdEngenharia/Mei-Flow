@@ -522,6 +522,50 @@ export function registrarRotasEfi(
       const tel = String(cliente.telefone || "").replace(/\D/g, "");
       if (tel.length >= 10) customer.phone_number = tel;
 
+      // ----------------------------------------------------------------------
+      // ENDEREÇO — exigência do boleto registrado.
+      //
+      // Em homologação a Efí aceita sem, mas em PRODUÇÃO o boleto é registrado
+      // no banco e a legislação exige o endereço do pagador. Sem ele a emissão
+      // é recusada. Usa o que já está salvo no cliente; se vier um novo no
+      // pedido, ele tem prioridade e fica gravado para as próximas vezes.
+      // ----------------------------------------------------------------------
+      const end = { ...(cliente.endereco || {}), ...(req.body.endereco || {}) };
+      const cep = String(end.cep || end.zipcode || "").replace(/\D/g, "");
+      const completo =
+        cep.length === 8 && end.logradouro && end.numero && end.bairro && end.cidade && end.uf;
+
+      if (completo) {
+        customer.address = {
+          street: String(end.logradouro).slice(0, 200),
+          number: String(end.numero).slice(0, 10),
+          neighborhood: String(end.bairro).slice(0, 100),
+          zipcode: cep,
+          city: String(end.cidade).slice(0, 100),
+          state: String(end.uf).toUpperCase().slice(0, 2),
+          ...(end.complemento ? { complement: String(end.complemento).slice(0, 100) } : {}),
+        };
+
+        // Guarda no cliente para não pedir de novo na próxima emissão.
+        if (req.body.endereco) {
+          const dados = { cep, logradouro: end.logradouro, numero: end.numero,
+            bairro: end.bairro, cidade: end.cidade, uf: String(end.uf).toUpperCase(),
+            complemento: end.complemento || "" };
+          for (const col of ["customers", "clientes"]) {
+            await db.collection(col).doc(String(customerId))
+              .set({ endereco: dados }, { merge: true }).catch(() => {});
+          }
+        }
+      } else if (process.env.EFI_SANDBOX === "false") {
+        // Só bloqueia em produção — em homologação deixa testar sem endereço.
+        return res.status(400).json({
+          success: false,
+          precisaEndereco: true,
+          mensagem:
+            "Para emitir boleto em produção o banco exige o endereço do cliente. Preencha CEP, rua, número, bairro, cidade e estado.",
+        });
+      }
+
       const payload = {
         items: itens.map((it: any) => ({
           name: String(it.nome || it.name || "Serviço").slice(0, 255),
@@ -589,11 +633,28 @@ export function registrarRotasEfi(
       if (err.message === "NAO_AUTENTICADO") {
         return res.status(401).json({ success: false, mensagem: "Faça login para emitir boletos." });
       }
+      console.error("[Efí Boleto]", err.response?.data || err.message);
+
+      // 401 = a Efí recusou as credenciais. A causa quase sempre é a mesma:
+      // o par de chaves não corresponde ao ambiente configurado. As chaves de
+      // homologação NÃO funcionam em produção, e vice-versa.
+      if (err.response?.status === 401) {
+        const ambiente = process.env.EFI_SANDBOX !== "false" ? "Homologação" : "Produção";
+        return res.status(401).json({
+          success: false,
+          mensagem:
+            `A Efí recusou as credenciais. O sistema está configurado para ${ambiente}, ` +
+            `então EFI_CLIENT_ID e EFI_CLIENT_SECRET precisam ser o par de ${ambiente}. ` +
+            `Confira no painel da Efí e lembre de fazer Redeploy na Vercel depois de alterar.`,
+          ambiente,
+        });
+      }
+
       const detalhe =
         err.response?.data?.error_description?.message ||
         err.response?.data?.error_description ||
+        err.response?.data?.errors?.[0]?.message ||
         err.message;
-      console.error("[Efí Boleto]", err.response?.data || err.message);
       res.status(500).json({ success: false, mensagem: `Erro ao gerar boleto: ${detalhe}` });
     }
   });

@@ -61,6 +61,35 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
   const [descricao, setDescricao] = useState("");
   const [gerado, setGerado] = useState<any>(null);
 
+  // Endereço: só aparece quando o banco exige (boleto registrado em produção).
+  const [pedirEndereco, setPedirEndereco] = useState(false);
+  const [end, setEnd] = useState({ cep: "", logradouro: "", numero: "", bairro: "", cidade: "", uf: "" });
+  const [buscandoCep, setBuscandoCep] = useState(false);
+
+  /** Preenche o endereço pelo CEP, para o usuário digitar o mínimo. */
+  const buscarCep = async (cepDigitado: string) => {
+    const cep = cepDigitado.replace(/\D/g, "");
+    if (cep.length !== 8) return;
+    setBuscandoCep(true);
+    try {
+      const r = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+      const d = await r.json();
+      if (!d.erro) {
+        setEnd((a) => ({
+          ...a, cep,
+          logradouro: d.logradouro || a.logradouro,
+          bairro: d.bairro || a.bairro,
+          cidade: d.localidade || a.cidade,
+          uf: d.uf || a.uf,
+        }));
+      }
+    } catch {
+      /* sem internet ou CEP fora do ar: o usuário preenche à mão */
+    } finally {
+      setBuscandoCep(false);
+    }
+  };
+
   const carregar = useCallback(async () => {
     setCarregando(true);
     setErro(null);
@@ -107,10 +136,15 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
           vencimento,
           itens: [{ nome: descricao || "Serviço prestado", valor: valorNum, quantidade: 1 }],
           mensagem: descricao || undefined,
+          ...(pedirEndereco ? { endereco: end } : {}),
         }),
       });
       const d = await r.json();
-      if (!d.success) throw new Error(d.mensagem || "Falha ao gerar o boleto.");
+      if (!d.success) {
+        // O banco exige endereço do pagador no boleto registrado.
+        if (d.precisaEndereco) setPedirEndereco(true);
+        throw new Error(d.mensagem || "Falha ao gerar o boleto.");
+      }
 
       setGerado(d);
       setValor("");
@@ -347,6 +381,64 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
                       className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none focus:bg-white"
                     />
                   </div>
+
+                  {pedirEndereco && (
+                    <div className="pt-3 border-t border-slate-100 space-y-2.5">
+                      <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5 font-medium leading-relaxed">
+                        O banco exige o endereço do cliente para registrar o boleto. Preencha uma
+                        vez — fica salvo no cadastro dele para as próximas.
+                      </p>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="relative">
+                          <input
+                            type="text" inputMode="numeric" placeholder="CEP"
+                            value={end.cep}
+                            onChange={(e) => setEnd({ ...end, cep: e.target.value })}
+                            onBlur={(e) => buscarCep(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none font-mono"
+                          />
+                          {buscandoCep && (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-500 absolute right-2.5 top-1/2 -translate-y-1/2" />
+                          )}
+                        </div>
+                        <input
+                          type="text" placeholder="Número"
+                          value={end.numero}
+                          onChange={(e) => setEnd({ ...end, numero: e.target.value })}
+                          className="bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                        />
+                        <input
+                          type="text" placeholder="UF" maxLength={2}
+                          value={end.uf}
+                          onChange={(e) => setEnd({ ...end, uf: e.target.value.toUpperCase() })}
+                          className="bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none uppercase"
+                        />
+                      </div>
+
+                      <input
+                        type="text" placeholder="Rua / logradouro"
+                        value={end.logradouro}
+                        onChange={(e) => setEnd({ ...end, logradouro: e.target.value })}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                      />
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text" placeholder="Bairro"
+                          value={end.bairro}
+                          onChange={(e) => setEnd({ ...end, bairro: e.target.value })}
+                          className="bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                        />
+                        <input
+                          type="text" placeholder="Cidade"
+                          value={end.cidade}
+                          onChange={(e) => setEnd({ ...end, cidade: e.target.value })}
+                          className="bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   <button
                     type="submit"
