@@ -9,6 +9,11 @@ export interface Cliente {
   documento?: string; // CPF ou CNPJ
   email?: string;
   telefone?: string;
+  /** Endereço do pagador — exigido pelo banco no boleto registrado. */
+  endereco?: {
+    cep?: string; logradouro?: string; numero?: string;
+    bairro?: string; cidade?: string; uf?: string; complemento?: string;
+  };
   createdAt: string;
 }
 

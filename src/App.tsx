@@ -193,6 +193,14 @@ export default function App() {
   const [showVendaModal, setShowVendaModal] = useState(false);
   const [showDespesaModal, setShowDespesaModal] = useState(false);
   const [showClienteModal, setShowClienteModal] = useState(false);
+  // Endereço do cliente — exigido pelo banco ao registrar boleto.
+  const [cliCep, setCliCep] = useState("");
+  const [cliRua, setCliRua] = useState("");
+  const [cliNum, setCliNum] = useState("");
+  const [cliBairro, setCliBairro] = useState("");
+  const [cliCidade, setCliCidade] = useState("");
+  const [cliUf, setCliUf] = useState("");
+  const [buscandoCepCliente, setBuscandoCepCliente] = useState(false);
   const [selectedReceipt, setSelectedReceipt] = useState<Transacao | null>(null);
 
   // -------------------------------------------------------------------------
@@ -1366,6 +1374,27 @@ ${meiName}`;
     setShowDespesaModal(false);
   };
 
+  /** Preenche rua, bairro, cidade e estado a partir do CEP digitado. */
+  const buscarCepCliente = async (valorCep: string) => {
+    const cep = valorCep.replace(/\D/g, "");
+    if (cep.length !== 8) return;
+    setBuscandoCepCliente(true);
+    try {
+      const resp = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+      const d = await resp.json();
+      if (!d.erro) {
+        if (d.logradouro) setCliRua(d.logradouro);
+        if (d.bairro) setCliBairro(d.bairro);
+        if (d.localidade) setCliCidade(d.localidade);
+        if (d.uf) setCliUf(d.uf);
+      }
+    } catch {
+      // sem internet ou servico fora do ar: o usuario preenche a mao
+    } finally {
+      setBuscandoCepCliente(false);
+    }
+  };
+
   const handleCreateCliente = (e: React.FormEvent) => {
     e.preventDefault();
     if (!cliNome) return;
@@ -1376,6 +1405,10 @@ ${meiName}`;
       documento: cliDoc,
       email: cliEmail,
       telefone: cliTel,
+      endereco: (cliCep || cliRua) ? {
+        cep: cliCep.replace(/\D/g, ""), logradouro: cliRua, numero: cliNum,
+        bairro: cliBairro, cidade: cliCidade, uf: cliUf.toUpperCase()
+      } : undefined,
       createdAt: new Date().toISOString()
     };
 
@@ -1399,6 +1432,8 @@ ${meiName}`;
     setCliDoc("");
     setCliEmail("");
     setCliTel("");
+    setCliCep(""); setCliRua(""); setCliNum("");
+    setCliBairro(""); setCliCidade(""); setCliUf("");
     setShowClienteModal(false);
   };
 
@@ -2866,6 +2901,71 @@ ${meiName}`;
                   onChange={(e) => setCliTel(e.target.value)}
                   className="w-full border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
+              </div>
+
+              {/* Endereço — exigido pelo banco para registrar boleto */}
+              <div className="pt-3 border-t border-slate-100 space-y-3">
+                <p className="text-[11px] text-slate-500 font-medium leading-relaxed">
+                  <strong className="text-slate-700">Endereço</strong> — necessário para emitir boleto.
+                  Digite o CEP que o resto é preenchido sozinho.
+                </p>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="CEP"
+                      value={cliCep}
+                      onChange={(e) => setCliCep(e.target.value)}
+                      onBlur={(e) => buscarCepCliente(e.target.value)}
+                      className="w-full border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                    />
+                    {buscandoCepCliente && (
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-blue-600 font-bold">...</span>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Número"
+                    value={cliNum}
+                    onChange={(e) => setCliNum(e.target.value)}
+                    className="border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <input
+                    type="text"
+                    placeholder="UF"
+                    maxLength={2}
+                    value={cliUf}
+                    onChange={(e) => setCliUf(e.target.value.toUpperCase())}
+                    className="border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 uppercase"
+                  />
+                </div>
+
+                <input
+                  type="text"
+                  placeholder="Rua / logradouro"
+                  value={cliRua}
+                  onChange={(e) => setCliRua(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="Bairro"
+                    value={cliBairro}
+                    onChange={(e) => setCliBairro(e.target.value)}
+                    className="border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Cidade"
+                    value={cliCidade}
+                    onChange={(e) => setCliCidade(e.target.value)}
+                    className="border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
               </div>
 
                {/* Footer Modal */}
