@@ -64,9 +64,9 @@ export default function UpgradeModal({
   // Preços buscados dinamicamente do backend (fonte única de verdade em
   // /api/plans/pricing), em vez de hardcoded no front-end.
   const [pricing, setPricing] = useState<{ monthly: number; annual: number; annualMonthlyEquivalent: number }>({
-    monthly: 14.0,
-    annual: 168.0,
-    annualMonthlyEquivalent: 14.0
+    monthly: 14.9,
+    annual: 178.8,
+    annualMonthlyEquivalent: 14.9
   });
   const [pricingLoaded, setPricingLoaded] = useState(false);
   

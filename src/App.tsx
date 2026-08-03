@@ -1689,7 +1689,7 @@ ${meiName}`;
                       ✨ Evolua para o Premium: sua logo nos documentos e Arquivo Digital de comprovantes!
                     </h3>
                     <p className="text-xs text-slate-300">
-                      Desbloqueie todo o potencial financeiro e profissional do seu MEI por apenas R$ 14,00/mês. Clique para saber mais.
+                      Desbloqueie todo o potencial financeiro e profissional do seu MEI por apenas R$ 14,90/mês. Clique para saber mais.
                     </p>
                   </div>
                 </div>
@@ -2033,7 +2033,7 @@ ${meiName}`;
                   <div className="space-y-1 min-w-0">
                     <h3 className="text-lg font-extrabold tracking-tight">Sua marca, seus documentos.</h3>
                     <p className="text-xs text-indigo-100 leading-relaxed">
-                      No Premium, recibos e orçamentos saem com a sua logo, você guarda comprovantes no Arquivo Digital e navega sem anúncios — por R$ 14,00/mês.
+                      No Premium, recibos e orçamentos saem com a sua logo, você guarda comprovantes no Arquivo Digital e navega sem anúncios — por R$ 14,90/mês.
                     </p>
                   </div>
                 </div>

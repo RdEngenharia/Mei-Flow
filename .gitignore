@@ -6,3 +6,10 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Segredos — nunca versionar
+mEI FLOW.txt
+*.p12
+*.pem
+*.pfx
+cert.txt

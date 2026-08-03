@@ -7,8 +7,8 @@ import axios from "axios";
 // Fonte única de verdade para os valores cobrados (mesma referência usada em
 // /api/checkout.ts, /api/mercadopago/checkout.ts e /api/plans/pricing.ts).
 const PREMIUM_PRICING = {
-  monthly: 14.0,
-  annual: 14.0 * 12, // 168.00
+  monthly: 14.9,
+  annual: 14.9 * 12, // 178.80
 };
 
 // Securely initialize Firebase Admin in serverless environment

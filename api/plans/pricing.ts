@@ -1,8 +1,8 @@
 // Fonte única de verdade para os valores cobrados (mesma referência usada em
 // /api/checkout.ts, /api/mercadopago/checkout.ts e /api/mercadopago/webhook.ts).
 const PREMIUM_PRICING = {
-  monthly: 14.0,
-  annual: 14.0 * 12, // 168.00 — cobrança única equivalente a 12 meses
+  monthly: 14.9,
+  annual: 14.9 * 12, // 178.80 — cobrança única equivalente a 12 meses
 };
 
 export default function handler(req: any, res: any) {

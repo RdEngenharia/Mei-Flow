@@ -372,6 +372,40 @@ export async function saveClienteToFirebase(meiUid: string, cliente: Cliente): P
 }
 
 /**
+ * Converte uma data em formato brasileiro ("dd/mm/aaaa") para um objeto Date.
+ *
+ * POR QUE ISTO EXISTE: o app guarda a data como "25/12/2026", mas o JavaScript
+ * lê esse formato como mês/dia/ano (padrão americano). O resultado era:
+ *   - dias de 1 a 12  -> gravava com dia e mês TROCADOS (10/06 virava 6 de outubro)
+ *   - dias de 13 a 31 -> virava "Invalid Date" e o Firestore RECUSAVA a gravação,
+ *                        fazendo a despesa se perder silenciosamente.
+ * Também aceita o formato ISO ("aaaa-mm-dd"), usado ao reler do banco.
+ */
+function parseDataBR(valor: string | Date | undefined | null): Date {
+  if (!valor) return new Date();
+  if (valor instanceof Date) return isNaN(valor.getTime()) ? new Date() : valor;
+
+  const texto = String(valor).trim();
+
+  const br = texto.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (br) {
+    const [, dia, mes, ano] = br;
+    const d = new Date(Number(ano), Number(mes) - 1, Number(dia));
+    return isNaN(d.getTime()) ? new Date() : d;
+  }
+
+  const iso = texto.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) {
+    const [, ano, mes, dia] = iso;
+    const d = new Date(Number(ano), Number(mes) - 1, Number(dia));
+    return isNaN(d.getTime()) ? new Date() : d;
+  }
+
+  const fallback = new Date(texto);
+  return isNaN(fallback.getTime()) ? new Date() : fallback;
+}
+
+/**
  * INSERIR / ATUALIZAR TRANSAÇÃO (Com amarração de userId)
  */
 export async function saveTransacaoToFirebase(meiUid: string, tx: Transacao): Promise<void> {
@@ -384,7 +418,7 @@ export async function saveTransacaoToFirebase(meiUid: string, tx: Transacao): Pr
       type: tx.tipo,
       value: tx.valor,
       description: tx.descricao,
-      date: tx.data ? new Date(tx.data) : new Date(),
+      date: parseDataBR(tx.data),
       categoria: tx.categoria || 'Geral',
       clienteId: tx.clienteId || '',
       clienteNome: tx.clienteNome || '',

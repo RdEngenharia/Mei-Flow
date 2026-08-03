@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MEI FLOW</string>
+    <string name="title_activity_main">MEI FLOW</string>
+    <string name="package_name">com.meiflow.app</string>
+    <string name="custom_url_scheme">com.meiflow.app</string>
+</resources>

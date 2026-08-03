@@ -9,6 +9,11 @@ import { getStorage } from "firebase-admin/storage";
 import axios from "axios";
 import { MercadoPagoConfig, Payment, CardToken } from "mercadopago";
 
+// ===== Modulos MEI Flow (Efi + gestao de cobrancas + creditos) =====
+import { registrarRotasEfi } from "./efi";
+import { registrarRotasCobrancas } from "./cobrancas";
+import { registrarRotasCreditos } from "./creditos";
+
 // Load environment variables
 dotenv.config();
 
@@ -171,6 +176,16 @@ async function startServer() {
   // Use JSON middleware with increased payload size limit for handling base64 document uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // ==========================================
+  // MODULOS MEI FLOW
+  // efi        -> emitir boleto + webhook de pagamento + arquivamento
+  // cobrancas  -> painel de gestao (emitido, pago, pendente, vencido)
+  // creditos   -> saldo pre-pago e recarga via Pix
+  // ==========================================
+  registrarRotasEfi(app, db, adminStorage, firebaseConfig);
+  registrarRotasCobrancas(app, db);
+  registrarRotasCreditos(app, db);
 
   // ==========================================
   // EXPIRAÇÃO AUTOMÁTICA DO PLANO PREMIUM
