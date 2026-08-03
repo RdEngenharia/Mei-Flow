@@ -26,9 +26,9 @@ import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 
-import { registrarRotasEfi } from "./efi";
-import { registrarRotasCobrancas } from "./cobrancas";
-import { registrarRotasCreditos } from "./creditos";
+import { registrarRotasEfi } from "./efi.js";
+import { registrarRotasCobrancas } from "./cobrancas.js";
+import { registrarRotasCreditos } from "./creditos.js";
 
 // ---------------------------------------------------------------------------
 // Firebase Admin — mesmo padrão do server.ts e dos outros arquivos de api/
