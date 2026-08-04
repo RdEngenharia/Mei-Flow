@@ -60,6 +60,9 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
   const [vencimento, setVencimento] = useState("");
   const [descricao, setDescricao] = useState("");
   const [gerado, setGerado] = useState<any>(null);
+  const [modo, setModo] = useState<"avista" | "carne">("avista");
+  const [parcelas, setParcelas] = useState(3);
+  const [sincronizando, setSincronizando] = useState(false);
 
   // Endereço: só aparece quando o banco exige (boleto registrado em produção).
   const [pedirEndereco, setPedirEndereco] = useState(false);
@@ -110,6 +113,29 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
     if (aberto) carregar();
   }, [aberto, carregar]);
 
+  /**
+   * Pergunta o status direto à Efí, em vez de esperar o aviso automático.
+   * Webhook pode falhar ou nem ter sido cadastrado — isto sempre funciona.
+   */
+  const sincronizar = async () => {
+    setSincronizando(true);
+    setErro(null);
+    try {
+      const r = await fetch(getApiUrl("/api/efi/sincronizar"), {
+        method: "POST",
+        headers: await comToken(),
+      });
+      const d = await r.json();
+      if (!d.success) throw new Error(d.mensagem || "Não foi possível sincronizar.");
+      triggerToast?.(d.mensagem);
+      await carregar();
+    } catch (e: any) {
+      setErro(e.message);
+    } finally {
+      setSincronizando(false);
+    }
+  };
+
   // Vencimento padrão: 7 dias à frente, que é o mais comum.
   useEffect(() => {
     if (!vencimento) {
@@ -128,16 +154,28 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
     setEmitindo(true);
     setErro(null);
     try {
-      const r = await fetch(getApiUrl("/api/efi/boleto"), {
+      const carne = modo === "carne";
+      const r = await fetch(getApiUrl(carne ? "/api/efi/carne" : "/api/efi/boleto"), {
         method: "POST",
         headers: await comToken(),
-        body: JSON.stringify({
-          customerId: clienteId,
-          vencimento,
-          itens: [{ nome: descricao || "Serviço prestado", valor: valorNum, quantidade: 1 }],
-          mensagem: descricao || undefined,
-          ...(pedirEndereco ? { endereco: end } : {}),
-        }),
+        body: JSON.stringify(
+          carne
+            ? {
+                customerId: clienteId,
+                valorTotal: valorNum,
+                parcelas,
+                primeiroVencimento: vencimento,
+                descricao: descricao || undefined,
+                ...(pedirEndereco ? { endereco: end } : {}),
+              }
+            : {
+                customerId: clienteId,
+                vencimento,
+                itens: [{ nome: descricao || "Serviço prestado", valor: valorNum, quantidade: 1 }],
+                mensagem: descricao || undefined,
+                ...(pedirEndereco ? { endereco: end } : {}),
+              }
+        ),
       });
       const d = await r.json();
       if (!d.success) {
@@ -149,7 +187,9 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
       setGerado(d);
       setValor("");
       setDescricao("");
-      triggerToast?.("✓ Boleto gerado com sucesso!");
+      triggerToast?.(modo === "carne"
+        ? `✓ Carnê com ${d.parcelas} parcelas gerado!`
+        : "✓ Boleto gerado com sucesso!");
       carregar();
     } catch (e: any) {
       setErro(e.message);
@@ -235,11 +275,12 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={carregar}
-                  className="w-9 h-9 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-full flex items-center justify-center transition-colors cursor-pointer"
-                  title="Atualizar"
+                  onClick={sincronizar}
+                  disabled={sincronizando}
+                  className="w-9 h-9 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-full flex items-center justify-center transition-colors cursor-pointer disabled:opacity-50"
+                  title="Conferir pagamentos na Efí"
                 >
-                  <RefreshCw className={`w-4 h-4 ${carregando ? "animate-spin" : ""}`} />
+                  <RefreshCw className={`w-4 h-4 ${carregando || sincronizando ? "animate-spin" : ""}`} />
                 </button>
                 <button
                   onClick={() => { setAberto(false); setShowForm(false); setGerado(null); }}
@@ -299,7 +340,7 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
                   className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-2xl shadow-sm transition-all cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
                 >
                   <Plus className="w-4 h-4" />
-                  <span>Emitir novo boleto</span>
+                  <span>Emitir boleto ou carnê</span>
                 </button>
               )}
 
@@ -307,10 +348,28 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
               {showForm && !gerado && (
                 <form onSubmit={emitir} className="bg-white border border-slate-200/60 rounded-3xl p-5 space-y-3.5 text-left">
                   <div className="flex items-center justify-between">
-                    <h4 className="text-sm font-extrabold text-slate-800">Novo boleto</h4>
+                    <h4 className="text-sm font-extrabold text-slate-800">
+                      {modo === "carne" ? "Novo carnê" : "Novo boleto"}
+                    </h4>
                     <button type="button" onClick={() => setShowForm(false)} className="text-xs text-slate-400 hover:text-slate-600 font-bold">
                       Cancelar
                     </button>
+                  </div>
+
+                  {/* À vista ou parcelado */}
+                  <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl">
+                    {([["avista", "À vista"], ["carne", "Parcelado"]] as const).map(([k, r]) => (
+                      <button
+                        key={k}
+                        type="button"
+                        onClick={() => setModo(k as any)}
+                        className={`flex-1 py-2 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          modo === k ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-700"
+                        }`}
+                      >
+                        {r}
+                      </button>
+                    ))}
                   </div>
 
                   <div>
@@ -343,7 +402,7 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
                       <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
-                        Valor (R$) *
+                        {modo === "carne" ? "Valor TOTAL (R$) *" : "Valor (R$) *"}
                       </label>
                       <input
                         required
@@ -357,7 +416,7 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
                     </div>
                     <div>
                       <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
-                        Vencimento *
+                        {modo === "carne" ? "1ª parcela *" : "Vencimento *"}
                       </label>
                       <input
                         required
@@ -368,6 +427,41 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
                       />
                     </div>
                   </div>
+
+                  {modo === "carne" && (
+                    <div className="bg-emerald-50/60 border border-emerald-100 rounded-2xl p-3 space-y-2">
+                      <label className="block text-[9px] uppercase tracking-wider font-extrabold text-emerald-800">
+                        Número de parcelas
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range" min={2} max={24} step={1}
+                          value={parcelas}
+                          onChange={(e) => setParcelas(Number(e.target.value))}
+                          className="flex-1 accent-emerald-600 cursor-pointer"
+                        />
+                        <span className="text-sm font-extrabold text-emerald-800 w-10 text-right">{parcelas}x</span>
+                      </div>
+                      {(() => {
+                        const total = parseFloat(String(valor).replace(",", ".")) || 0;
+                        const p = total > 0 ? total / parcelas : 0;
+                        const baixo = p > 0 && p < 5;
+                        return (
+                          <p className={`text-[11px] font-bold ${baixo ? "text-rose-600" : "text-emerald-700"}`}>
+                            {total > 0
+                              ? baixo
+                                ? `Parcela de ${brl(p)} — abaixo do mínimo de R$ 5,00. Reduza as parcelas.`
+                                : `${parcelas} boletos de ${brl(p)}, um por mês.`
+                              : "Digite o valor total acima para ver o valor de cada parcela."}
+                          </p>
+                        );
+                      })()}
+                      <p className="text-[9px] text-emerald-700/70 font-medium leading-relaxed">
+                        O valor digitado é o <strong>total</strong> — ele é dividido entre as parcelas.
+                        A data escolhida é o vencimento da primeira; as demais caem de mês em mês.
+                      </p>
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
@@ -448,12 +542,12 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
                     {emitindo ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Gerando na Efí...</span>
+                        <span>{modo === "carne" ? "Gerando carnê..." : "Gerando na Efí..."}</span>
                       </>
                     ) : (
                       <>
                         <Sparkles className="w-4 h-4" />
-                        <span>Gerar boleto</span>
+                        <span>{modo === "carne" ? `Gerar carnê ${parcelas}x` : "Gerar boleto"}</span>
                       </>
                     )}
                   </button>
@@ -465,10 +559,14 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
                 <div className="bg-emerald-50 border border-emerald-200 rounded-3xl p-5 space-y-3 text-left">
                   <div className="flex items-center gap-2 text-emerald-800">
                     <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                    <h4 className="text-sm font-extrabold">Boleto gerado!</h4>
+                    <h4 className="text-sm font-extrabold">
+                      {gerado.carneId ? "Carnê gerado!" : "Boleto gerado!"}
+                    </h4>
                   </div>
                   <p className="text-xs text-emerald-700 font-medium">
-                    Valor de {brl(gerado.valor)}. Envie o link abaixo para o seu cliente.
+                    {gerado.carneId
+                      ? `${gerado.parcelas} parcelas de ${brl(gerado.valorParcela)}, totalizando ${brl(gerado.valorTotal)}. Envie o link do carnê para o seu cliente — todas as parcelas ficam nele.`
+                      : `Valor de ${brl(gerado.valor)}. Envie o link abaixo para o seu cliente.`}
                   </p>
                   <div className="flex gap-2">
                     <button

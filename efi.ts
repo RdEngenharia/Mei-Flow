@@ -660,51 +660,212 @@ export function registrarRotasEfi(
   });
 
   // --------------------------------------------------------------------------
-  // Webhook da Efí — dispara o arquivamento automático do comprovante
+  // CARNÊ — parcelamento em vários boletos de uma vez
   // --------------------------------------------------------------------------
-  // Cadastre no painel da Efí a URL:
-  //   https://meiflow.rdhomologacao.com.br/api/efi/webhook?token=SEU_EFI_WEBHOOK_TOKEN
   //
-  // A Efí NÃO envia os dados da cobrança: envia só um token de notificação,
-  // que precisamos consultar de volta. E ela repete a chamada até 10 vezes se
-  // não receber uma resposta 2xx — por isso respondemos 200 mesmo em erro.
+  // Exemplo: R$ 1.000 em 10x gera 10 boletos de R$ 100, um por mês, com
+  // vencimentos sequenciais a partir da data informada.
+  //
+  // ⚠️ O PULO DO GATO É O `split_items`:
+  //    true  → o valor total é DIVIDIDO entre as parcelas (1000 em 10x = 100 cada)
+  //    false → CADA parcela cobra o valor cheio (1000 em 10x = 10.000 no total!)
+  // O padrão da Efí é `false`. Enviar `true` explicitamente evita cobrar dez
+  // vezes a mais do cliente por engano.
   // --------------------------------------------------------------------------
-  app.post("/api/efi/webhook", async (req: any, res: any) => {
-    if (req.query.token !== process.env.EFI_WEBHOOK_TOKEN) {
-      console.warn("[Efí Webhook] Token inválido. Requisição recusada.");
-      return res.status(401).json({ erro: "token invalido" });
-    }
-
-    // Responde imediatamente; o processamento pesado segue em segundo plano.
-    res.status(200).json({ status: "recebido" });
-
+  app.post("/api/efi/carne", async (req: any, res: any) => {
     try {
-      const notificationToken = req.body?.notification;
-      if (!notificationToken) return;
+      const uid = await exigirUsuarioAutenticado(req);
+      const { customerId, valorTotal, parcelas, primeiroVencimento, descricao, juros, multa } = req.body;
 
-      const detalhe = await efiCobrancas("GET", `/v1/notification/${notificationToken}`);
-      const historico = detalhe?.data || [];
-      const ultimo = Array.isArray(historico) ? historico[historico.length - 1] : historico;
+      const total = Number(valorTotal);
+      const n = Math.floor(Number(parcelas));
 
-      const statusAtual = ultimo?.status?.current;
-      const chargeId = String(ultimo?.identifiers?.charge_id || ultimo?.charge_id || "");
-
-      console.log(`[Efí Webhook] Cobrança ${chargeId} → status "${statusAtual}"`);
-      if (statusAtual !== "paid" || !chargeId) return;
-
-      const cobrancaSnap = await db.collection("cobrancas").doc(chargeId).get();
-      if (!cobrancaSnap.exists) {
-        console.warn(`[Efí Webhook] Cobrança ${chargeId} não encontrada no banco.`);
-        return;
+      if (!customerId || !total || total <= 0 || !primeiroVencimento) {
+        return res.status(400).json({
+          success: false,
+          mensagem: "Informe o cliente, o valor total e a data da primeira parcela.",
+        });
       }
-      const cobranca = cobrancaSnap.data();
+      if (!n || n < 2 || n > 48) {
+        return res.status(400).json({
+          success: false,
+          mensagem: "O número de parcelas deve ser entre 2 e 48.",
+        });
+      }
+      // Boleto de valor muito baixo costuma custar mais em tarifa do que rende.
+      if (total / n < 5) {
+        return res.status(400).json({
+          success: false,
+          mensagem: `Cada parcela ficaria em R$ ${(total / n).toFixed(2).replace(".", ",")}. O valor mínimo por parcela é R$ 5,00 — reduza o número de parcelas.`,
+        });
+      }
 
-      const dataPagamento = ultimo?.received_by_bank_at || new Date().toISOString();
-      const { ano, mes } = resolverMesFiscal(dataPagamento, cobranca.vencimento, false);
+      // ---- cliente (mesma regra do boleto avulso) ----
+      let cliente: any = null;
+      for (const col of ["customers", "clientes"]) {
+        const snap = await db.collection(col).doc(String(customerId)).get();
+        if (snap.exists) {
+          const d = snap.data();
+          if (d.userId === uid || d.mei_uid === uid) { cliente = d; break; }
+        }
+      }
+      if (!cliente) {
+        return res.status(404).json({ success: false, mensagem: "Cliente não encontrado no seu cadastro." });
+      }
 
-      const perfilSnap = await db.collection("users").doc(cobranca.userId).get();
-      const perfil = perfilSnap.exists ? perfilSnap.data() : {};
+      const doc = String(cliente.cpfCnpj || cliente.documento || "").replace(/\D/g, "");
+      if (doc.length !== 11 && doc.length !== 14) {
+        return res.status(400).json({
+          success: false,
+          mensagem: "O cliente precisa ter CPF (11 dígitos) ou CNPJ (14 dígitos) válido.",
+        });
+      }
 
+      const nomeCliente = cliente.name || cliente.nome || "Cliente";
+      const customer: any =
+        doc.length === 11
+          ? { name: nomeCliente, cpf: doc }
+          : { juridical_person: { corporate_name: nomeCliente, cnpj: doc } };
+
+      if (cliente.email) customer.email = cliente.email;
+      const tel = String(cliente.telefone || "").replace(/\D/g, "");
+      if (tel.length >= 10) customer.phone_number = tel;
+
+      const end = { ...(cliente.endereco || {}), ...(req.body.endereco || {}) };
+      const cep = String(end.cep || end.zipcode || "").replace(/\D/g, "");
+      const completo = cep.length === 8 && end.logradouro && end.numero && end.bairro && end.cidade && end.uf;
+
+      if (completo) {
+        customer.address = {
+          street: String(end.logradouro).slice(0, 200),
+          number: String(end.numero).slice(0, 10),
+          neighborhood: String(end.bairro).slice(0, 100),
+          zipcode: cep,
+          city: String(end.cidade).slice(0, 100),
+          state: String(end.uf).toUpperCase().slice(0, 2),
+        };
+        if (req.body.endereco) {
+          const dados = { cep, logradouro: end.logradouro, numero: end.numero,
+            bairro: end.bairro, cidade: end.cidade, uf: String(end.uf).toUpperCase() };
+          for (const col of ["customers", "clientes"]) {
+            await db.collection(col).doc(String(customerId)).set({ endereco: dados }, { merge: true }).catch(() => {});
+          }
+        }
+      } else if (process.env.EFI_SANDBOX === "false") {
+        return res.status(400).json({
+          success: false,
+          precisaEndereco: true,
+          mensagem: "Para emitir carnê em produção o banco exige o endereço do cliente.",
+        });
+      }
+
+      const payload = {
+        // O valor total vai em UM item; o split_items reparte entre as parcelas.
+        items: [{
+          name: String(descricao || "Parcelamento").slice(0, 255),
+          value: Math.round(total * 100), // centavos
+          amount: 1,
+        }],
+        customer,
+        expire_at: primeiroVencimento,   // vencimento da 1a parcela
+        repeats: n,                      // quantas parcelas
+        split_items: true,               // ⚠️ divide o total; sem isto cobra n vezes o total
+        configurations: {
+          fine: Number(multa ?? 200),      // 2,00%
+          interest: Number(juros ?? 33),   // 0,33% ao mês
+        },
+        message: String(descricao || "Emitido via MEI Flow").slice(0, 80),
+        metadata: {
+          notification_url: `${APP_URL}/api/efi/webhook?token=${process.env.EFI_WEBHOOK_TOKEN || ""}`,
+          custom_id: `mfc_${uid.slice(0, 10)}_${Date.now()}`,
+        },
+      };
+
+      const resposta = await efiCobrancas("POST", "/v1/carnet", payload);
+      const carne = resposta?.data || resposta;
+      const parcelasEfi: any[] = carne?.charges || [];
+      const valorParcela = Math.round((total / n) * 100) / 100;
+
+      // Cada parcela vira uma cobrança própria — o painel já as enxerga como
+      // boletos normais, com vencimento e status independentes.
+      for (const p of parcelasEfi) {
+        await db.collection("cobrancas").doc(String(p.charge_id)).set({
+          id: String(p.charge_id),
+          userId: uid,
+          customerId: String(customerId),
+          clienteNome: nomeCliente,
+          clienteDocumento: doc,
+          gateway: "efi",
+          tipo: "carne",
+          carneId: String(carne.carnet_id || ""),
+          parcela: Number(p.parcel || 0),
+          totalParcelas: n,
+          valor: valorParcela,
+          vencimento: p.expire_at || primeiroVencimento,
+          status: p.status || "waiting",
+          barcode: p.barcode || "",
+          link: p.link || carne.link || carne.carnet_link || "",
+          pdfUrl: p.pdf?.charge || carne.pdf?.carnet || "",
+          criadoEm: new Date().toISOString(),
+          pagoEm: null,
+        });
+      }
+
+      console.log(`[Efí Carnê] ${parcelasEfi.length} parcelas de R$ ${valorParcela} para ${uid}`);
+
+      res.json({
+        success: true,
+        carneId: carne.carnet_id,
+        parcelas: parcelasEfi.length,
+        valorParcela,
+        valorTotal: total,
+        link: carne.link || carne.carnet_link,
+        pdf: carne.pdf?.carnet || carne.pdf?.cover,
+        primeiroVencimento,
+      });
+    } catch (err: any) {
+      if (err.message === "NAO_AUTENTICADO") {
+        return res.status(401).json({ success: false, mensagem: "Faça login para emitir carnê." });
+      }
+      console.error("[Efí Carnê]", err.response?.data || err.message);
+      if (err.response?.status === 401) {
+        const ambiente = process.env.EFI_SANDBOX !== "false" ? "Homologação" : "Produção";
+        return res.status(401).json({
+          success: false,
+          mensagem: `A Efí recusou as credenciais. O sistema está em ${ambiente} — confira o par de chaves e faça Redeploy.`,
+        });
+      }
+      const detalhe =
+        err.response?.data?.error_description?.message ||
+        err.response?.data?.error_description ||
+        err.message;
+      res.status(500).json({ success: false, mensagem: `Erro ao gerar carnê: ${detalhe}` });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // CONCLUIR PAGAMENTO — um caminho só, usado pelo webhook E pela sincronização
+  // --------------------------------------------------------------------------
+  /**
+   * Marca a cobrança como paga, gera o comprovante, arquiva no mês certo e
+   * lança a entrada no financeiro. É idempotente: se já foi processada antes,
+   * não faz nada. Por isso pode ser chamada quantas vezes for preciso.
+   */
+  async function concluirPagamento(chargeId: string, dataPagamento?: string) {
+    const snap = await db.collection("cobrancas").doc(String(chargeId)).get();
+    if (!snap.exists) return { ok: false, motivo: "cobranca_desconhecida" };
+
+    const cobranca = snap.data();
+    if (cobranca.documentoId) return { ok: true, motivo: "ja_processada" };
+
+    const pago = dataPagamento || new Date().toISOString();
+    const { ano, mes } = resolverMesFiscal(pago, cobranca.vencimento, false);
+
+    const perfilSnap = await db.collection("users").doc(cobranca.userId).get();
+    const perfil = perfilSnap.exists ? perfilSnap.data() : {};
+
+    let documento: any = null;
+    try {
       const pdf = await gerarComprovantePdf({
         titulo: "Comprovante de Recebimento",
         meiNome: perfil.name || perfil.meiName || "Microempreendedor Individual",
@@ -714,43 +875,156 @@ export function registrarRotasEfi(
           ["CPF / CNPJ do pagador", cobranca.clienteDocumento || "-"],
           ["Valor recebido", `R$ ${Number(cobranca.valor).toFixed(2).replace(".", ",")}`],
           ["Vencimento do boleto", paraDataBR(cobranca.vencimento)],
-          ["Data do pagamento", paraDataBR(dataPagamento)],
+          ["Data do pagamento", paraDataBR(pago)],
           ["Forma de pagamento", "Boleto bancario (Efi)"],
-          ["Identificador da cobranca", chargeId],
+          ["Identificador da cobranca", String(chargeId)],
         ],
       });
 
-      const documento = await arquivarComprovante(db, adminStorage, firebaseConfig, {
+      documento = await arquivarComprovante(db, adminStorage, firebaseConfig, {
         userId: cobranca.userId,
         pdfBuffer: pdf,
         nomeArquivo: `Recebimento_${mes}_${ano}_${chargeId}.pdf`,
-        ano,
-        mes,
+        ano, mes,
         origem: "efi_cobranca",
-        referenciaId: chargeId,
+        referenciaId: String(chargeId),
       });
+    } catch (err: any) {
+      // Sem credenciais de Storage o arquivamento falha, mas o pagamento
+      // continua válido — marcar como pago é mais importante que o PDF.
+      console.warn(`[Efí] Comprovante de ${chargeId} não arquivado:`, err.message);
+    }
 
-      await criarLancamento(db, {
-        userId: cobranca.userId,
-        tipo: "entrada",
-        valor: Number(cobranca.valor),
-        dataISO: dataPagamento,
-        descricao: `Recebimento de ${cobranca.clienteNome || "cliente"}`,
-        categoria: "Serviços",
-        formaPagamento: "Boleto",
-        documentoId: documento?.id,
-        referenciaId: chargeId,
-        clienteId: cobranca.customerId,
-        clienteNome: cobranca.clienteNome,
-        clienteDocumento: cobranca.clienteDocumento,
+    await criarLancamento(db, {
+      userId: cobranca.userId,
+      tipo: "entrada",
+      valor: Number(cobranca.valor),
+      dataISO: pago,
+      descricao: `Recebimento de ${cobranca.clienteNome || "cliente"}`,
+      categoria: "Serviços",
+      formaPagamento: "Boleto",
+      documentoId: documento?.id,
+      referenciaId: String(chargeId),
+      clienteId: cobranca.customerId,
+      clienteNome: cobranca.clienteNome,
+      clienteDocumento: cobranca.clienteDocumento,
+    });
+
+    await snap.ref.set(
+      { status: "paid", pagoEm: pago, documentoId: documento?.id || null },
+      { merge: true }
+    );
+
+    console.log(`[Efí] Cobrança ${chargeId} concluída e arquivada em ${mes}/${ano}.`);
+    return { ok: true, ano, mes, documentoId: documento?.id || null };
+  }
+
+  // --------------------------------------------------------------------------
+  // SINCRONIZAR — pergunta o status direto à Efí, sem depender de webhook
+  // --------------------------------------------------------------------------
+  //
+  // POR QUE ISTO EXISTE: webhook é frágil. Pode não ter sido cadastrado, pode
+  // ter falhado numa hora que o servidor estava frio, pode ter sido emitido
+  // antes de o endereço de aviso existir. Esta rota varre as cobranças em
+  // aberto e pergunta à Efí, uma por uma, qual o status real. É o que garante
+  // que o painel nunca fique mentindo.
+  // --------------------------------------------------------------------------
+  app.post("/api/efi/sincronizar", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuarioAutenticado(req);
+
+      const snap = await db.collection("cobrancas").where("userId", "==", uid).get();
+      const abertas = snap.docs
+        .map((d: any) => d.data())
+        .filter((c: any) => !["paid", "settled", "canceled", "cancelled", "unpaid", "expired"].includes(String(c.status)))
+        .slice(0, 60); // teto de segurança por chamada
+
+      let atualizadas = 0, pagas = 0;
+      const detalhes: any[] = [];
+
+      for (const c of abertas) {
+        try {
+          const r = await efiCobrancas("GET", `/v1/charge/${c.id}`);
+          const dados = r?.data || r;
+          const status = String(dados?.status || "");
+          if (!status || status === c.status) continue;
+
+          atualizadas++;
+          if (["paid", "settled"].includes(status)) {
+            const quando = dados?.payment?.banking_billet?.paid_at || dados?.paid_at || new Date().toISOString();
+            await concluirPagamento(String(c.id), quando);
+            pagas++;
+            detalhes.push({ id: c.id, cliente: c.clienteNome, status: "pago" });
+          } else {
+            await db.collection("cobrancas").doc(String(c.id)).set({ status }, { merge: true });
+            detalhes.push({ id: c.id, cliente: c.clienteNome, status });
+          }
+        } catch (err: any) {
+          console.warn(`[Efí Sincronizar] Falha em ${c.id}:`, err.response?.data || err.message);
+        }
+      }
+
+      res.json({
+        success: true,
+        verificadas: abertas.length,
+        atualizadas,
+        pagas,
+        detalhes,
+        mensagem: pagas > 0
+          ? `${pagas} cobrança(s) marcada(s) como paga(s).`
+          : atualizadas > 0
+            ? `${atualizadas} cobrança(s) atualizada(s).`
+            : "Tudo já estava em dia.",
       });
+    } catch (err: any) {
+      if (err.message === "NAO_AUTENTICADO") {
+        return res.status(401).json({ success: false, mensagem: "Faça login." });
+      }
+      console.error("[Efí Sincronizar]", err.response?.data || err.message);
+      res.status(500).json({ success: false, mensagem: `Erro ao sincronizar: ${err.message}` });
+    }
+  });
 
-      await db.collection("cobrancas").doc(chargeId).set(
-        { status: "paid", pagoEm: dataPagamento, documentoId: documento?.id },
-        { merge: true }
-      );
+  // --------------------------------------------------------------------------
+  // Webhook da Efí — o caminho automático (quando funciona)
+  // --------------------------------------------------------------------------
+  // A Efí NÃO envia os dados da cobrança: envia só um token de notificação,
+  // que precisamos consultar de volta. E ela repete a chamada até 10 vezes se
+  // não receber 2xx — por isso respondemos 200 mesmo em erro.
+  // --------------------------------------------------------------------------
+  app.post("/api/efi/webhook", async (req: any, res: any) => {
+    if (req.query.token !== process.env.EFI_WEBHOOK_TOKEN) {
+      console.warn("[Efí Webhook] Token inválido. Requisição recusada.");
+      return res.status(401).json({ erro: "token invalido" });
+    }
 
-      console.log(`[Efí Webhook] Cobrança ${chargeId} processada e arquivada em ${mes}/${ano}.`);
+    res.status(200).json({ status: "recebido" });
+
+    try {
+      // A Efí pode mandar como JSON ou como formulário; aceitamos os dois.
+      const notificationToken =
+        req.body?.notification ||
+        (typeof req.body === "string" ? new URLSearchParams(req.body).get("notification") : null);
+      if (!notificationToken) {
+        console.warn("[Efí Webhook] Sem token de notificação no corpo.");
+        return;
+      }
+
+      const detalhe = await efiCobrancas("GET", `/v1/notification/${notificationToken}`);
+      const historico = detalhe?.data || [];
+      const ultimo = Array.isArray(historico) ? historico[historico.length - 1] : historico;
+
+      const statusAtual = ultimo?.status?.current;
+      const chargeId = String(ultimo?.identifiers?.charge_id || ultimo?.charge_id || "");
+
+      console.log(`[Efí Webhook] Cobrança ${chargeId} → status "${statusAtual}"`);
+      if (!chargeId) return;
+
+      if (statusAtual === "paid" || statusAtual === "settled") {
+        await concluirPagamento(chargeId, ultimo?.received_by_bank_at);
+      } else if (statusAtual) {
+        await db.collection("cobrancas").doc(chargeId).set({ status: statusAtual }, { merge: true });
+      }
     } catch (err: any) {
       console.error("[Efí Webhook Erro]", err.response?.data || err.message);
     }
