@@ -155,7 +155,11 @@ export async function downloadRemoteFileCrossPlatform(
  * @param element Elemento HTML a ser convertido (ex: o card do orçamento)
  * @param fileName Nome do arquivo final, com extensão .pdf
  */
-export async function saveHtmlElementAsPdf(element: HTMLElement, fileName: string): Promise<void> {
+export async function saveHtmlElementAsPdf(
+  element: HTMLElement,
+  fileName: string,
+  opcoes: { umaPagina?: boolean } = {}
+): Promise<void> {
   const { default: html2canvas } = await import("html2canvas-pro");
   const { jsPDF: JsPDFClass } = await import("jspdf");
 
@@ -168,35 +172,69 @@ export async function saveHtmlElementAsPdf(element: HTMLElement, fileName: strin
 
   const imgData = canvas.toDataURL("image/jpeg", 0.95);
 
-  // Calcula as dimensões em mm para caber numa folha A4, preservando a
-  // proporção original do elemento capturado, com paginação automática
-  // se o conteúdo for mais alto que uma página.
   const pageWidth = 210; // A4 em mm
   const pageHeight = 297; // A4 em mm
   const margin = 10;
-  const usableWidth = pageWidth - margin * 2;
-  const imgWidthMm = usableWidth;
-  const imgHeightMm = (canvas.height * imgWidthMm) / canvas.width;
+  const usableWidth = pageWidth - margin * 2;   // 190
+  const usableHeight = pageHeight - margin * 2; // 277
 
   const doc = new JsPDFClass({ unit: "mm", format: "a4" });
-  const usableHeight = pageHeight - margin * 2;
 
-  if (imgHeightMm <= usableHeight) {
-    // Cabe em uma única página.
-    doc.addImage(imgData, "JPEG", margin, margin, imgWidthMm, imgHeightMm);
+  // Altura que o conteúdo teria se ocupasse toda a largura útil.
+  const alturaNaLargura = (canvas.height * usableWidth) / canvas.width;
+
+  if (opcoes.umaPagina) {
+    /**
+     * UMA FOLHA, SEMPRE.
+     *
+     * Documento comercial — orçamento, recibo — não deve quebrar em duas
+     * páginas por causa de três linhas sobrando. Se não couber, reduzimos a
+     * escala proporcionalmente até caber e centralizamos na horizontal.
+     *
+     * ⚠️ Cuidado ao "melhorar" isto voltando a paginar: a versão anterior
+     *    desenhava a imagem inteira em cada página com um deslocamento
+     *    negativo, sem recortar. Como jsPDF só corta na borda física do papel
+     *    (0 e 297) e não na margem, cada página depois da primeira saía sem
+     *    margem nenhuma, e o passo do avanço (277) não batia com a faixa que
+     *    realmente aparecia (287) — então o conteúdo ia se deslocando e
+     *    repetindo faixas. Se um dia a paginação voltar, ela precisa recortar
+     *    o canvas em pedaços de verdade, um por página.
+     */
+    const escala = Math.min(1, usableHeight / alturaNaLargura);
+    const largura = usableWidth * escala;
+    const altura = alturaNaLargura * escala;
+    const x = (pageWidth - largura) / 2;
+    doc.addImage(imgData, "JPEG", x, margin, largura, altura);
+  } else if (alturaNaLargura <= usableHeight) {
+    doc.addImage(imgData, "JPEG", margin, margin, usableWidth, alturaNaLargura);
   } else {
-    // Conteúdo mais alto que uma página: divide em múltiplas páginas,
-    // "deslizando" uma janela de recorte sobre a imagem capturada.
-    let heightLeftMm = imgHeightMm;
-    let positionMm = 0;
-    let firstPage = true;
+    /**
+     * Múltiplas páginas com recorte de verdade: cada página recebe só a sua
+     * faixa do canvas original, redesenhada num canvas temporário. Assim a
+     * margem de cima e de baixo é respeitada em todas as páginas.
+     */
+    // Quantos pixels do canvas cabem numa página, na mesma proporção.
+    const pxPorPagina = Math.floor((usableHeight * canvas.width) / usableWidth);
+    let y = 0;
+    let primeira = true;
 
-    while (heightLeftMm > 0) {
-      if (!firstPage) doc.addPage();
-      doc.addImage(imgData, "JPEG", margin, margin - positionMm, imgWidthMm, imgHeightMm);
-      heightLeftMm -= usableHeight;
-      positionMm += usableHeight;
-      firstPage = false;
+    while (y < canvas.height) {
+      const alturaFatia = Math.min(pxPorPagina, canvas.height - y);
+      const fatia = document.createElement("canvas");
+      fatia.width = canvas.width;
+      fatia.height = alturaFatia;
+      const ctx = fatia.getContext("2d");
+      if (!ctx) break;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, fatia.width, fatia.height);
+      ctx.drawImage(canvas, 0, y, canvas.width, alturaFatia, 0, 0, canvas.width, alturaFatia);
+
+      if (!primeira) doc.addPage();
+      const alturaMm = (alturaFatia * usableWidth) / canvas.width;
+      doc.addImage(fatia.toDataURL("image/jpeg", 0.95), "JPEG", margin, margin, usableWidth, alturaMm);
+
+      primeira = false;
+      y += alturaFatia;
     }
   }
 

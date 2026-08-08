@@ -41,7 +41,7 @@ import {
 
 // Carrega as configurações geradas pelo console do AI Studio / Firebase Blueprints
 import firebaseConfigImport from '../firebase-applet-config.json';
-import { Cliente, Transacao } from './types';
+import { Cliente, Transacao, Orcamento, ItemOrcamento } from './types';
 import { cadastrarEmpresaFocusNFe, CadastroEmpresaPayload } from './focusNFeService';
 
 // Garante que o objeto process e process.env existam no ambiente de execução (browser/Vite) para evitar erros de referência críticos.
@@ -667,6 +667,128 @@ export async function fetchVendasFromFirebase(userId: string): Promise<Transacao
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, path);
     return [];
+  }
+}
+
+/* ==========================================================================
+   ORÇAMENTOS — funil de vendas
+   ==========================================================================
+   Até aqui os orçamentos viviam só no localStorage do navegador: abrir o MEI
+   Flow no celular mostrava histórico vazio, e limpar o navegador apagava o
+   funil inteiro. Agora ficam em usuarios/{userId}/orcamentos, que as regras do
+   Firestore já liberam para o próprio dono — sem precisar de regra nova.
+   ========================================================================== */
+
+/**
+ * Converte um orçamento salvo em qualquer época para o formato atual.
+ *
+ * Os primeiros orçamentos tinham UM item, em campos soltos (itemNome, itemValor).
+ * Em vez de migrar o banco, convertemos na leitura: é reversível, não perde nada
+ * e funciona com o que já está no navegador do usuário.
+ */
+export function normalizarOrcamento(o: any): Orcamento {
+  const itens: ItemOrcamento[] = Array.isArray(o?.itens) && o.itens.length
+    ? o.itens.map((it: any, i: number) => ({
+        id: String(it?.id || `it_${i}`),
+        tipo: it?.tipo === "produto" ? "produto" : "serviço",
+        nome: String(it?.nome || ""),
+        quantidade: Number(it?.quantidade) > 0 ? Number(it.quantidade) : 1,
+        valorUnitario: Number(it?.valorUnitario) || 0,
+      }))
+    : [{
+        id: "it_0",
+        tipo: o?.itemTipo === "produto" ? "produto" : "serviço",
+        nome: String(o?.itemNome || ""),
+        quantidade: 1,
+        valorUnitario: Number(o?.itemValor) || 0,
+      }];
+
+  const desconto = Number(o?.desconto) || 0;
+  const soma = itens.reduce((s, it) => s + it.quantidade * it.valorUnitario, 0);
+
+  return {
+    id: String(o?.id || ""),
+    numero: Number(o?.numero) || 0,
+    clienteId: String(o?.clienteId || ""),
+    clienteNome: String(o?.clienteNome || ""),
+    clienteDocumento: o?.clienteDocumento || undefined,
+    clienteEmail: o?.clienteEmail || undefined,
+    clienteTelefone: o?.clienteTelefone || undefined,
+    itens,
+    desconto,
+    // Confia no total gravado; sem ele, recalcula. Assim um desconto aplicado
+    // ontem não muda de valor porque a regra mudou hoje.
+    total: Number(o?.total) > 0 ? Number(o.total) : Math.max(0, soma - desconto),
+    observacoes: o?.observacoes || undefined,
+    validade: String(o?.validade || ""),
+    situacao: (["enviado", "negociando", "aceito", "recusado"].includes(o?.situacao)
+      ? o.situacao
+      : "enviado") as Orcamento["situacao"],
+    createdAt: String(o?.createdAt || new Date().toISOString()),
+    atualizadoEm: o?.atualizadoEm || undefined,
+    vendaId: o?.vendaId || undefined,
+  };
+}
+
+/** Lista os orçamentos do usuário, já normalizados e do mais novo para o mais velho. */
+export async function fetchOrcamentosFromFirebase(userId: string): Promise<Orcamento[]> {
+  const path = `usuarios/${userId}/orcamentos`;
+  try {
+    const colRef = collection(db, 'usuarios', userId, 'orcamentos');
+    const snapshot = await getDocs(colRef);
+    return snapshot.docs
+      .map(docSnap => normalizarOrcamento({ ...docSnap.data(), id: docSnap.id }))
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+    return [];
+  }
+}
+
+/** Cria ou atualiza um orçamento. A mesma função serve para mover no funil. */
+export async function saveOrcamentoToFirebase(userId: string, orc: Orcamento): Promise<void> {
+  const path = `usuarios/${userId}/orcamentos/${orc.id}`;
+  try {
+    const docRef = doc(db, 'usuarios', userId, 'orcamentos', orc.id);
+    await setDoc(docRef, {
+      id: orc.id,
+      userId,
+      numero: Number(orc.numero) || 0,
+      clienteId: orc.clienteId || '',
+      clienteNome: orc.clienteNome || '',
+      clienteDocumento: orc.clienteDocumento || '',
+      clienteEmail: orc.clienteEmail || '',
+      clienteTelefone: orc.clienteTelefone || '',
+      itens: (orc.itens || []).map(it => ({
+        id: it.id,
+        tipo: it.tipo,
+        nome: it.nome,
+        quantidade: Number(it.quantidade) || 1,
+        valorUnitario: Number(it.valorUnitario) || 0,
+      })),
+      desconto: Number(orc.desconto) || 0,
+      total: Number(orc.total) || 0,
+      observacoes: orc.observacoes || '',
+      validade: orc.validade || '',
+      situacao: orc.situacao || 'enviado',
+      vendaId: orc.vendaId || '',
+      createdAt: orc.createdAt || new Date().toISOString(),
+      atualizadoEm: new Date().toISOString(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+    throw error;
+  }
+}
+
+/** Remove um orçamento do funil. */
+export async function deleteOrcamentoFromFirebase(userId: string, orcamentoId: string): Promise<void> {
+  const path = `usuarios/${userId}/orcamentos/${orcamentoId}`;
+  try {
+    await deleteDoc(doc(db, 'usuarios', userId, 'orcamentos', orcamentoId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+    throw error;
   }
 }
 

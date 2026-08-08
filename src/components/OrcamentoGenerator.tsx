@@ -1,29 +1,42 @@
-import React, { useState, useEffect, useRef } from "react";
-import { 
-  Sparkles, 
-  Plus, 
-  Trash2, 
-  Loader2, 
-  Search, 
-  Package, 
-  Wrench,
-  FileText,
-  Calendar,
-  DollarSign,
-  User,
-  CheckCircle2,
-  Printer,
-  X,
-  Building,
-  Mail,
-  Phone,
-  Bookmark,
-  Share2
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import {
+  Sparkles, Plus, Trash2, Loader2, Search, Package, Wrench, FileText, Calendar,
+  User, CheckCircle2, Printer, X, Phone, Bookmark, ArrowRight, ArrowLeft,
+  TrendingUp, Clock, XCircle, ShoppingCart, Cloud, CloudOff,
 } from "lucide-react";
-import { db, auth, handleFirestoreError, OperationType } from "../firebase";
+import { db, saveOrcamentoToFirebase, fetchOrcamentosFromFirebase,
+         deleteOrcamentoFromFirebase, normalizarOrcamento } from "../firebase";
 import { collection, getDocs } from "firebase/firestore";
 import { saveHtmlElementAsPdf, isNativePlatform } from "../utils/nativeFile";
-import { CatalogItem, Cliente, Orcamento } from "../types";
+import { CatalogItem, Cliente, Orcamento, ItemOrcamento, SituacaoOrcamento } from "../types";
+
+/**
+ * ============================================================================
+ * GERADOR DE ORÇAMENTOS + FUNIL DE VENDAS
+ * ============================================================================
+ *
+ * TRÊS COISAS MUDARAM AQUI, E VALE SABER POR QUÊ.
+ *
+ * 1. OS ORÇAMENTOS AGORA MORAM NA NUVEM.
+ *    Antes viviam só no localStorage. Abrir o MEI Flow no celular mostrava
+ *    histórico vazio, e limpar o navegador apagava tudo. Agora vão para
+ *    usuarios/{uid}/orcamentos. O localStorage continua sendo lido UMA vez, na
+ *    primeira carga, para subir o que já existia — ninguém perde histórico.
+ *
+ * 2. VÁRIOS ITENS POR ORÇAMENTO.
+ *    O formato antigo tinha um item só, em campos soltos. Os antigos continuam
+ *    abrindo: `normalizarOrcamento` converte na leitura.
+ *
+ * 3. FUNIL.
+ *    Cada orçamento tem situação — enviado, negociando, aceito, recusado — e o
+ *    aceito vira lançamento no Livro Caixa com um clique, de onde sai a nota
+ *    fiscal. É o que fecha o ciclo orçamento → venda → boleto → nota.
+ *
+ * ⚠️ SOBRE O PDF: a folha é o elemento com `data-folha="orcamento"`, e é ele
+ *    que o `index.css` transforma em papel na impressão. Se renomear esse
+ *    atributo, a impressão do navegador volta a sair cortada. No aplicativo, o
+ *    caminho é outro (foto da tela → PDF), com `umaPagina: true`.
+ */
 
 interface OrcamentoGeneratorProps {
   userId: string;
@@ -37,7 +50,40 @@ interface OrcamentoGeneratorProps {
   onTriggerUpgrade: () => void;
   onGoBack: () => void;
   triggerToast: (msg: string) => void;
+  /**
+   * Transforma o orçamento aceito em lançamento de entrada no Livro Caixa.
+   * Devolve o id da venda criada, ou null se não deu.
+   */
+  onConverterEmVenda?: (orc: Orcamento) => Promise<string | null>;
 }
+
+const brl = (n: number) =>
+  Number(n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+const dataBR = (iso?: string) => {
+  if (!iso) return "—";
+  // Data sem hora vira meio-dia para não escorregar um dia por fuso.
+  const d = iso.length === 10 ? new Date(iso + "T12:00:00") : new Date(iso);
+  return isNaN(d.getTime()) ? "—" : d.toLocaleDateString("pt-BR");
+};
+
+const somaItens = (itens: ItemOrcamento[]) =>
+  itens.reduce((s, it) => s + (Number(it.quantidade) || 0) * (Number(it.valorUnitario) || 0), 0);
+
+/** As etapas do funil, na ordem em que a vida acontece. */
+const ETAPAS: { chave: SituacaoOrcamento; rotulo: string; cor: string; icone: any }[] = [
+  { chave: "enviado",    rotulo: "Enviado",    cor: "blue",    icone: Clock },
+  { chave: "negociando", rotulo: "Negociando", cor: "amber",   icone: TrendingUp },
+  { chave: "aceito",     rotulo: "Aceito",     cor: "emerald", icone: CheckCircle2 },
+  { chave: "recusado",   rotulo: "Recusado",   cor: "slate",   icone: XCircle },
+];
+
+const CORES: Record<string, { chip: string; caixa: string; texto: string }> = {
+  blue:    { chip: "bg-blue-50 text-blue-700 border-blue-100",          caixa: "border-blue-200",    texto: "text-blue-600" },
+  amber:   { chip: "bg-amber-50 text-amber-700 border-amber-100",       caixa: "border-amber-200",   texto: "text-amber-600" },
+  emerald: { chip: "bg-emerald-50 text-emerald-700 border-emerald-100", caixa: "border-emerald-200", texto: "text-emerald-600" },
+  slate:   { chip: "bg-slate-100 text-slate-600 border-slate-200",      caixa: "border-slate-200",   texto: "text-slate-500" },
+};
 
 export default function OrcamentoGenerator({
   userId,
@@ -50,60 +96,122 @@ export default function OrcamentoGenerator({
   clientes,
   onTriggerUpgrade,
   onGoBack,
-  triggerToast
+  triggerToast,
+  onConverterEmVenda,
 }: OrcamentoGeneratorProps) {
-  // Navigation inside quote generator
-  const [activeTab, setActiveTab] = useState<"criar" | "historico">("criar");
+  const [activeTab, setActiveTab] = useState<"criar" | "funil">("criar");
   const [historico, setHistorico] = useState<Orcamento[]>([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [carregando, setCarregando] = useState(false);
+  const [naNuvem, setNaNuvem] = useState<boolean | null>(null);
+  const [salvando, setSalvando] = useState(false);
+  const [convertendo, setConvertendo] = useState<string | null>(null);
 
-  // Client dropdown search in Orcamento Form
+  // Cliente
   const [showClientDropdown, setShowClientDropdown] = useState(false);
   const [selectedClient, setSelectedClient] = useState<Cliente | null>(null);
-
-  // Form Fields
   const [clienteNome, setClienteNome] = useState("");
   const [clienteDocumento, setClienteDocumento] = useState("");
   const [clienteEmail, setClienteEmail] = useState("");
   const [clienteTelefone, setClienteTelefone] = useState("");
 
-  const [itemTipo, setItemTipo] = useState<"produto" | "serviço">("serviço");
-  const [itemNome, setItemNome] = useState("");
-  const [itemValor, setItemValor] = useState<string>("");
+  // Itens
+  const novoItem = (): ItemOrcamento => ({
+    // Contador simples: dois itens criados no mesmo milissegundo teriam o mesmo
+    // id, então somamos um número aleatório curto.
+    id: `it_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+    tipo: "serviço",
+    nome: "",
+    quantidade: 1,
+    valorUnitario: 0,
+  });
+  const [itens, setItens] = useState<ItemOrcamento[]>([novoItem()]);
+  const [desconto, setDesconto] = useState("");
+  const [observacoes, setObservacoes] = useState("");
   const [validade, setValidade] = useState(() => {
-    // Default validade is 15 days from today
-    const date = new Date();
-    date.setDate(date.getDate() + 15);
-    return date.toISOString().split("T")[0];
+    const d = new Date();
+    d.setDate(d.getDate() + 15);
+    return d.toISOString().split("T")[0];
   });
 
-  // Catalog Picker Dialog state (Premium Only)
+  // Catálogo (premium)
   const [showCatalogModal, setShowCatalogModal] = useState(false);
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [loadingCatalog, setLoadingCatalog] = useState(false);
   const [catalogSearch, setCatalogSearch] = useState("");
+  const [itemDestino, setItemDestino] = useState<string | null>(null);
 
-  // Preview generated quote sheet
+  // Visualização
   const [activePreviewQuote, setActivePreviewQuote] = useState<Orcamento | null>(null);
+  const printableRef = useRef<HTMLDivElement>(null);
+  const [isSavingQuotePdf, setIsSavingQuotePdf] = useState(false);
 
-  // Load quotes history on mount/change
-  const fetchQuotesHistory = () => {
-    const key = `meiflow_quotes_${userId || "anonymous"}`;
-    const saved = localStorage.getItem(key);
-    if (saved) {
-      try {
-        setHistorico(JSON.parse(saved));
-      } catch (e) {
-        console.error(e);
+  const subtotal = somaItens(itens);
+  const descontoNum = Math.max(0, Number(desconto) || 0);
+  const total = Math.max(0, subtotal - descontoNum);
+
+  // --------------------------------------------------------------------------
+  // CARGA E MIGRAÇÃO
+  // --------------------------------------------------------------------------
+
+  const chaveLocal = `meiflow_quotes_${userId || "anonymous"}`;
+
+  const carregar = useCallback(async () => {
+    if (!userId) return;
+    setCarregando(true);
+    try {
+      const daNuvem = await fetchOrcamentosFromFirebase(userId);
+      setNaNuvem(true);
+
+      /**
+       * MIGRAÇÃO DO LOCALSTORAGE, UMA VEZ SÓ.
+       *
+       * Quem já usava tem orçamentos guardados no navegador. Em vez de pedir
+       * para ele redigitar, subimos o que só existe local. O critério é o id:
+       * o que já está na nuvem fica como está, para não sobrescrever uma
+       * mudança de situação feita no celular.
+       */
+      const bruto = localStorage.getItem(chaveLocal);
+      const locais: Orcamento[] = bruto ? (JSON.parse(bruto) || []).map(normalizarOrcamento) : [];
+      const idsNuvem = new Set(daNuvem.map((o) => o.id));
+      const faltando = locais.filter((o) => o.id && !idsNuvem.has(o.id));
+
+      if (faltando.length) {
+        let n = Math.max(0, ...daNuvem.map((o) => Number(o.numero) || 0));
+        for (const o of faltando) {
+          if (!o.numero) o.numero = ++n;
+          try { await saveOrcamentoToFirebase(userId, o); } catch { /* segue com os outros */ }
+        }
+        triggerToast(`✓ ${faltando.length} orçamento(s) do navegador enviados para a nuvem.`);
+        const juntos = [...faltando, ...daNuvem]
+          .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+        setHistorico(juntos);
+      } else {
+        setHistorico(daNuvem);
       }
+    } catch (err) {
+      // Sem nuvem, o histórico local ainda serve para consultar e imprimir.
+      console.warn("Orçamentos: caindo para o armazenamento local.", err);
+      setNaNuvem(false);
+      const bruto = localStorage.getItem(chaveLocal);
+      if (bruto) {
+        try { setHistorico((JSON.parse(bruto) || []).map(normalizarOrcamento)); } catch { /* nada */ }
+      }
+    } finally {
+      setCarregando(false);
     }
+  }, [userId, chaveLocal, triggerToast]);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  /** Espelha no navegador o que está na memória, como rede de segurança offline. */
+  const espelharLocal = (lista: Orcamento[]) => {
+    try { localStorage.setItem(chaveLocal, JSON.stringify(lista)); } catch { /* cota cheia */ }
   };
 
-  useEffect(() => {
-    fetchQuotesHistory();
-  }, [userId]);
+  // --------------------------------------------------------------------------
+  // FORMULÁRIO
+  // --------------------------------------------------------------------------
 
-  // Handle client selection from dropdown
   const selectClientData = (cli: Cliente) => {
     setSelectedClient(cli);
     setClienteNome(cli.nome);
@@ -114,114 +222,168 @@ export default function OrcamentoGenerator({
     triggerToast(`✓ Cliente ${cli.nome} vinculado!`);
   };
 
-  // Open & Load Catalog Modal items (Premium only)
-  const handleOpenCatalogPicker = async () => {
-    if (planType !== "premium") {
-      onTriggerUpgrade();
-      return;
-    }
+  const alterarItem = (id: string, campo: keyof ItemOrcamento, valor: any) => {
+    setItens((atual) => atual.map((it) => (it.id === id ? { ...it, [campo]: valor } : it)));
+  };
 
+  const removerItem = (id: string) => {
+    setItens((atual) => (atual.length <= 1 ? atual : atual.filter((it) => it.id !== id)));
+  };
+
+  const handleOpenCatalogPicker = async (destinoId: string) => {
+    if (planType !== "premium") { onTriggerUpgrade(); return; }
+    setItemDestino(destinoId);
     setShowCatalogModal(true);
     setLoadingCatalog(true);
-    const path = `users/${userId}/catalog`;
     try {
-      const colRef = collection(db, "users", userId, "catalog");
-      const snap = await getDocs(colRef);
-      const items: CatalogItem[] = snap.docs.map(docSnap => {
-        const data = docSnap.data();
-        return {
-          id: docSnap.id,
-          title: data.title || "",
-          type: data.type || "serviço",
-          price: Number(data.price) || 0
-        };
-      });
-      setCatalogItems(items);
+      const snap = await getDocs(collection(db, "users", userId, "catalog"));
+      setCatalogItems(snap.docs.map((s) => {
+        const data = s.data();
+        return { id: s.id, title: data.title || "", type: data.type || "serviço", price: Number(data.price) || 0 };
+      }));
     } catch (err) {
-      console.warn("Offline or rule error loading catalog inside picker:", err);
-      // Fallback local storage
+      console.warn("Catálogo indisponível, usando cópia local:", err);
       const local = localStorage.getItem(`meiflow_catalog_${userId}`);
-      if (local) {
-        setCatalogItems(JSON.parse(local));
-      }
+      if (local) { try { setCatalogItems(JSON.parse(local)); } catch { /* nada */ } }
     } finally {
       setLoadingCatalog(false);
     }
   };
 
-  // Select catalog item and auto-fill form fields
   const handleSelectCatalogItem = (item: CatalogItem) => {
-    setItemNome(item.title);
-    setItemTipo(item.type);
-    setItemValor(item.price.toString());
+    if (itemDestino) {
+      setItens((atual) => atual.map((it) => it.id === itemDestino
+        ? { ...it, nome: item.title, tipo: item.type, valorUnitario: item.price }
+        : it));
+    }
     setShowCatalogModal(false);
+    setItemDestino(null);
     triggerToast(`✓ Item "${item.title}" carregado do catálogo!`);
   };
 
-  // Create new Quote
-  const handleCreateOrcamento = (e: React.FormEvent) => {
+  const handleCreateOrcamento = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!clienteNome.trim() || !itemNome.trim() || !itemValor || !validade) {
-      triggerToast("⚠ Certifique-se de preencher todos os campos obrigatórios.");
-      return;
-    }
+    if (salvando) return;
 
-    const valorNum = Math.max(0, Number(itemValor));
-    if (isNaN(valorNum)) {
-      triggerToast("⚠ Valor do item inválido.");
-      return;
-    }
+    const limpos = itens
+      .map((it) => ({ ...it, nome: it.nome.trim(), quantidade: Math.max(1, Number(it.quantidade) || 1), valorUnitario: Math.max(0, Number(it.valorUnitario) || 0) }))
+      .filter((it) => it.nome);
 
-    const newQuote: Orcamento = {
+    if (!clienteNome.trim()) { triggerToast("⚠ Informe o nome do cliente."); return; }
+    if (!limpos.length) { triggerToast("⚠ Descreva pelo menos um item."); return; }
+    if (somaItens(limpos) <= 0) { triggerToast("⚠ O orçamento precisa ter valor maior que zero."); return; }
+    if (!validade) { triggerToast("⚠ Informe até quando a proposta vale."); return; }
+
+    const totalFinal = Math.max(0, somaItens(limpos) - descontoNum);
+    const proximoNumero = Math.max(0, ...historico.map((o) => Number(o.numero) || 0)) + 1;
+
+    const novo: Orcamento = {
       id: "orc_" + Date.now(),
+      numero: proximoNumero,
       clienteId: selectedClient?.id || "manual_input",
       clienteNome: clienteNome.trim(),
       clienteDocumento: clienteDocumento.trim() || undefined,
       clienteEmail: clienteEmail.trim() || undefined,
       clienteTelefone: clienteTelefone.trim() || undefined,
-      itemTipo,
-      itemNome: itemNome.trim(),
-      itemValor: valorNum,
+      itens: limpos,
+      desconto: descontoNum,
+      total: totalFinal,
+      observacoes: observacoes.trim() || undefined,
       validade,
-      createdAt: new Date().toISOString()
+      situacao: "enviado",
+      createdAt: new Date().toISOString(),
     };
 
-    const updatedHistory = [newQuote, ...historico];
-    setHistorico(updatedHistory);
-    localStorage.setItem(`meiflow_quotes_${userId || "anonymous"}`, JSON.stringify(updatedHistory));
+    setSalvando(true);
+    const lista = [novo, ...historico];
+    setHistorico(lista);
+    espelharLocal(lista);
 
-    // Open sheet preview modal
-    setActivePreviewQuote(newQuote);
-    triggerToast("✓ Orçamento gerado com sucesso!");
+    try {
+      await saveOrcamentoToFirebase(userId, novo);
+      setNaNuvem(true);
+      triggerToast(`✓ Orçamento nº ${proximoNumero} salvo no funil!`);
+    } catch {
+      setNaNuvem(false);
+      triggerToast("⚠ Orçamento gerado, mas não foi para a nuvem. Ficou salvo aqui.");
+    } finally {
+      setSalvando(false);
+    }
 
-    // General Reset Form
+    setActivePreviewQuote(novo);
+
     setSelectedClient(null);
-    setClienteNome("");
-    setClienteDocumento("");
-    setClienteEmail("");
-    setClienteTelefone("");
-    setItemNome("");
-    setItemValor("");
+    setClienteNome(""); setClienteDocumento(""); setClienteEmail(""); setClienteTelefone("");
+    setItens([novoItem()]);
+    setDesconto(""); setObservacoes("");
   };
 
-  // Print function
-  const printableRef = useRef<HTMLDivElement>(null);
-  const [isSavingQuotePdf, setIsSavingQuotePdf] = useState(false);
+  // --------------------------------------------------------------------------
+  // FUNIL
+  // --------------------------------------------------------------------------
+
+  const moverPara = async (orc: Orcamento, situacao: SituacaoOrcamento) => {
+    const atualizado = { ...orc, situacao, atualizadoEm: new Date().toISOString() };
+    const lista = historico.map((o) => (o.id === orc.id ? atualizado : o));
+    setHistorico(lista);
+    espelharLocal(lista);
+    try {
+      await saveOrcamentoToFirebase(userId, atualizado);
+    } catch {
+      triggerToast("⚠ Mudança salva aqui, mas não subiu para a nuvem.");
+    }
+  };
+
+  const converter = async (orc: Orcamento) => {
+    if (!onConverterEmVenda || convertendo) return;
+    if (orc.vendaId) { triggerToast("ℹ Este orçamento já virou venda."); return; }
+    setConvertendo(orc.id);
+    try {
+      const vendaId = await onConverterEmVenda(orc);
+      if (!vendaId) return;
+      const atualizado = { ...orc, vendaId, situacao: "aceito" as SituacaoOrcamento, atualizadoEm: new Date().toISOString() };
+      const lista = historico.map((o) => (o.id === orc.id ? atualizado : o));
+      setHistorico(lista);
+      espelharLocal(lista);
+      try { await saveOrcamentoToFirebase(userId, atualizado); } catch { /* já avisado */ }
+      triggerToast("✓ Venda lançada no Livro Caixa! Já pode emitir a nota.");
+    } catch (err: any) {
+      triggerToast(`⚠ ${err?.message || "Não consegui lançar a venda."}`);
+    } finally {
+      setConvertendo(null);
+    }
+  };
+
+  const excluir = async (orc: Orcamento) => {
+    if (!window.confirm(`Excluir o orçamento de ${orc.clienteNome}? Isso não apaga a venda, se já houver.`)) return;
+    const lista = historico.filter((o) => o.id !== orc.id);
+    setHistorico(lista);
+    espelharLocal(lista);
+    try { await deleteOrcamentoFromFirebase(userId, orc.id); } catch { /* já saiu da tela */ }
+    triggerToast("✓ Orçamento excluído.");
+  };
+
+  const porEtapa = (chave: SituacaoOrcamento) =>
+    historico.filter((o) => (o.situacao || "enviado") === chave);
+
+  // --------------------------------------------------------------------------
+  // PDF
+  // --------------------------------------------------------------------------
 
   const handlePrintQuote = async () => {
-    // window.print() não funciona dentro do WebView do Android (Capacitor) —
-    // não há motor de impressão do navegador nesse contexto. Nesse caso,
-    // convertemos o próprio elemento visível em PDF (via html2canvas, já
-    // incluso no jsPDF) e salvamos direto na pasta de Downloads do celular.
+    // Dentro do APK não existe motor de impressão do navegador, então lá o
+    // caminho é fotografar a folha e montar o PDF na mão.
     if (isNativePlatform()) {
       if (!printableRef.current || isSavingQuotePdf) return;
       setIsSavingQuotePdf(true);
       try {
-        const fileName = `orcamento_${activePreviewQuote?.cliente?.nome || "mei_flow"}_${Date.now()}.pdf`
-          .replace(/\s+/g, "_");
-        await saveHtmlElementAsPdf(printableRef.current, fileName);
+        const quem = (activePreviewQuote?.clienteNome || "cliente").replace(/[^\wÀ-ÿ ]/g, "");
+        const nome = `orcamento_${activePreviewQuote?.numero || ""}_${quem}.pdf`.replace(/\s+/g, "_");
+        await saveHtmlElementAsPdf(printableRef.current, nome, { umaPagina: true });
+        triggerToast("✓ PDF salvo em Downloads.");
       } catch (err) {
         console.error("Erro ao gerar PDF do orçamento:", err);
+        triggerToast("⚠ Não consegui gerar o PDF.");
       } finally {
         setIsSavingQuotePdf(false);
       }
@@ -230,59 +392,47 @@ export default function OrcamentoGenerator({
     window.print();
   };
 
-  // Delete quote from history list
-  const handleDeleteQuote = (id: string) => {
-    const updated = historico.filter(item => item.id !== id);
-    setHistorico(updated);
-    localStorage.setItem(`meiflow_quotes_${userId || "anonymous"}`, JSON.stringify(updated));
-    triggerToast("✓ Orçamento excluído do histórico.");
-  };
+  const itensDaFolha = activePreviewQuote?.itens?.length
+    ? activePreviewQuote.itens
+    : normalizarOrcamento(activePreviewQuote || {}).itens || [];
+  const subtotalFolha = somaItens(itensDaFolha);
 
   return (
     <div className="space-y-8 animate-fade-in text-left font-sans">
-      
-      {/* Return Row */}
+
+      {/* ------------------------------------------------------------- topo */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <button 
+        <button
           onClick={onGoBack}
           className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-950 transition-all bg-white px-4 py-2 border border-slate-200 rounded-xl shadow-xs cursor-pointer"
         >
           <span>&larr; Voltar para o Início (Home)</span>
         </button>
 
-        {/* Option Tabs */}
         <div className="inline-flex gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/50">
           <button
             onClick={() => setActiveTab("criar")}
             className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === "criar"
-                ? "bg-white text-slate-900 shadow-xs"
-                : "text-slate-500 hover:text-slate-900"
+              activeTab === "criar" ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-900"
             }`}
           >
-            Emitir Novo Orçamento
+            Novo Orçamento
           </button>
           <button
-            onClick={() => {
-              setActiveTab("historico");
-              fetchQuotesHistory();
-            }}
+            onClick={() => { setActiveTab("funil"); carregar(); }}
             className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === "historico"
-                ? "bg-white text-slate-900 shadow-xs"
-                : "text-slate-500 hover:text-slate-900"
+              activeTab === "funil" ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-900"
             }`}
           >
-            Histórico de Emitidos ({historico.length})
+            Funil de Vendas ({historico.length})
           </button>
         </div>
       </div>
 
-      {/* Header Info */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 pb-6 border-b border-slate-100">
+      <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 pb-6 border-b border-slate-100">
         <div>
-          <h1 className="text-3xl md:text-4xl font-display font-light text-slate-900 tracking-tight flex items-center gap-2">
-            <span>Gerador de Orçamentos Profissionais</span>
+          <h1 className="text-3xl md:text-4xl font-display font-light text-slate-900 tracking-tight flex items-center gap-2 flex-wrap">
+            <span>{activeTab === "criar" ? "Gerador de Orçamentos" : "Funil de Vendas"}</span>
             {planType === "premium" && (
               <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-[9px] font-extrabold uppercase tracking-widest border border-blue-100">
                 Premium Ativo
@@ -290,53 +440,38 @@ export default function OrcamentoGenerator({
             )}
           </h1>
           <p className="text-xs md:text-sm text-slate-400 mt-1 font-medium">
-            Gere orçamentos e propostas comerciais formatadas em segundos com ou sem sua logo personalizada.
+            {activeTab === "criar"
+              ? "Monte a proposta com quantos itens precisar. Ela entra no funil automaticamente."
+              : "Acompanhe cada proposta até virar venda. O orçamento aceito lança no Livro Caixa com um clique."}
           </p>
+        </div>
+
+        {/* Onde os orçamentos estão guardados — informação que evita susto */}
+        <div className="shrink-0">
+          {naNuvem === false ? (
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-lg">
+              <CloudOff className="w-3.5 h-3.5" /> Salvo só neste aparelho
+            </span>
+          ) : naNuvem ? (
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1.5 rounded-lg">
+              <Cloud className="w-3.5 h-3.5" /> Sincronizado na nuvem
+            </span>
+          ) : null}
         </div>
       </div>
 
       {activeTab === "criar" ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          
-          {/* Form Create Quote Container */}
+
           <form onSubmit={handleCreateOrcamento} className="lg:col-span-8 bg-white p-6 md:p-8 rounded-3xl border border-slate-200/50 shadow-xs space-y-6">
-            
-            {/* Header Form action row */}
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3 flex-wrap gap-2">
-              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                <FileText className="w-4 h-4 text-blue-500" /> Detalhes da Proposta Comercial
-              </h3>
 
-              {planType === "premium" ? (
-                <button
-                  type="button"
-                  onClick={handleOpenCatalogPicker}
-                  className="px-3.5 py-1.5 bg-indigo-50/50 border border-indigo-200 hover:bg-indigo-100/60 text-indigo-700 text-[11px] font-bold rounded-xl shadow-2xs flex items-center gap-1.5 transition-all cursor-pointer"
-                  title="Abra a lista de itens do seu catálogo permanente para preencher os campos automaticamente"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-yellow-500 animate-pulse" />
-                  <span>Buscar do Catálogo</span>
-                </button>
-              ) : (
-                <div 
-                  onClick={onTriggerUpgrade}
-                  className="px-3 py-1 bg-slate-50 border border-slate-200 text-slate-400 text-[10px] font-semibold rounded-lg flex items-center gap-1 cursor-pointer hover:bg-slate-100"
-                  title="Navegação em catálogo inteligente é exclusivo para clientes Premium do MEI Flow."
-                >
-                  <Sparkles className="w-3 h-3 text-slate-400" />
-                  <span>Buscar do Catálogo (🔒 Premium)</span>
-                </div>
-              )}
-            </div>
-
-            {/* SEÇÃO 1: DADOS DO CLIENTE */}
+            {/* -------------------------------------------------- cliente */}
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h4 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest flex items-center gap-1">
-                  <User className="w-3.5 h-3.5" /> 1. Informações do Destinatário (Cliente)
+                  <User className="w-3.5 h-3.5" /> 1. Cliente
                 </h4>
-                
-                {/* Auto Complete client suggestions */}
+
                 <div className="relative">
                   <button
                     type="button"
@@ -351,7 +486,7 @@ export default function OrcamentoGenerator({
                       {clientes.length === 0 ? (
                         <p className="p-2 text-slate-400 italic text-center">Nenhum cliente cadastrado.</p>
                       ) : (
-                        clientes.map(cli => (
+                        clientes.map((cli) => (
                           <div
                             key={cli.id}
                             onClick={() => selectClientData(cli)}
@@ -367,272 +502,425 @@ export default function OrcamentoGenerator({
                 </div>
               </div>
 
+              {selectedClient && (
+                <p className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl p-2.5">
+                  Vinculado a <strong>{selectedClient.nome}</strong>. Se este orçamento for aceito, a venda já
+                  nasce com o cliente certo — e a nota fiscal também.
+                </p>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Nome ou Razão Social do Cliente *</label>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Nome ou Razão Social *</label>
                   <input
-                    type="text"
-                    required
-                    placeholder="Ex: Ana Souza Martins"
-                    value={clienteNome}
-                    onChange={(e) => setClienteNome(e.target.value)}
+                    type="text" required placeholder="Ex.: Ana Souza Martins"
+                    value={clienteNome} onChange={(e) => setClienteNome(e.target.value)}
                     className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white outline-hidden"
                   />
                 </div>
-
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">CPF ou CNPJ do Cliente (Opcional)</label>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">CPF ou CNPJ (opcional)</label>
                   <input
-                    type="text"
-                    placeholder="Ex: 123.456.789-00"
-                    value={clienteDocumento}
-                    onChange={(e) => setClienteDocumento(e.target.value)}
+                    type="text" placeholder="Ex.: 123.456.789-00"
+                    value={clienteDocumento} onChange={(e) => setClienteDocumento(e.target.value)}
                     className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white outline-hidden font-mono"
                   />
                 </div>
-
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">E-mail do Cliente (Opcional)</label>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">E-mail (opcional)</label>
                   <input
-                    type="email"
-                    placeholder="Ex: cliente@email.com"
-                    value={clienteEmail}
-                    onChange={(e) => setClienteEmail(e.target.value)}
+                    type="email" placeholder="Ex.: cliente@email.com"
+                    value={clienteEmail} onChange={(e) => setClienteEmail(e.target.value)}
                     className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white outline-hidden"
                   />
                 </div>
-
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Telefone do Cliente (Opcional)</label>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Telefone (opcional)</label>
                   <input
-                    type="text"
-                    placeholder="Ex: (11) 98888-7777"
-                    value={clienteTelefone}
-                    onChange={(e) => setClienteTelefone(e.target.value)}
+                    type="text" placeholder="Ex.: (11) 98888-7777"
+                    value={clienteTelefone} onChange={(e) => setClienteTelefone(e.target.value)}
                     className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white outline-hidden"
                   />
                 </div>
               </div>
             </div>
 
-            {/* SEÇÃO 2: DADOS DO PRODUTO / SERVIÇO */}
-            <div className="space-y-4 pt-2 border-t border-slate-50">
-              <h4 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest flex items-center gap-1">
-                <Bookmark className="w-3.5 h-3.5" /> 2. Descrição e Especificação Comercial
-              </h4>
+            {/* ---------------------------------------------------- itens */}
+            <div className="space-y-3 pt-2 border-t border-slate-50">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <h4 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                  <Bookmark className="w-3.5 h-3.5" /> 2. Itens da Proposta
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setItens((a) => [...a, novoItem()])}
+                  className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[11px] font-bold rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Adicionar item
+                </button>
+              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                
-                {/* Tipo de Item (Selector) */}
-                <div className="space-y-1 md:col-span-1">
-                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Tipo de Oferta</label>
-                  <div className="grid grid-cols-2 gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/40">
+              {itens.map((it, idx) => (
+                <div key={it.id} className="bg-slate-50 border border-slate-200/70 rounded-2xl p-3.5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">
+                      Item {idx + 1}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {planType === "premium" && (
+                        <button
+                          type="button"
+                          onClick={() => handleOpenCatalogPicker(it.id)}
+                          className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
+                        >
+                          <Sparkles className="w-3 h-3 text-yellow-500" /> Catálogo
+                        </button>
+                      )}
+                      {itens.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removerItem(it.id)}
+                          className="p-1 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-1 bg-white p-1 rounded-xl border border-slate-200/60">
                     <button
                       type="button"
-                      onClick={() => setItemTipo("serviço")}
-                      className={`py-1.5 rounded-lg font-bold text-xs flex items-center justify-center gap-1 transition-all cursor-pointer ${
-                        itemTipo === "serviço" 
-                          ? "bg-white text-slate-800 shadow-3xs" 
-                          : "text-slate-500 hover:text-slate-800"
+                      onClick={() => alterarItem(it.id, "tipo", "serviço")}
+                      className={`py-1.5 rounded-lg font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer transition-all ${
+                        it.tipo === "serviço" ? "bg-slate-900 text-white" : "text-slate-500 hover:text-slate-800"
                       }`}
                     >
-                      <Wrench className="w-3.5 h-3.5" />
-                      <span>Serviço</span>
+                      <Wrench className="w-3.5 h-3.5" /> Serviço
                     </button>
                     <button
                       type="button"
-                      onClick={() => setItemTipo("produto")}
-                      className={`py-1.5 rounded-lg font-bold text-xs flex items-center justify-center gap-1 transition-all cursor-pointer ${
-                        itemTipo === "produto" 
-                          ? "bg-white text-slate-800 shadow-3xs" 
-                          : "text-slate-500 hover:text-slate-800"
+                      onClick={() => alterarItem(it.id, "tipo", "produto")}
+                      className={`py-1.5 rounded-lg font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer transition-all ${
+                        it.tipo === "produto" ? "bg-slate-900 text-white" : "text-slate-500 hover:text-slate-800"
                       }`}
                     >
-                      <Package className="w-3.5 h-3.5" />
-                      <span>Produto</span>
+                      <Package className="w-3.5 h-3.5" /> Produto
                     </button>
                   </div>
-                </div>
 
-                {/* Nome do Item */}
-                <div className="space-y-1 md:col-span-2">
-                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Nome do Item comercializado *</label>
                   <input
                     type="text"
-                    required
-                    placeholder="Ex: Desenvolvimento de Site Institucional com 5 páginas"
-                    value={itemNome}
-                    onChange={(e) => setItemNome(e.target.value)}
-                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white outline-hidden"
+                    placeholder="Descrição — ex.: Instalação de 12 placas fotovoltaicas"
+                    value={it.nome}
+                    onChange={(e) => alterarItem(it.id, "nome", e.target.value)}
+                    className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 outline-hidden"
                   />
-                </div>
 
-                {/* Valor do Item */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Valor do Orçamento (R$) *</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">R$</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      required
-                      placeholder="0,00"
-                      value={itemValor}
-                      onChange={(e) => setItemValor(e.target.value)}
-                      className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white outline-hidden font-mono"
-                    />
+                  <div className="grid grid-cols-3 gap-2.5 items-end">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Qtd.</label>
+                      <input
+                        type="number" min="1" step="1"
+                        value={it.quantidade}
+                        onChange={(e) => alterarItem(it.id, "quantidade", Math.max(1, Number(e.target.value) || 1))}
+                        className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 outline-hidden font-mono"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Valor unitário</label>
+                      <input
+                        type="number" step="0.01" min="0" placeholder="0,00"
+                        value={it.valorUnitario || ""}
+                        onChange={(e) => alterarItem(it.id, "valorUnitario", Math.max(0, Number(e.target.value) || 0))}
+                        className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 outline-hidden font-mono"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Subtotal</label>
+                      <div className="px-3 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-slate-800 text-xs font-mono font-bold truncate">
+                        {brl(it.quantidade * it.valorUnitario)}
+                      </div>
+                    </div>
                   </div>
                 </div>
+              ))}
+            </div>
 
-                {/* Validade do Orçamento */}
-                <div className="space-y-1 md:col-span-2">
-                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Proposta Válida Até *</label>
+            {/* --------------------------------------------- fechamento */}
+            <div className="space-y-4 pt-2 border-t border-slate-50">
+              <h4 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                <FileText className="w-3.5 h-3.5" /> 3. Fechamento
+              </h4>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Desconto (R$)</label>
+                  <input
+                    type="number" step="0.01" min="0" placeholder="0,00"
+                    value={desconto} onChange={(e) => setDesconto(e.target.value)}
+                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white outline-hidden font-mono"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Proposta válida até *</label>
                   <div className="relative">
                     <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
-                      type="date"
-                      required
-                      value={validade}
+                      type="date" required value={validade}
                       onChange={(e) => setValidade(e.target.value)}
                       className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white outline-hidden font-mono"
                     />
                   </div>
                 </div>
+              </div>
 
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Observações (aparecem na proposta)</label>
+                <textarea
+                  rows={3} maxLength={1000}
+                  placeholder="Ex.: Prazo de execução de 20 dias após aprovação. Material incluso."
+                  value={observacoes} onChange={(e) => setObservacoes(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white outline-hidden resize-y"
+                />
+              </div>
+
+              <div className="bg-slate-900 text-white rounded-2xl p-4 flex items-center justify-between gap-4">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 space-y-0.5">
+                  <div>Subtotal: <span className="font-mono text-slate-200">{brl(subtotal)}</span></div>
+                  {descontoNum > 0 && <div>Desconto: <span className="font-mono text-slate-200">- {brl(descontoNum)}</span></div>}
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 block">Total</span>
+                  <span className="text-2xl font-bold font-mono tracking-tight">{brl(total)}</span>
+                </div>
               </div>
             </div>
 
             <button
               type="submit"
-              className="w-full py-4 bg-slate-950 hover:bg-slate-900 border border-transparent hover:border-slate-800 text-white font-extrabold text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer uppercase tracking-wider transition-all"
+              disabled={salvando}
+              className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer uppercase tracking-wider disabled:opacity-60"
             >
-              <FileText className="w-4 h-4 shrink-0" />
-              <span>Gerar Proposta Comercial / Salvar PDF</span>
+              {salvando ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4 shrink-0" />}
+              <span>{salvando ? "Salvando..." : "Gerar proposta e salvar no funil"}</span>
             </button>
           </form>
 
-          {/* Quick Guide tips on side */}
-          <div className="lg:col-span-4 bg-slate-50 p-6 rounded-3xl border border-slate-200/40 text-left space-y-4">
+          {/* ------------------------------------------------- lateral */}
+          <div className="lg:col-span-4 bg-slate-50 p-6 rounded-3xl border border-slate-200/40 text-left space-y-4 h-fit">
             <h4 className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest flex items-center gap-1">
-              <Sparkles className="w-3.5 h-3.5 text-blue-500 animate-pulse" /> Recomendações e Regras
+              <Sparkles className="w-3.5 h-3.5 text-blue-500" /> Como funciona
             </h4>
-            
+
             <p className="text-xs text-slate-500 leading-relaxed font-medium">
-              Todo orçamento emitido fica armazenado localmente para que você possa reimprimir ou reenviar propostas já estruturadas.
+              A proposta é salva na nuvem e entra no funil como <strong>Enviado</strong>. Conforme o cliente
+              responde, você move para Negociando, Aceito ou Recusado. O aceito vira venda no Livro Caixa
+              com um clique — e de lá sai a nota fiscal.
             </p>
 
             <div className="space-y-2 border-t border-slate-200/50 pt-3">
-              <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Isenção de Marca d'Água:</span>
+              <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Marca d'água:</span>
               <p className="text-[11px] text-slate-500 leading-normal">
-                {planType === "premium" 
-                  ? "✓ Sua conta é Premium! Seus PDFs não possuem marca d'água da MEI Flow e são impressos com seu logotipo customizado." 
-                  : "⚠ Clientes no plano Gratuito terão a chancela de segurança 'Gerado Eletronicamente pelo MEI Flow' impressa no rodapé de cada orçamento em PDF."}
+                {planType === "premium"
+                  ? "✓ Conta Premium: PDF sem marca d'água e com seu logotipo."
+                  : "⚠ No plano gratuito o rodapé traz a chancela “Gerado via MEI Flow”."}
               </p>
             </div>
 
             <div className="space-y-2 border-t border-slate-200/50 pt-3">
-              <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Dados Cadastrados Relevantes:</span>
+              <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">Seus dados na proposta:</span>
               <div className="space-y-1 font-mono text-[10px] text-slate-500 bg-white p-3 rounded-xl border border-slate-200/40">
                 <div className="truncate"><strong className="text-slate-700">Emissor:</strong> {meiName}</div>
                 <div className="truncate"><strong className="text-slate-700">CNPJ:</strong> {cnpjPrestador || "Não cadastrado"}</div>
                 {inscricaoMunicipal && <div className="truncate"><strong className="text-slate-700">Insc. Mun:</strong> {inscricaoMunicipal}</div>}
-                {telefonePrestador && <div className="truncate"><strong className="text-slate-700">Fone MEI:</strong> {telefonePrestador}</div>}
+                {telefonePrestador && <div className="truncate"><strong className="text-slate-700">Fone:</strong> {telefonePrestador}</div>}
               </div>
             </div>
           </div>
 
         </div>
       ) : (
-        /* HISTORICO DE GERADOS SECTION */
-        <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200/50 shadow-xs space-y-6">
-          <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-50 pb-3">
-            <FileText className="w-4 h-4 text-slate-500" /> Histórico Comercial ({historico.length})
-          </h3>
+        /* ================================================== FUNIL ============ */
+        <div className="space-y-6">
 
-          {historico.length === 0 ? (
+          {/* Placar das etapas */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {ETAPAS.map((et) => {
+              const lista = porEtapa(et.chave);
+              const soma = lista.reduce((s, o) => s + (Number(o.total) || 0), 0);
+              const c = CORES[et.cor];
+              const Icone = et.icone;
+              return (
+                <div key={et.chave} className={`bg-white border rounded-2xl p-4 ${c.caixa}`}>
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <Icone className={`w-3.5 h-3.5 ${c.texto}`} />
+                    <span className="text-[9px] font-extrabold uppercase tracking-widest text-slate-400">{et.rotulo}</span>
+                  </div>
+                  <p className="text-2xl font-bold text-slate-900 leading-none">{lista.length}</p>
+                  <p className="text-[11px] text-slate-400 font-mono mt-1">{brl(soma)}</p>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Taxa de conversão */}
+          {historico.length > 0 && (() => {
+            const decididos = porEtapa("aceito").length + porEtapa("recusado").length;
+            const taxa = decididos ? Math.round((porEtapa("aceito").length / decididos) * 100) : 0;
+            return (
+              <div className="bg-white border border-slate-200/60 rounded-2xl p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
+                    <TrendingUp className="w-3.5 h-3.5 text-emerald-500" /> Taxa de fechamento
+                  </span>
+                  <span className="text-sm font-extrabold text-slate-800">{taxa}%</span>
+                </div>
+                <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${taxa}%` }} />
+                </div>
+                <p className="text-[10px] text-slate-400 mt-2 font-medium">
+                  De {decididos} proposta(s) que o cliente respondeu, {porEtapa("aceito").length} fechou.
+                  {porEtapa("enviado").length + porEtapa("negociando").length > 0 &&
+                    ` Ainda há ${porEtapa("enviado").length + porEtapa("negociando").length} em aberto.`}
+                </p>
+              </div>
+            );
+          })()}
+
+          {carregando && historico.length === 0 ? (
+            <div className="flex justify-center py-16 text-slate-400">
+              <Loader2 className="w-6 h-6 animate-spin" />
+            </div>
+          ) : historico.length === 0 ? (
             <div className="text-center py-20 bg-slate-50 rounded-2xl border border-dashed border-slate-200 p-8 space-y-2">
-              <p className="text-sm text-slate-400 italic">Nenhum orçamento emitido localizado.</p>
+              <p className="text-sm text-slate-400 italic">Nenhum orçamento no funil ainda.</p>
               <button
                 onClick={() => setActiveTab("criar")}
-                className="mt-2 text-xs text-blue-600 hover:text-blue-800 font-bold"
+                className="mt-2 text-xs text-blue-600 hover:text-blue-800 font-bold cursor-pointer"
               >
-                Gerar minha primeira proposta comercial &rarr;
+                Gerar minha primeira proposta &rarr;
               </button>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-slate-600">
-                <thead className="bg-slate-50 text-[10px] font-bold text-slate-400 uppercase tracking-wider rounded-lg">
-                  <tr>
-                    <th scope="col" className="py-3.5 px-4 font-extrabold">Data</th>
-                    <th scope="col" className="py-3.5 px-4 font-extrabold">Cliente</th>
-                    <th scope="col" className="py-3.5 px-4 font-extrabold">Especificação</th>
-                    <th scope="col" className="py-3.5 px-4 font-extrabold">Preço</th>
-                    <th scope="col" className="py-3.5 px-4 font-extrabold">Validade</th>
-                    <th scope="col" className="py-3.5 px-4 font-extrabold text-right">Ações</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 font-sans">
-                  {historico.map((orc) => (
-                    <tr key={orc.id} className="group hover:bg-slate-50/50 transition-all">
-                      <td className="py-4 px-4 font-mono font-medium text-slate-400">
-                        {new Date(orc.createdAt).toLocaleDateString("pt-BR")}
-                      </td>
-                      <td className="py-4 px-4 font-bold text-slate-800">
-                        <div className="flex flex-col">
-                          <span>{orc.clienteNome}</span>
-                          {orc.clienteDocumento && <span className="text-[10px] text-slate-400 font-normal font-mono">{orc.clienteDocumento}</span>}
-                        </div>
-                      </td>
-                      <td className="py-4 px-4 font-medium text-slate-600 max-w-[180px] truncate" title={orc.itemNome}>
-                        <div className="flex items-center gap-1.5">
-                          <span className={`w-2 h-2 rounded-full shrink-0 ${orc.itemTipo === "serviço" ? "bg-amber-400" : "bg-emerald-400"}`}></span>
-                          <span className="truncate">{orc.itemNome}</span>
-                        </div>
-                      </td>
-                      <td className="py-4 px-4 font-bold text-slate-900 font-mono">
-                        R$ {orc.itemValor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                      </td>
-                      <td className="py-4 px-4 text-slate-400 font-medium">
-                        {new Date(orc.validade + "T12:00:00").toLocaleDateString("pt-BR")}
-                      </td>
-                      <td className="py-4 px-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            onClick={() => setActivePreviewQuote(orc)}
-                            className="bg-slate-100 hover:bg-blue-50 text-blue-700 py-1 px-3 font-semibold rounded-lg text-[10.5px] transition-all cursor-pointer"
-                          >
-                            Visualizar Proposal
-                          </button>
-                          <button
-                            onClick={() => handleDeleteQuote(orc.id)}
-                            className="p-1 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all cursor-pointer"
-                            title="Remover Proposta"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="space-y-8">
+              {ETAPAS.map((et) => {
+                const lista = porEtapa(et.chave);
+                if (!lista.length) return null;
+                const c = CORES[et.cor];
+                return (
+                  <div key={et.chave} className="space-y-3">
+                    <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[10px] ${c.chip}`}>
+                        {et.rotulo}
+                      </span>
+                      <span className="text-slate-300 font-normal">{lista.length}</span>
+                    </h3>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                      {lista.map((orc) => {
+                        const vencido = orc.validade && new Date(orc.validade + "T23:59:59") < new Date();
+                        return (
+                          <div key={orc.id} className="bg-white border border-slate-200/60 rounded-2xl p-4 space-y-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-sm font-bold text-slate-800 truncate">
+                                  {orc.clienteNome}
+                                  {orc.numero ? <span className="text-slate-300 font-normal"> · nº {orc.numero}</span> : null}
+                                </p>
+                                <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+                                  {(orc.itens || []).length} item(ns) · criado em {dataBR(orc.createdAt)}
+                                </p>
+                              </div>
+                              <span className="shrink-0 text-sm font-extrabold text-slate-900 font-mono">
+                                {brl(Number(orc.total) || 0)}
+                              </span>
+                            </div>
+
+                            <p className="text-[11px] text-slate-500 truncate">
+                              {(orc.itens || []).map((i) => i.nome).filter(Boolean).join(" · ") || "Sem descrição"}
+                            </p>
+
+                            <div className="flex items-center gap-2 flex-wrap text-[10px]">
+                              <span className={`font-bold ${vencido && et.chave !== "aceito" ? "text-red-600" : "text-slate-400"}`}>
+                                {vencido ? "Venceu" : "Vale até"} {dataBR(orc.validade)}
+                              </span>
+                              {orc.vendaId && (
+                                <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded font-extrabold uppercase tracking-wide">
+                                  <ShoppingCart className="w-2.5 h-2.5" /> Virou venda
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Ações: mover no funil, converter, ver, excluir */}
+                            <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-slate-100">
+                              {ETAPAS.filter((o) => o.chave !== et.chave).map((destino) => (
+                                <button
+                                  key={destino.chave}
+                                  onClick={() => moverPara(orc, destino.chave)}
+                                  className="px-2 py-1 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
+                                  title={`Mover para ${destino.rotulo}`}
+                                >
+                                  {destino.chave === "aceito" ? <ArrowRight className="w-3 h-3 inline" /> :
+                                   destino.chave === "recusado" ? <XCircle className="w-3 h-3 inline" /> :
+                                   destino.chave === "enviado" ? <ArrowLeft className="w-3 h-3 inline" /> :
+                                   <TrendingUp className="w-3 h-3 inline" />}
+                                  <span className="ml-1">{destino.rotulo}</span>
+                                </button>
+                              ))}
+
+                              <div className="flex-1" />
+
+                              {et.chave === "aceito" && !orc.vendaId && onConverterEmVenda && (
+                                <button
+                                  onClick={() => converter(orc)}
+                                  disabled={convertendo === orc.id}
+                                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-extrabold cursor-pointer uppercase tracking-wide disabled:opacity-60 flex items-center gap-1"
+                                >
+                                  {convertendo === orc.id
+                                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                                    : <ShoppingCart className="w-3 h-3" />}
+                                  Lançar venda
+                                </button>
+                              )}
+
+                              <button
+                                onClick={() => setActivePreviewQuote(orc)}
+                                className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-[10px] font-bold cursor-pointer"
+                              >
+                                Ver / PDF
+                              </button>
+                              <button
+                                onClick={() => excluir(orc)}
+                                className="p-1 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer"
+                                title="Excluir orçamento"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
       )}
 
-      {/* CATALOG AUTO FILL MODAL (Premium item picker) */}
+      {/* ------------------------------------------------ catálogo (premium) */}
       {showCatalogModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto print:hidden">
           <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col max-h-[500px] my-auto">
             <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-indigo-600 animate-pulse" />
-                <span>Escolher do seu Catálogo Comercial</span>
+                <Sparkles className="w-5 h-5 text-indigo-600" />
+                <span>Escolher do seu Catálogo</span>
               </h3>
               <button
-                onClick={() => setShowCatalogModal(false)}
+                onClick={() => { setShowCatalogModal(false); setItemDestino(null); }}
                 className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 cursor-pointer"
               >
                 <X className="w-5 h-5" />
@@ -643,30 +931,28 @@ export default function OrcamentoGenerator({
               <div className="relative">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
-                  type="text"
-                  placeholder="Pesquisar itens cadastrados..."
-                  value={catalogSearch}
-                  onChange={(e) => setCatalogSearch(e.target.value)}
+                  type="text" placeholder="Pesquisar itens cadastrados..."
+                  value={catalogSearch} onChange={(e) => setCatalogSearch(e.target.value)}
                   className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 outline-hidden"
                 />
               </div>
             </div>
 
-            <div className="flex-grow p-4 overflow-y-auto divide-y divide-slate-100">
+            <div className="grow p-4 overflow-y-auto divide-y divide-slate-100">
               {loadingCatalog ? (
                 <div className="py-12 flex flex-col items-center justify-center gap-1 text-slate-400">
                   <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
-                  <span className="text-xs">Buscando itens na nuvem...</span>
+                  <span className="text-xs">Buscando itens...</span>
                 </div>
               ) : catalogItems.length === 0 ? (
                 <div className="text-center py-10 text-slate-400">
-                  <p className="text-xs italic">Você não possui itens cadastrados no catálogo.</p>
-                  <p className="text-[10px] mt-1 text-slate-400">Vá no menu 'Catálogo' na tela inicial e configure seus produtos/serviços recorrentes.</p>
+                  <p className="text-xs italic">Você não possui itens no catálogo.</p>
+                  <p className="text-[10px] mt-1">Cadastre em 'Catálogo', na tela inicial.</p>
                 </div>
               ) : (
                 catalogItems
-                  .filter(item => item.title.toLowerCase().includes(catalogSearch.toLowerCase()))
-                  .map(item => (
+                  .filter((item) => item.title.toLowerCase().includes(catalogSearch.toLowerCase()))
+                  .map((item) => (
                     <div
                       key={item.id}
                       onClick={() => handleSelectCatalogItem(item)}
@@ -680,9 +966,7 @@ export default function OrcamentoGenerator({
                         </div>
                         <span className="text-xs font-bold text-slate-800 truncate block">{item.title}</span>
                       </div>
-                      <span className="text-xs font-bold text-slate-900 font-mono">
-                        R$ {item.price.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                      </span>
+                      <span className="text-xs font-bold text-slate-900 font-mono">{brl(item.price)}</span>
                     </div>
                   ))
               )}
@@ -691,36 +975,24 @@ export default function OrcamentoGenerator({
         </div>
       )}
 
-      {/* STUNNING HIGH FIDELITY PRINT PREVIEW MODAL */}
+      {/* ============================================ VISUALIZADOR / FOLHA === */}
       {activePreviewQuote && (
         <div id="print-overlay" className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex justify-center items-start p-4 sm:p-6 md:p-10 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col my-4 sm:my-8 animate-scale-up">
-            
-            {/* Modal Controls Bar (hidden during standard browser print because we configure printable element) */}
+          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col my-4 sm:my-8">
+
             <div className="pt-safe px-6 pb-4 bg-slate-100 border-b border-slate-200 flex items-center justify-between print:hidden">
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
                 <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-                <span>Visualizador de Proposta Oficial</span>
+                <span>Proposta nº {activePreviewQuote.numero || "—"}</span>
               </h3>
-
               <div className="flex items-center gap-2">
                 <button
-                  type="button"
-                  onClick={handlePrintQuote}
-                  disabled={isSavingQuotePdf}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                  type="button" onClick={handlePrintQuote} disabled={isSavingQuotePdf}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer disabled:opacity-60"
                 >
-                  {isSavingQuotePdf ? (
-                    <>
-                      <Loader2 className="w-4 h-4 text-blue-100 animate-spin" />
-                      <span>Salvando PDF...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Printer className="w-4 h-4 text-blue-100" />
-                      <span>Imprimir / Salvar PDF</span>
-                    </>
-                  )}
+                  {isSavingQuotePdf
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /><span>Salvando...</span></>
+                    : <><Printer className="w-4 h-4 text-blue-100" /><span>Imprimir / PDF</span></>}
                 </button>
                 <button
                   onClick={() => setActivePreviewQuote(null)}
@@ -731,165 +1003,153 @@ export default function OrcamentoGenerator({
               </div>
             </div>
 
-            {/* PRINT CONTAINER SHEET PANEL */}
-            <div ref={printableRef} className="p-8 md:p-12 space-y-8 bg-white font-sans text-slate-800 relative bg-[radial-gradient(#f1f5f9_1.2px,transparent_1.2px)] [background-size:16px_16px] print:p-0 print:border-0 print:shadow-none">
-              
-              {/* Quote Sheet Header */}
-              <div className="flex flex-col sm:flex-row justify-between items-start gap-6 border-b border-slate-300/80 pb-6">
-                
-                <div className="space-y-2.5 max-w-sm text-left">
+            {/*
+              A FOLHA.
+              `data-folha` é o gancho do index.css que transforma isto em papel
+              A4 na impressão. Compacta de propósito: espaçamentos generosos
+              ficam bonitos na tela e empurram o conteúdo para a segunda página.
+            */}
+            <div
+              ref={printableRef}
+              data-folha="orcamento"
+              className="p-6 md:p-8 space-y-5 bg-white font-sans text-slate-800"
+            >
+              {/* cabeçalho */}
+              <div className="flex justify-between items-start gap-6 border-b border-slate-300/80 pb-4">
+                <div className="space-y-1.5 max-w-sm text-left">
                   {planType === "premium" && companyLogo ? (
-                    <div className="mb-2 shrink-0 max-w-[200px] max-h-14 overflow-hidden rounded-lg">
-                      <img 
-                        src={companyLogo} 
-                        alt="Logomarca Emissor" 
-                        referrerPolicy="no-referrer"
-                        className="h-10 object-contain block border-0" 
-                      />
+                    <div className="mb-1.5 shrink-0 max-w-[180px] max-h-12 overflow-hidden rounded-lg">
+                      <img src={companyLogo} alt="Logo" referrerPolicy="no-referrer" className="h-9 object-contain block border-0" />
                     </div>
                   ) : null}
-
-                  <h2 className="text-xl font-bold text-slate-900 tracking-tight leading-none uppercase">
-                    {meiName}
-                  </h2>
-                  
-                  <div className="space-y-1 text-slate-500 font-medium text-xs">
-                    {cnpjPrestador && <p className="font-mono text-[11px]">CNPJ Emissor: {cnpjPrestador}</p>}
-                    {inscricaoMunicipal && <p className="font-mono text-[11px]">Inscrição Municipal: {inscricaoMunicipal}</p>}
+                  <h2 className="text-lg font-bold text-slate-900 tracking-tight leading-tight uppercase">{meiName}</h2>
+                  <div className="space-y-0.5 text-slate-500 font-medium text-[11px]">
+                    {cnpjPrestador && <p className="font-mono">CNPJ: {cnpjPrestador}</p>}
+                    {inscricaoMunicipal && <p className="font-mono">Insc. Municipal: {inscricaoMunicipal}</p>}
                     {telefonePrestador && <p className="flex items-center gap-1.5"><Phone className="w-3 h-3 text-slate-400" /> {telefonePrestador}</p>}
                   </div>
                 </div>
 
-                <div className="sm:text-right space-y-2 shrink-0">
-                  <div className="inline-block bg-slate-900 text-white font-bold text-[10px] tracking-widest uppercase px-3.5 py-1.5 rounded-md">
-                    Orçamento Comercial
+                <div className="text-right space-y-1.5 shrink-0">
+                  <div className="inline-block bg-slate-900 text-white font-bold text-[10px] tracking-widest uppercase px-3 py-1.5 rounded-md">
+                    Orçamento
                   </div>
-                  <p className="text-slate-400 font-mono text-[11px]">ID: {activePreviewQuote.id}</p>
-                  <p className="text-slate-500 text-xs font-bold">Gerado em: {new Date(activePreviewQuote.createdAt).toLocaleDateString("pt-BR")}</p>
+                  <p className="text-slate-800 font-bold text-sm">Nº {activePreviewQuote.numero || "—"}</p>
+                  <p className="text-slate-500 text-[11px] font-medium">Emitido em {dataBR(activePreviewQuote.createdAt)}</p>
                 </div>
               </div>
 
-              {/* DADOS DO CLIENTE BANNER */}
-              <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200/50 space-y-2.5 text-left">
-                <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">Identificação do Cliente Destinatário</span>
-                <h4 className="text-sm font-bold text-slate-800 leading-none">{activePreviewQuote.clienteNome}</h4>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-slate-500 text-xs font-semibold pt-1">
+              {/* cliente */}
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/60 space-y-1.5 text-left">
+                <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">Cliente</span>
+                <h4 className="text-sm font-bold text-slate-800 leading-tight">{activePreviewQuote.clienteNome}</h4>
+                <div className="flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-slate-500 font-semibold pt-0.5">
                   {activePreviewQuote.clienteDocumento && (
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-normal">CPF / CNPJ:</span>
-                      <span className="font-mono text-slate-700 font-bold">{activePreviewQuote.clienteDocumento}</span>
-                    </div>
+                    <span><span className="text-slate-400 font-normal">CPF/CNPJ: </span>
+                      <span className="font-mono text-slate-700">{activePreviewQuote.clienteDocumento}</span></span>
                   )}
                   {activePreviewQuote.clienteEmail && (
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-normal">E-mail de Contato:</span>
-                      <span className="text-slate-700 truncate block">{activePreviewQuote.clienteEmail}</span>
-                    </div>
+                    <span><span className="text-slate-400 font-normal">E-mail: </span>
+                      <span className="text-slate-700">{activePreviewQuote.clienteEmail}</span></span>
                   )}
                   {activePreviewQuote.clienteTelefone && (
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-normal">Telefone / Celular:</span>
-                      <span className="text-slate-700">{activePreviewQuote.clienteTelefone}</span>
-                    </div>
+                    <span><span className="text-slate-400 font-normal">Telefone: </span>
+                      <span className="text-slate-700">{activePreviewQuote.clienteTelefone}</span></span>
                   )}
                 </div>
               </div>
 
-              {/* DETALHAMENTO DO PREÇO UNITÁRIO */}
-              <div className="space-y-3.5">
-                <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block text-left">Detalhamento dos Serviços e Produtos</span>
-                
-                <div className="border border-slate-200/80 rounded-2xl overflow-hidden shadow-2xs">
-                  <table className="w-full text-left text-xs bg-white text-slate-600">
+              {/* itens */}
+              <div className="space-y-2">
+                <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block text-left">Itens</span>
+                <div className="border border-slate-200/80 rounded-xl overflow-hidden">
+                  <table className="w-full text-left text-[11px] bg-white text-slate-600">
                     <thead className="bg-slate-50">
                       <tr>
-                        <th className="py-3 px-4 font-extrabold text-slate-500 uppercase tracking-wider text-[10px]">Tipo</th>
-                        <th className="py-3 px-4 font-extrabold text-slate-500 uppercase tracking-wider text-[10px]">Descrição Comercial</th>
-                        <th className="py-3 px-4 font-extrabold text-slate-500 uppercase tracking-wider text-[10px] text-right">Preço de Venda</th>
+                        <th className="py-2 px-3 font-extrabold text-slate-500 uppercase tracking-wider text-[9px]">Descrição</th>
+                        <th className="py-2 px-2 font-extrabold text-slate-500 uppercase tracking-wider text-[9px] text-center">Qtd.</th>
+                        <th className="py-2 px-2 font-extrabold text-slate-500 uppercase tracking-wider text-[9px] text-right">Unit.</th>
+                        <th className="py-2 px-3 font-extrabold text-slate-500 uppercase tracking-wider text-[9px] text-right">Total</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
-                      <tr>
-                        <td className="py-4.5 px-4">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                            activePreviewQuote.itemTipo === "serviço" 
-                              ? "bg-amber-50 text-amber-700 border border-amber-100" 
-                              : "bg-emerald-50 text-emerald-700 border border-emerald-100"
-                          }`}>
-                            {activePreviewQuote.itemTipo}
-                          </span>
-                        </td>
-                        <td className="py-4.5 px-4 font-bold text-slate-800 font-sans break-words max-w-[280px]">
-                          {activePreviewQuote.itemNome}
-                        </td>
-                        <td className="py-4.5 px-4 font-mono font-bold text-right text-slate-950">
-                          R$ {activePreviewQuote.itemValor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                        </td>
-                      </tr>
+                      {itensDaFolha.map((it) => (
+                        <tr key={it.id}>
+                          <td className="py-2.5 px-3 text-slate-800 break-words">
+                            <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle ${
+                              it.tipo === "serviço" ? "bg-amber-400" : "bg-emerald-400"
+                            }`} />
+                            {it.nome}
+                          </td>
+                          <td className="py-2.5 px-2 text-center font-mono">{it.quantidade}</td>
+                          <td className="py-2.5 px-2 text-right font-mono">{brl(it.valorUnitario)}</td>
+                          <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-950">
+                            {brl(it.quantidade * it.valorUnitario)}
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
               </div>
 
-              {/* TOTAL & VALIDADE HEADER */}
-              <div className="flex flex-col sm:flex-row justify-between items-stretch gap-4 bg-slate-900 text-white rounded-3xl p-6 shadow-md text-left">
-                <div className="space-y-1">
-                  <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block">Condições de Validade</span>
-                  <p className="text-xs text-slate-200">
-                    Esta proposta possui validade legal garantida até o dia:
-                  </p>
-                  <p className="text-sm font-bold text-blue-300 font-mono">
-                    {new Date(activePreviewQuote.validade + "T12:00:00").toLocaleDateString("pt-BR")}
+              {/* observações */}
+              {activePreviewQuote.observacoes && (
+                <div className="text-left space-y-1">
+                  <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">Observações</span>
+                  <p className="text-[11px] text-slate-600 leading-relaxed whitespace-pre-line">
+                    {activePreviewQuote.observacoes}
                   </p>
                 </div>
+              )}
 
-                <div className="sm:text-right flex flex-col justify-center sm:items-end pt-3 sm:pt-0 border-t sm:border-t-0 border-slate-700">
-                  <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block">Valor Total do Orçamento</span>
-                  <span className="text-3xl font-bold font-mono tracking-tight text-white leading-tight">
-                    R$ {activePreviewQuote.itemValor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              {/* total e validade */}
+              <div className="flex justify-between items-stretch gap-4 bg-slate-900 text-white rounded-2xl p-4 text-left">
+                <div className="space-y-0.5">
+                  <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">Validade</span>
+                  <p className="text-xs font-bold text-blue-300 font-mono">{dataBR(activePreviewQuote.validade)}</p>
+                  {Number(activePreviewQuote.desconto) > 0 && (
+                    <p className="text-[10px] text-slate-400 pt-1">
+                      Subtotal {brl(subtotalFolha)} · desconto {brl(Number(activePreviewQuote.desconto))}
+                    </p>
+                  )}
+                </div>
+                <div className="text-right flex flex-col justify-center items-end">
+                  <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">Valor total</span>
+                  <span className="text-2xl font-bold font-mono tracking-tight text-white leading-tight">
+                    {brl(Number(activePreviewQuote.total) || subtotalFolha)}
                   </span>
                 </div>
               </div>
 
-              {/* SIGNATURE PLACEHOLDERS */}
-              <div className="grid grid-cols-2 gap-8 pt-10 border-t border-slate-200/80">
-                <div className="text-center space-y-12">
-                  <div className="border-t border-slate-300 w-full mx-auto max-w-[200px] pt-1.5 text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+              {/* assinaturas */}
+              <div className="grid grid-cols-2 gap-8 pt-8">
+                <div className="text-center">
+                  <div className="border-t border-slate-300 w-full mx-auto max-w-[190px] pt-1 text-[9px] text-slate-400 font-bold uppercase tracking-wider">
                     Assinatura do Emissor
                   </div>
                 </div>
-                <div className="text-center space-y-12">
-                  <div className="border-t border-slate-300 w-full mx-auto max-w-[200px] pt-1.5 text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                <div className="text-center">
+                  <div className="border-t border-slate-300 w-full mx-auto max-w-[190px] pt-1 text-[9px] text-slate-400 font-bold uppercase tracking-wider">
                     Aceite do Cliente
                   </div>
                 </div>
               </div>
 
-              {/* FOOTER: CONDITIONAL APP MARKING */}
-              <div className="pt-6 border-t border-slate-100 flex items-center justify-center text-center">
+              {/* rodapé */}
+              <div className="pt-3 border-t border-slate-100 text-center">
                 {planType === "premium" ? (
-                  <p className="text-[10px] text-slate-400 font-medium">
+                  <p className="text-[9px] text-slate-400 font-medium">
                     Obrigado por nos escolher! Atenciosamente, {meiName}.
                   </p>
                 ) : (
-                  <div className="flex flex-col items-center gap-1">
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest flex items-center gap-1">
-                      <span>Gerado Eletronicamente via</span>
-                      <span className="bg-blue-600 text-white font-extrabold px-1.5 py-0.5 rounded text-[8px] scale-95 uppercase tracking-wider">
-                        MEI Flow
-                      </span>
-                    </p>
-                    <p className="text-[9px] text-slate-400 font-medium">
-                      Facilite seus recebimentos e faturamento • Ative a conta Premium
-                    </p>
-                  </div>
+                  <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">
+                    Gerado eletronicamente via MEI Flow
+                  </p>
                 )}
               </div>
-
             </div>
 
-            {/* In-app bottom modal helper bar (hidden on print) */}
             <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2.5 print:hidden">
               <button
                 onClick={() => setActivePreviewQuote(null)}

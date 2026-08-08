@@ -51,17 +51,55 @@ export interface CatalogItem {
   price: number;
 }
 
+/** Uma linha do orçamento. Quantidade × valor unitário. */
+export interface ItemOrcamento {
+  id: string;
+  tipo: "produto" | "serviço";
+  nome: string;
+  quantidade: number;
+  valorUnitario: number;
+}
+
+/**
+ * Onde o orçamento está no funil de vendas.
+ *
+ * "negociando" é o degrau que a maioria dos sistemas esquece, e é onde mora
+ * quem pediu desconto ou ficou de pensar. Sem ele, tudo que não foi respondido
+ * some junto com o que foi recusado.
+ */
+export type SituacaoOrcamento = "enviado" | "negociando" | "aceito" | "recusado";
+
 export interface Orcamento {
   id: string;
+  /** Número sequencial por usuário, para o cliente poder citar a proposta. */
+  numero?: number;
   clienteId: string;
   clienteNome: string;
   clienteDocumento?: string;
   clienteEmail?: string;
   clienteTelefone?: string;
-  itemTipo: "produto" | "serviço";
-  itemNome: string;
-  itemValor: number;
+  /** Itens da proposta. */
+  itens?: ItemOrcamento[];
+  /** Soma dos itens menos o desconto — gravada para não recalcular no histórico. */
+  total?: number;
+  desconto?: number;
+  observacoes?: string;
   validade: string;
+  situacao?: SituacaoOrcamento;
   createdAt: string;
+  atualizadoEm?: string;
+  /** Preenchido quando o orçamento aceito virou lançamento no Livro Caixa. */
+  vendaId?: string;
+
+  // --------------------------------------------------------------------------
+  // LEGADO — orçamentos de um item só, salvos antes de `itens` existir.
+  //
+  // Ficam opcionais de propósito: quem já tinha orçamento no navegador não
+  // perde nada, e a função normalizarOrcamento converte para `itens` na leitura.
+  // Não escreva nestes campos em código novo.
+  // --------------------------------------------------------------------------
+  itemTipo?: "produto" | "serviço";
+  itemNome?: string;
+  itemValor?: number;
 }
 

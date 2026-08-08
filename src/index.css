@@ -43,3 +43,85 @@
 .pr-safe {
   padding-right: var(--safe-right);
 }
+
+/* ==========================================================================
+   IMPRESSÃO (orçamentos, recibos)
+   ==========================================================================
+   O visualizador do orçamento é uma camada `fixed inset-0` com rolagem. Isso é
+   ótimo na tela e péssimo no papel: o navegador imprime só o que está visível
+   e corta o resto — foi exatamente o defeito relatado ("sai em várias folhas e
+   fora da página").
+
+   A correção tem três partes, e as três são necessárias:
+
+   1. `@page` define o papel A4 e a margem — sem isso o Chrome usa a margem
+      padrão dele e o cabeçalho/rodapé do navegador roubam espaço.
+   2. A camada precisa deixar de ser `fixed` e voltar a ser fluxo normal, senão
+      ela continua sendo "uma tela" e não "um documento".
+   3. Todo o resto da aplicação sai da impressão. Esconder só a barra de botões
+      não basta: o corpo do app continua ocupando páginas em branco antes.
+
+   O elemento que vira o papel é o que tem `data-folha="orcamento"`.
+   ========================================================================== */
+
+@media print {
+  @page {
+    size: A4;
+    margin: 10mm;
+  }
+
+  /* Nada do aplicativo vai para o papel, exceto o caminho até a folha. */
+  body * {
+    visibility: hidden;
+  }
+
+  #print-overlay,
+  #print-overlay * {
+    visibility: visible;
+  }
+
+  /* A camada deixa de ser tela e passa a ser documento. */
+  #print-overlay {
+    position: static !important;
+    inset: auto !important;
+    display: block !important;
+    overflow: visible !important;
+    background: #fff !important;
+    backdrop-filter: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    z-index: auto !important;
+  }
+
+  #print-overlay > * {
+    max-width: none !important;
+    width: 100% !important;
+    margin: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
+  /* A folha em si: sem fundo pontilhado, sem sombra, e não pode quebrar. */
+  [data-folha] {
+    padding: 0 !important;
+    background-image: none !important;
+    box-shadow: none !important;
+    border: 0 !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Blocos que não devem ser cortados no meio de uma quebra. */
+  [data-folha] table,
+  [data-folha] thead,
+  [data-folha] tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .print\:hidden {
+    display: none !important;
+  }
+}
