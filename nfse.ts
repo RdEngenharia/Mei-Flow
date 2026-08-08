@@ -90,7 +90,10 @@ let cacheCert: Certificado | null = null;
 function abrirCertificado(): Certificado {
   if (cacheCert) return cacheCert;
 
-  const b64 = env("NFSE_CERT_P12_BASE64");
+  // Colar o base64 num campo de texto costuma trazer quebras de linha e espaços
+  // junto. O decodificador rejeita qualquer um deles, e o erro que ele devolve
+  // ("senha errada") aponta para o lugar errado. Então limpamos antes.
+  const b64 = env("NFSE_CERT_P12_BASE64").replace(/\s+/g, "");
   const senha = env("NFSE_CERT_SENHA");
   if (!b64) throw new Error("SEM_CERTIFICADO");
 
@@ -454,7 +457,21 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
       });
     } catch (err: any) {
       const { status, mensagem } = explicar(err);
-      res.status(status).json({ success: false, certificado: "falhou", mensagem });
+      const bruto = env("NFSE_CERT_P12_BASE64").replace(/\s+/g, "");
+      // Pistas sem risco: nenhum pedaço útil do certificado nem da senha sai
+      // daqui. Só o suficiente para saber ONDE está o problema.
+      res.status(status).json({
+        success: false,
+        certificado: "falhou",
+        mensagem,
+        conferir: {
+          variavelCertificadoExiste: bruto.length > 0,
+          tamanhoDoTextoColado: bruto.length,
+          pareceUmCertificado: bruto.startsWith("MII"),
+          variavelSenhaExiste: env("NFSE_CERT_SENHA").length > 0,
+          ambiente: ehProducao() ? "Produção" : "Homologação",
+        },
+      });
     }
   });
 
