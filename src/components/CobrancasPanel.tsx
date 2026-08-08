@@ -4,6 +4,7 @@ import {
   TrendingUp, Clock, AlertOctagon, Wallet, ChevronRight, RefreshCw, Search, Sparkles,
 } from "lucide-react";
 import { auth } from "../firebase";
+import { montarAgenda, ordemDaAba } from "../utils/agendaCobrancas";
 import { getApiUrl } from "../utils/nativeFile";
 import { Cliente } from "../types";
 
@@ -26,6 +27,12 @@ type Item = {
   id: string;
   cliente: string;
   valor: number;
+  /**
+   * ISO curto. O servidor sempre mandou, mas o tipo não declarava — então a
+   * tela só tinha a data em texto (dd/mm/aaaa), que não serve para ordenar nem
+   * para agrupar. A agenda precisa dela.
+   */
+  vencimento?: string;
   vencimentoBR: string;
   situacao: "pago" | "pendente" | "vencido" | "cancelado";
   diasParaVencer: number | null;
@@ -645,44 +652,96 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
                     )}
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    {lista.map((it) => (
-                      <div
-                        key={it.id}
-                        className="bg-white border border-slate-200/60 p-3.5 rounded-2xl flex items-center justify-between gap-3 text-xs"
-                      >
-                        <div className="text-left min-w-0">
-                          <p className="font-bold text-slate-800 truncate">{it.cliente}</p>
-                          <p className="text-[10px] text-slate-400 mt-0.5 font-medium">
-                            Vence {it.vencimentoBR}
-                            {it.situacao === "vencido" && (
-                              <span className="text-rose-600 font-bold"> · {it.diasEmAtraso} dias em atraso</span>
-                            )}
-                            {it.situacao === "pendente" && it.diasParaVencer === 0 && (
-                              <span className="text-amber-600 font-bold"> · vence hoje</span>
-                            )}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span
-                            className={`font-extrabold ${
-                              it.situacao === "pago" ? "text-emerald-600"
-                              : it.situacao === "vencido" ? "text-rose-600"
-                              : "text-slate-700"
-                            }`}
-                          >
-                            {brl(it.valor)}
+                  /*
+                    ============================================================
+                    AGENDA — mês, depois dia
+                    ============================================================
+
+                    Era uma pilha só. Com trinta boletos vira um paredão de
+                    nomes em que ninguém acha nada, e o usuário viu isso
+                    chegando: "vai começar a gerar histórico, vai ficar
+                    bagunçado assim".
+
+                    Ele citou a Cora, que agrupa por faixa de semana. Semana é
+                    um corte arbitrário — ninguém pensa "o boleto da semana do
+                    dia 13". Pensa em mês, e dentro do mês, em dia. Os dias
+                    próximos aparecem por nome (Hoje, Amanhã, Ontem), que é como
+                    a pessoa fala.
+                  */
+                  <div className="space-y-5">
+                    {montarAgenda(lista, ordemDaAba(aba)).map((mes) => (
+                      <div key={mes.chave} className="space-y-2">
+                        <div className="flex items-baseline justify-between gap-2 sticky top-0 z-10 bg-slate-50/95 backdrop-blur-sm py-1.5 -mx-1 px-1 rounded-lg">
+                          <h4 className="text-[11px] font-extrabold uppercase tracking-widest text-slate-500">
+                            {mes.rotulo}
+                          </h4>
+                          <span className="text-[10px] font-bold text-slate-400 shrink-0">
+                            {mes.quantidade} boleto{mes.quantidade > 1 ? "s" : ""} · {brl(mes.total)}
                           </span>
-                          {it.link && (
-                            <button
-                              onClick={() => window.open(it.link, "_blank")}
-                              className="w-8 h-8 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg flex items-center justify-center text-slate-500 cursor-pointer"
-                              title="Abrir boleto"
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </button>
-                          )}
                         </div>
+
+                        {mes.dias.map((dia) => (
+                          <div key={dia.chave} className="flex gap-2.5">
+                            {/*
+                              Coluna do dia à esquerda, como numa agenda de
+                              papel: o olho desce pela data e para no dia certo.
+                            */}
+                            <div className="w-16 shrink-0 pt-3 text-right">
+                              <p className={`text-[10px] font-extrabold uppercase tracking-wide ${
+                                dia.ehHoje ? "text-emerald-600" : "text-slate-400"
+                              }`}>
+                                {dia.rotulo}
+                              </p>
+                              {dia.itens.length > 1 && (
+                                <p className="text-[9px] text-slate-300 font-bold mt-0.5">{brl(dia.total)}</p>
+                              )}
+                            </div>
+
+                            <div className={`flex-1 min-w-0 space-y-2 border-l-2 pl-2.5 ${
+                              dia.ehHoje ? "border-emerald-300" : "border-slate-150"
+                            }`}>
+                              {dia.itens.map((it) => (
+                                <div
+                                  key={it.id}
+                                  className="bg-white border border-slate-200/60 p-3 rounded-xl flex items-center justify-between gap-3 text-xs"
+                                >
+                                  <div className="text-left min-w-0">
+                                    <p className="font-bold text-slate-800 truncate">{it.cliente}</p>
+                                    <p className="text-[10px] text-slate-400 mt-0.5 font-medium">
+                                      Vence {it.vencimentoBR}
+                                      {it.situacao === "vencido" && (
+                                        <span className="text-rose-600 font-bold"> · {it.diasEmAtraso} dias em atraso</span>
+                                      )}
+                                      {it.situacao === "pendente" && it.diasParaVencer === 0 && (
+                                        <span className="text-amber-600 font-bold"> · vence hoje</span>
+                                      )}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <span
+                                      className={`font-extrabold ${
+                                        it.situacao === "pago" ? "text-emerald-600"
+                                        : it.situacao === "vencido" ? "text-rose-600"
+                                        : "text-slate-700"
+                                      }`}
+                                    >
+                                      {brl(it.valor)}
+                                    </span>
+                                    {it.link && (
+                                      <button
+                                        onClick={() => window.open(it.link, "_blank")}
+                                        className="w-8 h-8 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg flex items-center justify-center text-slate-500 cursor-pointer"
+                                        title="Abrir boleto"
+                                      >
+                                        <ExternalLink className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     ))}
                   </div>

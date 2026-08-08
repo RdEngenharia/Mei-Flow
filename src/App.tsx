@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   Plus,
   Minus,
@@ -94,6 +94,60 @@ import { onSnapshot, doc, setDoc } from "firebase/firestore";
 export default function App() {
   // Controle de Navegação por Abas/Módulos
   const [currentView, setCurrentView] = useState<"home" | "clientes" | "financeiro" | "orcamentos" | "catalogo">("home");
+
+  /**
+   * ==========================================================================
+   * A SETA DE VOLTAR DO NAVEGADOR PRECISA FUNCIONAR
+   * ==========================================================================
+   *
+   * O aplicativo troca de tela mudando um estado, sem mexer no endereço. Para o
+   * navegador, quem entra em Clientes continua na mesma página — então a seta
+   * de voltar não voltava para o Início: ela saía do MEI Flow inteiro, e no
+   * celular isso significa fechar o aplicativo. A única saída era achar o botão
+   * "Voltar para o Início" dentro da tela.
+   *
+   * A correção tem duas metades, e as duas são necessárias:
+   *
+   *   1. Ao ENTRAR numa tela, empilhamos uma entrada no histórico do navegador
+   *      (`pushState`). Passa a existir um "atrás" para onde voltar.
+   *   2. Ao clicar em voltar, o navegador dispara `popstate`; lemos de qual
+   *      tela se trata e mudamos o estado — sem recarregar nada.
+   *
+   * ⚠️ `pushState` NÃO dispara `popstate`. Se disparasse, cada troca de tela
+   *    entraria em laço com o próprio ouvinte. É por isso que o passo 1 não
+   *    precisa de nenhuma trava contra reentrada.
+   *
+   * O endereço em si não muda (nada de /clientes): criar rotas de verdade
+   * exigiria um roteador e mudaria como a Vercel serve o aplicativo. Isto
+   * resolve o que incomoda — a seta funciona — sem mexer em nada disso.
+   */
+  const irPara = useCallback((tela: typeof currentView) => {
+    setCurrentView((atual) => {
+      if (atual === tela) return atual;
+      try {
+        if (tela === "home") {
+          // Voltar para o início é o mesmo que desfazer: se há histórico
+          // nosso, desempilha em vez de empilhar mais.
+          if (window.history.state?.meiflow && window.history.state.tela !== "home") {
+            window.history.back();
+            return atual; // o popstate abaixo é quem muda a tela
+          }
+        } else {
+          window.history.pushState({ meiflow: true, tela }, "");
+        }
+      } catch { /* navegador sem history API: a tela troca do mesmo jeito */ }
+      return tela;
+    });
+  }, []);
+
+  useEffect(() => {
+    const aoVoltar = (e: PopStateEvent) => {
+      const tela = e.state?.meiflow ? e.state.tela : "home";
+      setCurrentView(tela || "home");
+    };
+    window.addEventListener("popstate", aoVoltar);
+    return () => window.removeEventListener("popstate", aoVoltar);
+  }, []);
   // Bandeira que o botao "Emitir Nota Fiscal (NFS-e)" do topo levanta para abrir
   // a gaveta do NotaFiscalPanel, que fica bem mais abaixo na pagina.
   const [abrirNotaFiscal, setAbrirNotaFiscal] = useState(false);
@@ -804,8 +858,6 @@ export default function App() {
       localStorage.setItem("meiflow_cnpj_prestador", newCnpj);
       localStorage.setItem("meiflow_inscricao_municipal", newInscricao);
       localStorage.setItem("meiflow_telefone_prestador", newTelefone);
-      localStorage.setItem("meiflow_email_prestador", dados.email || "");
-      localStorage.setItem("meiflow_endereco_prestador", JSON.stringify(dados.endereco || {}));
       localStorage.setItem("meiflow_is_cpf_emissor", "false");
 
       if (user) {
@@ -851,7 +903,7 @@ export default function App() {
   const handleSignOut = async () => {
     if (confirm("Gostaria de se desconectar de seu perfil MEI? O app voltará ao modo offline.")) {
       await logoutUser();
-      setCurrentView("home");
+      irPara("home");
       triggerToast("✓ Desconectado com sucesso.");
     }
   };
@@ -2072,7 +2124,7 @@ ${meiName}`;
                 </button>
 
                 <button
-                  onClick={() => setCurrentView("orcamentos")}
+                  onClick={() => irPara("orcamentos")}
                   className="px-4.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
                 >
                   <FileText className="w-3.5 h-3.5 text-blue-100" />
@@ -2102,7 +2154,7 @@ ${meiName}`;
                     if (planType === "free") {
                       setShowUpgradeModal(true);
                     } else {
-                      setCurrentView("catalogo");
+                      irPara("catalogo");
                     }
                   }}
                   className="px-4.5 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
@@ -2118,7 +2170,7 @@ ${meiName}`;
               
               {/* CARD 1: FATURAMENTO TOTAL (RESUMO FINANCEIRO) */}
               <div 
-                onClick={() => setCurrentView("financeiro")}
+                onClick={() => irPara("financeiro")}
                 className="bg-white p-10 md:p-12 rounded-3xl border border-slate-200/50 shadow-xs flex flex-col justify-between cursor-pointer hover:border-blue-300 hover:shadow-md transition-all duration-300 transform hover:-translate-y-0.5"
                 title="Clique para ver o extrato financeiro detalhado"
               >
@@ -2145,7 +2197,7 @@ ${meiName}`;
 
               {/* CARD 2: QUANTIDADE DE CLIENTES */}
               <div 
-                onClick={() => setCurrentView("clientes")}
+                onClick={() => irPara("clientes")}
                 className="bg-white p-10 md:p-12 rounded-3xl border border-slate-200/50 shadow-xs flex flex-col justify-between cursor-pointer hover:border-blue-300 hover:shadow-md transition-all duration-300 transform hover:-translate-y-0.5"
                 title="Clique para ver a lista de clientes cadastrados"
               >
@@ -2164,7 +2216,7 @@ ${meiName}`;
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      setCurrentView("clientes");
+                      irPara("clientes");
                     }}
                     className="text-blue-600 hover:text-blue-800 font-semibold hover:underline flex items-center gap-0.5"
                   >
@@ -2272,7 +2324,7 @@ ${meiName}`;
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               {/* CARD: PROPOSTAS / ORÇAMENTOS */}
               <div 
-                onClick={() => setCurrentView("orcamentos")}
+                onClick={() => irPara("orcamentos")}
                 className="bg-white p-10 md:p-12 rounded-3xl border border-slate-200/50 shadow-xs flex flex-col justify-between cursor-pointer hover:border-blue-300 hover:shadow-md transition-all duration-300 transform hover:-translate-y-0.5"
                 title="Clique para emitir orçamentos e propostas para seus clientes"
               >
@@ -2301,7 +2353,7 @@ ${meiName}`;
                   if (planType === "free") {
                     setShowUpgradeModal(true);
                   } else {
-                    setCurrentView("catalogo");
+                    irPara("catalogo");
                   }
                 }}
                 className="bg-white p-10 md:p-12 rounded-3xl border border-slate-200/50 shadow-xs flex flex-col justify-between cursor-pointer hover:border-blue-300 hover:shadow-md transition-all duration-300 transform hover:-translate-y-0.5"
@@ -2369,7 +2421,7 @@ ${meiName}`;
           <div className="space-y-8 animate-fade-in text-left">
             <div className="flex items-center gap-2 mb-2">
               <button 
-                onClick={() => setCurrentView("home")}
+                onClick={() => irPara("home")}
                 className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-950 transition-all bg-white px-4 py-2 border border-slate-200 rounded-xl shadow-xs cursor-pointer"
               >
                 <span>&larr; Voltar para o Início (Home)</span>
@@ -2485,7 +2537,7 @@ ${meiName}`;
           <div className="space-y-8 animate-fade-in text-left">
             <div className="flex items-center gap-2 mb-2">
               <button 
-                onClick={() => setCurrentView("home")}
+                onClick={() => irPara("home")}
                 className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-950 transition-all bg-white px-4 py-2 border border-slate-200 rounded-xl shadow-xs cursor-pointer"
               >
                 <span>&larr; Voltar para o Início (Home)</span>
@@ -2750,7 +2802,7 @@ ${meiName}`;
             enderecoPrestador={enderecoPrestador}
             clientes={clientes}
             onTriggerUpgrade={() => setShowUpgradeModal(true)}
-            onGoBack={() => setCurrentView("home")}
+            onGoBack={() => irPara("home")}
             triggerToast={triggerToast}
           />
         )}
@@ -2761,7 +2813,7 @@ ${meiName}`;
             userId={user?.uid || userId}
             planType={planType}
             onTriggerUpgrade={() => setShowUpgradeModal(true)}
-            onGoBack={() => setCurrentView("home")}
+            onGoBack={() => irPara("home")}
             triggerToast={triggerToast}
           />
         )}
