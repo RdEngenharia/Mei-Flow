@@ -747,8 +747,13 @@ export function lerDadosDaNota(xmlNota: string) {
  *        que no sistema do usuário é um "Recebimento de FULANO" automático. As
  *        descrições oficiais (xTribNac e xNBS) estavam no XML e não eram lidas
  *        — a nota chegava ao cliente sem dizer o que ele havia comprado.
+ *   v5 — e-mail do emissor e do cliente saíam cortados com reticências
+ *        ("RODRIGUES.SOLAR@HOTMAIL.…"). Endereço pela metade não serve para
+ *        responder. O e-mail passou a ocupar a linha inteira do cartão, e os
+ *        campos que precisam ser lidos inteiros encolhem a fonte em vez de
+ *        cortar o texto.
  */
-const VERSAO_FOLHA = 4;
+const VERSAO_FOLHA = 5;
 
 const MESES = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",

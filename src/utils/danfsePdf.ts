@@ -210,22 +210,30 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
   };
 
   /**
-   * Corta com reticências o que não couber numa linha.
+   * Escreve encolhendo a fonte até caber — nunca corta.
    *
-   * O quebra-linhas do jsPDF parte a palavra onde der: um e-mail longo saía
-   * como "RODRIGUES.SOLAR@HOTMAIL.C" e "OM" na linha de baixo. Para campos que
-   * são um dado único — e-mail, telefone, documento — cortar é mais honesto e
-   * mais legível do que partir no meio.
+   * Substitui o corte com reticências nos campos que são um dado único e
+   * precisam ser lidos inteiros: nome da empresa, nome do cliente, e-mail. Um
+   * e-mail pela metade não serve para nada, e um nome cortado numa nota fiscal
+   * parece erro do emissor. Perder meio ponto de corpo é sempre melhor.
    */
-  const encurtar = (texto: string, largura: number, tam: number) => {
-    doc.setFont("helvetica", "normal").setFontSize(tam);
-    const s = String(texto ?? "—") || "—";
-    if (doc.getTextWidth(s) <= largura) return s;
-    let corte = s;
-    while (corte.length > 1 && doc.getTextWidth(corte + "…") > largura) {
-      corte = corte.slice(0, -1);
+  const escreverCabendo = (
+    texto: string, x: number, yy: number, largura: number,
+    tam: number, peso: "normal" | "bold" = "normal", minimo = 5.2
+  ) => {
+    const t = String(texto ?? "") || "—";
+    let corpo = tam;
+    doc.setFont("helvetica", peso).setFontSize(corpo);
+    while (corpo > minimo && doc.getTextWidth(t) > largura) {
+      corpo -= 0.25;
+      doc.setFontSize(corpo);
     }
-    return corte + "…";
+    // Se nem no corpo mínimo couber, aí sim quebra em duas linhas.
+    if (doc.getTextWidth(t) > largura) {
+      doc.text(doc.splitTextToSize(t, largura).slice(0, 2), x, yy);
+    } else {
+      doc.text(t, x, yy);
+    }
   };
 
   /**
@@ -266,9 +274,9 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
     doc.text(iniciais(nomeTopo), M + 7.5, y + 9.6, { align: "center" });
   }
 
-  doc.setFont("helvetica", "bold").setFontSize(14);
   cor(TINTA.escuro);
-  doc.text(String(nomeTopo).toUpperCase().slice(0, 32), M + 19, y + 6.4);
+  // Largura útil até o bloco do número, à direita.
+  escreverCabendo(String(nomeTopo).toUpperCase(), M + 19, y + 6.4, L - 19 - 42, 14, "bold", 8.5);
   doc.setFont("helvetica", "normal").setFontSize(6.8);
   cor(TINTA.claro);
   doc.text("Documento Auxiliar da Nota Fiscal de Serviço eletrônica", M + 19, y + 10.6);
@@ -339,11 +347,20 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
     : "—";
 
   const paresPrest: Par[] = [
-    ["CNPJ", docBR(p.cnpj), true],
-    ["Inscrição municipal", p.inscricaoMunicipal || "—", true],
+    ["CNPJ", docBR(p.cnpj)],
     ["Endereço", endPrest],
+    /**
+     * ⚠️ E-MAIL OCUPA A LINHA INTEIRA — NÃO O COLOQUE DE VOLTA AO LADO DO
+     *    TELEFONE.
+     *
+     * Em meia largura ele não cabia e saía cortado com reticências:
+     * "RODRIGUES.SOLAR@HOTMAIL.…". Num documento fiscal isso é pior do que
+     * feio — o cliente não consegue responder para um endereço pela metade.
+     * Endereço de e-mail é o campo mais comprido do cartão; a linha é dele.
+     */
     ["Telefone", foneBR(p.fone) || "—", true],
-    ["E-mail", p.email || "—", true],
+    ["Inscrição municipal ", p.inscricaoMunicipal || "—", true],
+    ["E-mail", p.email || "—"],
     ["Regime tributário", d.regime?.opSimpNac === "3" ? "Simples Nacional — ME/EPP"
       : d.regime?.opSimpNac === "1" ? "Não optante pelo Simples Nacional"
       : "Simples Nacional — Microempreendedor Individual (MEI)"],
@@ -357,11 +374,12 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
     : "Não informado no cadastro";
 
   const paresToma: Par[] = t ? [
-    ["CPF / CNPJ", docBR(t.documento), true],
-    ["Tipo", soDigitos(t.documento).length === 14 ? "Pessoa jurídica" : "Pessoa física", true],
+    ["CPF / CNPJ", docBR(t.documento)],
     ["Endereço", endToma],
     ["Telefone", foneBR(extras.tomadorTelefone) || "—", true],
-    ["E-mail", t.email || extras.tomadorEmail || "—", true],
+    ["Tipo ", soDigitos(t.documento).length === 14 ? "Pessoa jurídica" : "Pessoa física", true],
+    // Mesmo motivo do prestador: e-mail cortado não serve para nada.
+    ["E-mail", t.email || extras.tomadorEmail || "—"],
     ["Município de incidência do ISSQN",
       `${d.municipio || extras.municipio || "—"}${d.servico?.localPrestacao ? " · IBGE " + d.servico.localPrestacao : ""}`],
   ] : [];
@@ -400,13 +418,11 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
   const desenharParte = (x: number, titulo: string, destaque: boolean, pares: Par[], nome: string, sub?: string) => {
     cartao(x, meia, alturaPartes, titulo, destaque);
 
-    doc.setFont("helvetica", "bold").setFontSize(9.5);
     cor(TINTA.escuro);
-    doc.text(String(nome).slice(0, 32), x + 3.5, y + 11);
+    escreverCabendo(String(nome), x + 3.5, y + 11, meia - 7, 9.5, "bold", 6.5);
     if (sub) {
-      doc.setFont("helvetica", "normal").setFontSize(6.2);
       cor(TINTA.claro);
-      doc.text(String(sub).slice(0, 48), x + 3.5, y + 14.4);
+      escreverCabendo(String(sub), x + 3.5, y + 14.4, meia - 7, 6.2, "normal", 5);
     }
 
     let yy = y + (sub ? 19 : 16);
@@ -417,15 +433,13 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
 
       if (meioLado && pares[i + 1]?.[2]) {
         // Dois campos lado a lado, uma linha cada, cortados se não couberem.
-        doc.setFont("helvetica", "normal").setFontSize(6.8);
         cor(TINTA.texto);
-        doc.text(encurtar(v, largura, 6.8), x + 3.5, yy + 3.4);
+        escreverCabendo(v, x + 3.5, yy + 3.4, largura, 6.8, "normal", 5.4);
 
         const x2 = x + 3.5 + largura + 3;
         rotulo(pares[i + 1][0], x2, yy, 5.2, 0.3);
-        doc.setFont("helvetica", "normal").setFontSize(6.8);
         cor(TINTA.texto);
-        doc.text(encurtar(pares[i + 1][1], largura, 6.8), x2, yy + 3.4);
+        escreverCabendo(pares[i + 1][1], x2, yy + 3.4, largura, 6.8, "normal", 5.4);
         yy += 3.4 + 3 + 1.8;
         i++;
       } else {
