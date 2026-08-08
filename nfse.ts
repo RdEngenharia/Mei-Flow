@@ -486,12 +486,34 @@ export function lerDadosDaNota(xmlNota: string) {
   const blocoCServ = tag(blocoServ, "cServ");
   const blocoInfoCompl = tag(blocoServ, "infoCompl");
 
+  /**
+   * ENDEREÇO DE VERIFICAÇÃO — o que vai dentro do QR Code.
+   *
+   * O formato do QR da DANFSe nacional não é publicado em lugar nenhum que eu
+   * tenha conseguido confirmar; a folha oficial do Portal usa um token cifrado
+   * próprio, que não dá para montar de fora. Então:
+   *
+   *   1. se o XML trouxer um link (alguns emissores trazem), usamos ele;
+   *   2. senão, montamos o endereço da consulta pública com a chave.
+   *
+   * E, nos dois casos, a chave de 50 dígitos vai impressa em texto na folha —
+   * esse é o caminho que funciona sempre, com ou sem câmera.
+   */
+  const chaveLida = tagQualquer(x, ["chaveAcesso", "ChaveAcesso"]);
+  const linkNoXml = tagQualquer(x, ["link", "linkNFSe", "urlConsulta", "url"]);
+  const linkVerificacao = /^https?:\/\//i.test(linkNoXml)
+    ? linkNoXml
+    : chaveLida
+      ? `https://www.nfse.gov.br/consultapublica?chaveAcesso=${chaveLida}`
+      : "";
+
   return {
     // O número que vale para o cliente é o da NFS-e.
     numeroNfse: tagQualquer(x, ["nNFSe", "nNFSE"]),
+    linkVerificacao,
     numeroDps: tag(x, "nDPS"),
     serie: tag(x, "serie"),
-    chave: tagQualquer(x, ["chaveAcesso", "ChaveAcesso"]),
+    chave: chaveLida,
     emitidaEm: tagQualquer(x, ["dhProc", "dhEmi"]),
     competencia: tag(x, "dCompet"),
     ambiente: tag(x, "tpAmb") === "1" ? "producao" : "homologacao",
@@ -528,8 +550,22 @@ export function lerDadosDaNota(xmlNota: string) {
 
     valores: {
       servico: Number(tag(tag(blocoValores, "vServPrest"), "vServ") || 0),
-      liquido: Number(tagQualquer(blocoValores, ["vLiq", "vLiqNFSe"]) || 0),
+      recebido: Number(tag(tag(blocoValores, "vServPrest"), "vReceb") || 0),
+      descontoIncondicionado: Number(tag(tag(blocoValores, "vDescCondIncond"), "vDescIncond") || 0),
+      descontoCondicionado: Number(tag(tag(blocoValores, "vDescCondIncond"), "vDescCond") || 0),
+      deducoes: Number(tag(tag(blocoValores, "vDedRed"), "vDR") || 0),
+      liquido: Number(tagQualquer(x, ["vLiq", "vLiqNFSe"]) || 0),
       issRetido: tag(tag(tag(blocoValores, "trib"), "tribMun"), "tpRetISSQN") === "2",
+      issTributavel: tag(tag(tag(blocoValores, "trib"), "tribMun"), "tribISSQN") === "1",
+      aliquota: Number(tag(tag(tag(blocoValores, "trib"), "tribMun"), "pAliq") || 0),
+      valorIss: Number(tagQualquer(x, ["vISSQN", "vIss"]) || 0),
+      baseCalculo: Number(tagQualquer(x, ["vBC", "vBCISSQN"]) || 0),
+      totalTributos: Number(tagQualquer(x, ["vTotTrib", "vTotTribFed"]) || 0),
+    },
+    /** Regime do prestador na data da competência — vira texto na folha. */
+    regime: {
+      opSimpNac: tag(tag(blocoPrest, "regTrib"), "opSimpNac"),
+      regEspTrib: tag(tag(blocoPrest, "regTrib"), "regEspTrib"),
     },
   };
 }
