@@ -1080,8 +1080,9 @@ export default function NotaFiscalPanel({
                 </div>
 
                 <p className="text-[11px] text-slate-500 leading-relaxed">
-                  O XML de cada nota é guardado automaticamente no seu Arquivo Digital, na pasta do mês da
-                  emissão — ele é o documento fiscal de verdade e a lei obriga a guardar.
+                  O XML de cada nota <strong>de produção</strong> é guardado automaticamente no seu Arquivo
+                  Digital, na pasta do mês da emissão — ele é o documento fiscal de verdade e a lei obriga a
+                  guardar. Notas de teste não vão para lá, para não sujar a guarda fiscal.
                 </p>
 
                 {notas.length > 0 && (

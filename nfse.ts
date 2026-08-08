@@ -893,9 +893,27 @@ async function emitirNota(
   let danfseB64 = "";
   try {
     const quando = new Date();
-    const rotulo = `NFSe_${numero}_${serie}`;
 
-    if (xmlNota) {
+    /**
+     * ⚠️ O NOME DO ARQUIVO USA O NÚMERO DA NFS-e, NÃO O DA DPS.
+     *
+     * Com o número da DPS, a nota 1 de homologação e a nota 1 de produção
+     * geravam arquivos com o MESMO nome na pasta — pareciam duplicatas e não
+     * havia como distinguir. O número da NFS-e é único por CNPJ.
+     */
+    const rotulo = `NFSe_${numeroNfse || numero}_${serie}`;
+
+    /**
+     * ⚠️ ARQUIVO DIGITAL É SÓ PARA DOCUMENTO FISCAL DE VERDADE.
+     *
+     * Nota de homologação não existe para a Receita. Guardá-la na pasta dos
+     * cinco anos suja a guarda fiscal: na hora de conferir, o contador vê
+     * documentos que não valem nada misturados com os que valem — e alguns com
+     * o mesmo nome. Teste fica de fora, ponto.
+     */
+    if (!ehProducao()) {
+      console.log(`[NFS-e] Nota ${rotulo} é de homologação: não vai para o Arquivo Digital.`);
+    } else if (xmlNota) {
       await arquivarNaPasta(db, adminStorage, firebaseConfig, {
         userId: uid,
         conteudo: Buffer.from(xmlNota, "utf8"),
@@ -906,7 +924,7 @@ async function emitirNota(
       });
     }
 
-    const pdf = await baixarDanfseOficial(cert, chave);
+    const pdf = ehProducao() ? await baixarDanfseOficial(cert, chave) : null;
     if (pdf) {
       danfseB64 = pdf.toString("base64");
       await arquivarNaPasta(db, adminStorage, firebaseConfig, {
@@ -1536,11 +1554,44 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
       const snap = await db.collection("nfse_emitidas").where("userId", "==", uid).get();
 
       let arquivadas = 0;
+      let ignoradasTeste = 0;
       let semXml = 0;
+      let removidasTeste = 0;
       const problemas: string[] = [];
 
       for (const doc of snap.docs) {
         const n = doc.data();
+        const chave = n.chave || n.id;
+        const ehTeste = String(n.ambiente || "").startsWith("homolog");
+
+        /**
+         * LIMPEZA: tira do Arquivo Digital o que nunca deveria ter entrado.
+         *
+         * A primeira versão deste reparo arquivou tudo, inclusive as notas de
+         * homologação. Elas não valem nada para a Receita e ainda apareciam com
+         * o mesmo nome das reais, parecendo duplicata. Aqui elas saem.
+         */
+        if (ehTeste) {
+          ignoradasTeste++;
+          const lixo = await db
+            .collection("documentos")
+            .where("userId", "==", uid)
+            .where("referenciaId", "==", `nfse_xml_${chave}`)
+            .get();
+          for (const alvo of lixo.docs) {
+            try {
+              const meta = alvo.data();
+              if (meta.storagePath) {
+                const bucket = firebaseConfig?.storageBucket || "mei-flow-692d9.firebasestorage.app";
+                await adminStorage.bucket(bucket).file(meta.storagePath).delete().catch(() => {});
+              }
+              await alvo.ref.delete();
+              removidasTeste++;
+            } catch { /* se não sair agora, sai na próxima */ }
+          }
+          continue;
+        }
+
         if (!n.xml) { semXml++; continue; }
 
         // A pasta é a do mês em que a nota foi emitida, e não a de hoje —
@@ -1554,7 +1605,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
             nomeArquivo: `${rotulo}.xml`,
             contentType: "application/xml",
             quando: isNaN(quando.getTime()) ? new Date() : quando,
-            referenciaId: `nfse_xml_${n.chave || n.id}`,
+            referenciaId: `nfse_xml_${chave}`,
           });
           arquivadas++;
         } catch (err: any) {
@@ -1562,15 +1613,22 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         }
       }
 
+      const partes = [`${arquivadas} nota(s) real(is) guardada(s)`];
+      if (removidasTeste) partes.push(`${removidasTeste} arquivo(s) de teste removido(s)`);
+      if (ignoradasTeste && !removidasTeste) partes.push(`${ignoradasTeste} nota(s) de teste ignorada(s)`);
+      if (semXml) partes.push(`${semXml} sem XML`);
+
       res.json({
         success: true,
         total: snap.size,
         arquivadas,
+        ignoradasTeste,
+        removidasTeste,
         semXml,
         problemas,
         mensagem: problemas.length
-          ? `Arquivei ${arquivadas} de ${snap.size}. ${problemas.length} deram erro.`
-          : `Pronto: ${arquivadas} nota(s) conferida(s) e guardada(s) no Arquivo Digital.`,
+          ? `${partes.join(", ")}. ${problemas.length} deram erro.`
+          : `Pronto: ${partes.join(", ")}.`,
       });
     } catch (err: any) {
       console.error("[NFS-e Arquivar]", err.message);
