@@ -59,7 +59,6 @@ import forge from "node-forge";
 import { SignedXml } from "xml-crypto";
 import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
 import { desenharDanfse, type DadosDanfse, type ExtrasDanfse } from "./src/utils/danfsePdf.js";
-import { carregarLogoBase64 } from "./src/utils/logoImagem.js";
 
 const env = (k: string) => (process.env[k] || "").trim();
 
@@ -607,6 +606,14 @@ export function lerDadosDaNota(xmlNota: string) {
     serie: tag(x, "serie"),
     chave: chaveLida,
     emitidaEm: tagQualquer(x, ["dhProc", "dhEmi"]),
+    /**
+     * Campos que o modelo v2.0 da NT 008/2026 imprime e que ninguém lia ainda.
+     * O Portal já mandava todos; era só buscar.
+     */
+    emitidaEmDps: tag(dentroDps, "dhEmi"),
+    ambienteGerador: tag(x, "ambGer"),
+    situacao: tag(x, "xSit"),
+    emitente: tag(x, "tpEmit") === "2" ? "Tomador" : tag(x, "tpEmit") === "3" ? "Intermediário" : "Prestador",
     competencia: tag(x, "dCompet"),
     ambiente: tag(x, "tpAmb") === "1" ? "producao" : "homologacao",
 
@@ -641,6 +648,14 @@ export function lerDadosDaNota(xmlNota: string) {
           nome: tag(blocoToma, "xNome"),
           documento: tagQualquer(blocoToma, ["CNPJ", "CPF"]),
           email: tag(blocoToma, "email"),
+          fone: tag(blocoToma, "fone"),
+          inscricaoMunicipal: tag(blocoToma, "IM"),
+          logradouro: tag(blocoToma, "xLgr"),
+          numero: tag(blocoToma, "nro"),
+          bairro: tag(blocoToma, "xBairro"),
+          cep: tag(blocoToma, "CEP"),
+          codigoIbge: tag(blocoToma, "cMun"),
+          uf: tag(blocoToma, "UF"),
         }
       : null,
 
@@ -752,8 +767,13 @@ export function lerDadosDaNota(xmlNota: string) {
  *        responder. O e-mail passou a ocupar a linha inteira do cartão, e os
  *        campos que precisam ser lidos inteiros encolhem a fonte em vez de
  *        cortar o texto.
+ *   v6 — folha refeita conforme a NT 008/2026 (DANFSe v2.0). O leiaute
+ *        anterior era desenho nosso; a norma define ordem dos blocos, rótulos
+ *        literais, corpos de fonte e sombreado, e passou a valer com a
+ *        suspensão da API oficial em 03/08/2026. As medidas foram extraídas de
+ *        uma DANFSe emitida pelo próprio Portal.
  */
-const VERSAO_FOLHA = 5;
+const VERSAO_FOLHA = 6;
 
 const MESES = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -962,6 +982,13 @@ async function montarDanfsePdf(
      */
     const uf = (dados.prestador as any)?.uf;
     const doXml = dados.municipio ? `${dados.municipio}${uf ? " / " + uf : ""}` : "";
+    /**
+     * ⚠️ A LOGO NÃO VAI MAIS PARA A DANFSe.
+     *
+     * O cabeçalho do modelo v2.0 é da marca NFS-e, não do emissor. Continuamos
+     * carregando a logo no orçamento, que é documento comercial do MEI e não
+     * tem norma ditando o formato.
+     */
     const extras: ExtrasDanfse = {
       municipio: doXml || municipio,
       // Descrições oficiais do serviço, que vêm prontas no XML.
@@ -988,7 +1015,7 @@ async function montarDanfsePdf(
          *
          * `carregarLogoBase64` aceita as duas formas e nunca lança.
          */
-        extras.logoBase64 = await carregarLogoBase64(u.companyLogo || u.logoUrl);
+        // A logo continua sendo lida para os demais documentos, mas não entra aqui.
       }
     } catch { /* segue sem logo */ }
 
