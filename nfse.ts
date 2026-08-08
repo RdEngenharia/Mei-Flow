@@ -311,7 +311,9 @@ function montarDps(d: {
 
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
-    `<DPS xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.00">` +
+    // ⚠️ 1.01 é a versão do esquema em vigor. Com "1.00" o Portal recusa com
+    // E1235 (falha no esquema XML), sem dizer que o problema é a versão.
+    `<DPS xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.01">` +
     `<infDPS Id="${d.idDps}">` +
     `<tpAmb>${tpAmb()}</tpAmb>` +
     `<dhEmi>${agoraISO()}</dhEmi>` +
@@ -340,15 +342,32 @@ function montarDps(d: {
     blocoTomador +
     `<serv>` +
       `<locPrest><cLocPrestacao>${so(d.codMunicipio)}</cLocPrestacao></locPrest>` +
+      /**
+       * ⚠️ A ORDEM DAS TAGS AQUI NÃO É NEGOCIÁVEL.
+       *
+       * O esquema define uma sequência: cTribNac, cTribMun, xDescServ, cNBS.
+       * Eu tinha colocado o cNBS ANTES do xDescServ, e o Portal recusou com
+       * E1235 sem dizer o motivo. XML fora de ordem é XML inválido, mesmo com
+       * todas as tags certas. Só acrescente campo novo no lugar dele na lista.
+       */
       `<cServ>` +
         `<cTribNac>${so(d.codigoServico)}</cTribNac>` +
-        (d.codigoNbs ? `<cNBS>${so(d.codigoNbs)}</cNBS>` : "") +
         `<xDescServ>${xml(semAcento(d.descricao)).slice(0, 2000)}</xDescServ>` +
+        (d.codigoNbs ? `<cNBS>${so(d.codigoNbs)}</cNBS>` : "") +
       `</cServ>` +
     `</serv>` +
     `<valores>` +
       `<vServPrest><vServ>${d.valor.toFixed(2)}</vServ></vServPrest>` +
-      `<trib><tribMun><tribISSQN>1</tribISSQN><tpRetISSQN>1</tpRetISSQN></tribMun></trib>` +
+      `<trib>` +
+        `<tribMun>` +
+          `<tribISSQN>1</tribISSQN>` +
+          `<tpRetISSQN>1</tpRetISSQN>` +
+        `</tribMun>` +
+        // totTrib é obrigatório dentro de trib. indTotTrib 0 = não informar os
+        // totais aproximados da Lei 12.741 — é o que sai na nota do MEI, com
+        // tracinho nos três campos de tributos.
+        `<totTrib><indTotTrib>0</indTotTrib></totTrib>` +
+      `</trib>` +
     `</valores>` +
     `</infDPS>` +
     `</DPS>`
@@ -448,7 +467,13 @@ function explicar(err: any): { status: number; mensagem: string; detalhe?: any }
     return {
       status: 400,
       mensagem: "O Portal Nacional recusou a nota: " +
-        erros.map((e: any) => `${e.Codigo || e.codigo || ""} ${e.Descricao || e.descricao || e.mensagem || JSON.stringify(e)}`.trim()).join(" | "),
+        erros.map((e: any) => [
+          e.Codigo || e.codigo || "",
+          e.Descricao || e.descricao || e.mensagem || JSON.stringify(e),
+          // O Complemento é onde o Portal diz QUAL campo reprovou. Sem ele, um
+          // "falha no esquema" manda a gente procurar agulha no palheiro.
+          e.Complemento || e.complemento || "",
+        ].filter(Boolean).join(" — ")).join(" | "),
       detalhe: erros,
     };
   }
