@@ -58,6 +58,7 @@ import DasnModal from "./components/DasnModal";
 import ArquivoDigitalMei from "./components/ArquivoDigitalMei";
 import CobrancasPanel from "./components/CobrancasPanel";
 import NotaFiscalPanel from "./components/NotaFiscalPanel";
+import BancoCredenciaisPanel from "./components/BancoCredenciaisPanel";
 import PainelAcompanhamento from "./components/PainelAcompanhamento";
 import { jsPDF } from "jspdf";
 import { savePdfCrossPlatform, isNativePlatform, getApiUrl } from "./utils/nativeFile";
@@ -2308,6 +2309,19 @@ ${meiName}`;
                 no Arquivo Digital — logo abaixo nesta mesma tela.
               */}
               <NotaFiscalPanel triggerToast={triggerToast} />
+            </div>
+
+            {/*
+              SEÇÃO INTEGRADA: BANCO (credenciais de cobrança do próprio usuário)
+
+              Fica logo abaixo da nota fiscal de propósito: são as duas coisas
+              que cada MEI precisa trazer de fora para o sistema funcionar no
+              nome dele — o certificado, para assinar a nota, e a conta, para
+              receber o dinheiro. Quem acabou de cadastrar um já está no lugar
+              certo para cadastrar o outro.
+            */}
+            <div className="mt-8">
+              <BancoCredenciaisPanel triggerToast={triggerToast} />
             </div>
 
             {/* SEÇÃO INTEGRADA: ARQUIVO DIGITAL DO MEI */}

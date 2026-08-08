@@ -51,6 +51,7 @@ import axios from "axios";
 import https from "https";
 import crypto from "crypto";
 import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
+import { lerCredenciaisBanco, registrarRotasBanco } from "./bancoCofre.js";
 
 /** URL pública do sistema — usada em webhooks e no retorno do banco. */
 export const APP_URL = process.env.APP_URL || "https://meiflow.rdhomologacao.com.br";
@@ -78,34 +79,219 @@ const ESTRATEGIA_MES_FISCAL: "pagamento" | "vencimento" | "competencia" = "pagam
 // ============================================================================
 
 type TokenCache = { token: string; exp: number };
-const tokenCache: Record<string, TokenCache> = {};
 
-function baseCobrancas(): string {
-  return process.env.EFI_SANDBOX !== "false"
-    ? "https://cobrancas-h.api.efipay.com.br"
-    : "https://cobrancas.api.efipay.com.br";
+/**
+ * ⚠️ UMA GAVETA POR USUÁRIO — NÃO VOLTE A USAR UMA VARIÁVEL SÓ.
+ *
+ * Antes isto era `const tokenCache: Record<string, TokenCache>` com as chaves
+ * fixas "cobrancas" e "pix". Com um único usuário, funciona. Com dois, o
+ * segundo usa o token do primeiro — ou seja, emite boleto na conta do outro.
+ * É o mesmo erro que já apareceu no cache do certificado digital e teve que
+ * ser corrigido lá. A etiqueta da gaveta agora carrega o UID.
+ */
+const tokenCache = new Map<string, TokenCache>();
+
+export function limparCacheTokenEfi(uid?: string) {
+  if (!uid) return tokenCache.clear();
+  for (const chave of Array.from(tokenCache.keys())) {
+    if (chave.startsWith(`${uid}|`)) tokenCache.delete(chave);
+  }
 }
 
 /**
- * Obtém (e reaproveita) o access token da API Cobranças.
- * O token da Efí dura ~600s; renovamos 30s antes de expirar.
+ * Referência ao banco de dados para o módulo conseguir abrir o cofre.
+ * É preenchida em registrarRotasEfi — as funções de token são de módulo e não
+ * recebem `db` por parâmetro.
  */
-async function getTokenCobrancas(): Promise<string> {
-  const cached = tokenCache.cobrancas;
-  if (cached && cached.exp > Date.now() + 30_000) return cached.token;
+let dbCofre: any = null;
 
-  const clientId = process.env.EFI_CLIENT_ID;
-  const clientSecret = process.env.EFI_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    throw new Error(
-      "Credenciais da Efí não configuradas. Defina EFI_CLIENT_ID e EFI_CLIENT_SECRET."
-    );
+// ============================================================================
+// DE QUEM É A CONTA? — a decisão que faltava
+// ============================================================================
+//
+// Cada usuário emite com as credenciais DELE, guardadas cifradas em
+// bancoCofre.ts. As variáveis de ambiente (EFI_CLIENT_ID etc.) descrevem UMA
+// conta só: a do dono do sistema. Usá-las para qualquer pessoa significa
+// mandar o dinheiro do cliente dela para a conta de outro.
+//
+// Por isso a conta do ambiente virou EXCEÇÃO EXPLÍCITA, não padrão:
+//
+//   EFI_CONTA_COMPARTILHADA=true   liga a exceção;
+//   EFI_CONTA_COMPARTILHADA_UIDS   (opcional) restringe a UIDs específicos,
+//                                  separados por vírgula.
+//
+// Com a chave desligada, quem não cadastrou credencial não emite — e recebe
+// uma mensagem dizendo o que fazer, em vez de emitir no lugar errado.
+
+type ContaEfi = {
+  clientId: string;
+  clientSecret: string;
+  ambiente: "homologacao" | "producao";
+  origem: "usuario" | "sistema";
+};
+
+function contaCompartilhadaLiberada(uid: string): boolean {
+  if ((process.env.EFI_CONTA_COMPARTILHADA || "").trim() !== "true") return false;
+  const lista = (process.env.EFI_CONTA_COMPARTILHADA_UIDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return lista.length === 0 ? true : lista.includes(uid);
+}
+
+/** Ambiente do sistema, para quando a conta usada for a compartilhada. */
+function ambienteDoSistema(): "homologacao" | "producao" {
+  return process.env.EFI_SANDBOX === "false" ? "producao" : "homologacao";
+}
+
+/**
+ * Resolve a conta que vai emitir. Lança erro em vez de escolher a conta errada.
+ *
+ * @param tipo "cobrancas" (boleto/carnê) ou "pix" (dinheiro saindo).
+ */
+async function contaEfi(uid: string, tipo: "cobrancas" | "pix" = "cobrancas"): Promise<ContaEfi> {
+  if (!uid) throw new Error("NAO_AUTENTICADO");
+
+  const proprias = dbCofre ? await lerCredenciaisBanco(dbCofre, uid) : null;
+
+  if (proprias) {
+    if (proprias.provedor !== "efi") throw new Error("BANCO_SEM_EMISSAO");
+
+    const clientId =
+      tipo === "pix" ? proprias.pixClientId || proprias.clientId : proprias.clientId;
+    const clientSecret =
+      tipo === "pix" ? proprias.pixClientSecret || proprias.clientSecret : proprias.clientSecret;
+
+    if (!clientId || !clientSecret) throw new Error("SEM_CREDENCIAIS_USUARIO");
+    return { clientId, clientSecret, ambiente: proprias.ambiente, origem: "usuario" };
   }
 
-  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  if (!contaCompartilhadaLiberada(uid)) throw new Error("SEM_CREDENCIAIS_USUARIO");
+
+  const clientId =
+    (tipo === "pix" ? process.env.EFI_PIX_CLIENT_ID : "") || process.env.EFI_CLIENT_ID || "";
+  const clientSecret =
+    (tipo === "pix" ? process.env.EFI_PIX_CLIENT_SECRET : "") ||
+    process.env.EFI_CLIENT_SECRET ||
+    "";
+  if (!clientId || !clientSecret) throw new Error("SEM_CREDENCIAIS_USUARIO");
+
+  return { clientId, clientSecret, ambiente: ambienteDoSistema(), origem: "sistema" };
+}
+
+/**
+ * ⚠️ USO ÚNICO: o aviso de pagamento de boletos emitidos ANTES do cofre.
+ *
+ * Aqueles boletos foram criados quando só existia a conta do sistema, e o
+ * endereço de retorno gravado neles não carrega o dono. Sem esta porta, o
+ * pagamento de um boleto antigo deixaria de dar baixa — quebraria o que já
+ * funciona. Ela NÃO serve para emitir nada: só consulta uma notificação.
+ */
+async function efiCobrancasContaDoSistema(
+  method: "GET" | "POST" | "PUT",
+  path: string,
+  body?: any
+) {
+  const clientId = process.env.EFI_CLIENT_ID || "";
+  const clientSecret = process.env.EFI_CLIENT_SECRET || "";
+  if (!clientId || !clientSecret) throw new Error("SEM_CREDENCIAIS_USUARIO");
+
+  const ambiente = ambienteDoSistema();
+  const etiqueta = `__sistema__|cobrancas|${ambiente}`;
+  let token = tokenCache.get(etiqueta)?.token || "";
+  const valido = (tokenCache.get(etiqueta)?.exp || 0) > Date.now() + 30_000;
+
+  if (!token || !valido) {
+    const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+    const { data } = await axios.post(
+      `${baseCobrancas(ambiente)}/v1/authorize`,
+      { grant_type: "client_credentials" },
+      {
+        headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/json" },
+        timeout: 15000,
+      }
+    );
+    token = data.access_token;
+    tokenCache.set(etiqueta, {
+      token,
+      exp: Date.now() + (data.expires_in || 600) * 1000,
+    });
+  }
+
+  const { data } = await axios.request({
+    method,
+    url: `${baseCobrancas(ambiente)}${path}`,
+    data: body,
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    timeout: 20000,
+  });
+  return data;
+}
+
+/**
+ * Traduz a falha para uma frase que diz o que fazer.
+ *
+ * "Credenciais não configuradas" não ajuda ninguém: a pessoa não sabe se o
+ * problema é dela, do sistema, ou do banco. Aqui cada caso vira uma instrução.
+ */
+export function explicarFalhaConta(err: any): { status: number; mensagem: string } {
+  switch (err?.message) {
+    case "NAO_AUTENTICADO":
+      return { status: 401, mensagem: "Faça login para emitir cobranças." };
+    case "SEM_CREDENCIAIS_USUARIO":
+      return {
+        status: 428,
+        mensagem:
+          "Antes de emitir, cadastre as credenciais do seu banco em Configurações → Banco. " +
+          "Sem elas o boleto não pode ser registrado na sua conta.",
+      };
+    case "BANCO_SEM_EMISSAO":
+      return {
+        status: 428,
+        mensagem:
+          "O banco cadastrado ainda não emite boleto pelo sistema — as credenciais estão guardadas, " +
+          "mas a emissão por ele depende de uma integração que ainda não está pronta.",
+      };
+    case "SEM_CHAVE_CRIPTO":
+      return {
+        status: 503,
+        mensagem:
+          "O servidor está sem a chave de segurança para abrir o cofre de credenciais.",
+      };
+    default:
+      return {
+        status: err?.response?.status === 401 ? 401 : 502,
+        mensagem: `Falha ao falar com o banco: ${
+          err?.response?.data?.error_description ||
+          err?.response?.data?.mensagem ||
+          err?.message ||
+          "erro desconhecido"
+        }`,
+      };
+  }
+}
+
+function baseCobrancas(ambiente: "homologacao" | "producao" = ambienteDoSistema()): string {
+  return ambiente === "producao"
+    ? "https://cobrancas.api.efipay.com.br"
+    : "https://cobrancas-h.api.efipay.com.br";
+}
+
+/**
+ * Obtém (e reaproveita) o access token da API Cobranças DO USUÁRIO.
+ * O token da Efí dura ~600s; renovamos 30s antes de expirar.
+ */
+async function getTokenCobrancas(uid: string): Promise<{ token: string; conta: ContaEfi }> {
+  const conta = await contaEfi(uid, "cobrancas");
+  const etiqueta = `${uid}|cobrancas|${conta.ambiente}`;
+
+  const cached = tokenCache.get(etiqueta);
+  if (cached && cached.exp > Date.now() + 30_000) return { token: cached.token, conta };
+
+  const basic = Buffer.from(`${conta.clientId}:${conta.clientSecret}`).toString("base64");
 
   const { data } = await axios.post(
-    `${baseCobrancas()}/v1/authorize`,
+    `${baseCobrancas(conta.ambiente)}/v1/authorize`,
     { grant_type: "client_credentials" },
     {
       headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/json" },
@@ -113,18 +299,30 @@ async function getTokenCobrancas(): Promise<string> {
     }
   );
 
-  tokenCache.cobrancas = {
+  tokenCache.set(etiqueta, {
     token: data.access_token,
     exp: Date.now() + (data.expires_in || 600) * 1000,
-  };
-  return data.access_token;
+  });
+  return { token: data.access_token, conta };
 }
 
-async function efiCobrancas(method: "GET" | "POST" | "PUT", path: string, body?: any) {
-  const token = await getTokenCobrancas();
+/**
+ * ⚠️ O PRIMEIRO PARÂMETRO É O DONO DA COBRANÇA.
+ *
+ * Não existe chamada "sem dono": ou se sabe de quem é a conta, ou não se fala
+ * com o banco. Se algum dia aparecer um `efiCobrancas("POST", ...)` sem UID, o
+ * TypeScript reclama — e é exatamente esse o objetivo.
+ */
+async function efiCobrancas(
+  uid: string,
+  method: "GET" | "POST" | "PUT",
+  path: string,
+  body?: any
+) {
+  const { token, conta } = await getTokenCobrancas(uid);
   const { data } = await axios.request({
     method,
-    url: `${baseCobrancas()}${path}`,
+    url: `${baseCobrancas(conta.ambiente)}${path}`,
     data: body,
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     timeout: 20000,
@@ -447,25 +645,38 @@ export function registrarRotasEfi(
   adminStorage: any,
   firebaseConfig: any
 ) {
+  // O cofre precisa da mesma conexão de banco que as rotas de cobrança.
+  dbCofre = db;
+
+  // As rotas do cofre (/api/banco/...) moram no bancoCofre.ts e entram aqui
+  // junto, para não haver um módulo registrado e o outro esquecido.
+  registrarRotasBanco(app, db);
+
   // --------------------------------------------------------------------------
   // Teste de conexão — use esta rota primeiro, para confirmar as credenciais
   // --------------------------------------------------------------------------
-  app.get("/api/efi/test-connection", async (_req: any, res: any) => {
+  //
+  // Agora exige login: o teste é das credenciais DAQUELE usuário. Antes ele
+  // testava a conta do sistema e respondia "conexão estabelecida" para
+  // qualquer visitante — o que dava a impressão errada de que a conta dele
+  // estava configurada.
+  app.get("/api/efi/test-connection", async (req: any, res: any) => {
     try {
-      await getTokenCobrancas();
+      const uid = await exigirUsuarioAutenticado(req);
+      const { conta } = await getTokenCobrancas(uid);
       res.json({
         success: true,
-        ambiente: process.env.EFI_SANDBOX !== "false" ? "Homologação" : "Produção",
-        mensagem: "Conexão com a Efí estabelecida com sucesso.",
+        ambiente: conta.ambiente === "producao" ? "Produção" : "Homologação",
+        conta: conta.origem === "usuario" ? "sua conta" : "conta compartilhada do sistema",
+        mensagem:
+          conta.origem === "usuario"
+            ? "Conexão estabelecida com a sua conta na Efí."
+            : "Conexão estabelecida usando a conta compartilhada do sistema.",
       });
     } catch (err: any) {
-      console.error("[Efí Teste]", err.response?.data || err.message);
-      res.status(401).json({
-        success: false,
-        mensagem: `Falha ao conectar na Efí: ${
-          err.response?.data?.error_description || err.message
-        }`,
-      });
+      const { status, mensagem } = explicarFalhaConta(err);
+      if (status >= 500) console.error("[Efí Teste]", err.response?.data || err.message);
+      res.status(status).json({ success: false, mensagem });
     }
   });
 
@@ -589,12 +800,18 @@ export function registrarRotasEfi(
         // Configurada por aqui, a Efí usa o formato moderno, que manda apenas
         // um token de notificação para consultarmos de volta.
         metadata: {
-          notification_url: `${APP_URL}/api/efi/webhook?token=${process.env.EFI_WEBHOOK_TOKEN || ""}`,
+          notification_url:
+            // ⚠️ O `u=` NÃO É ENFEITE. Quando a Efí avisa que o boleto foi pago,
+            // ela chama esta URL — e o servidor precisa saber de QUEM é a conta
+            // para consultar a notificação com o token certo. Sem isso, a baixa
+            // do pagamento tentaria ler a cobrança de um usuário usando a conta
+            // de outro, e falharia (ou pior, leria a errada).
+            `${APP_URL}/api/efi/webhook?token=${process.env.EFI_WEBHOOK_TOKEN || ""}&u=${encodeURIComponent(uid)}`,
           custom_id: `mf_${uid.slice(0, 12)}_${Date.now()}`,
         },
       };
 
-      const resposta = await efiCobrancas("POST", "/v1/charge/one-step", payload);
+      const resposta = await efiCobrancas(uid, "POST", "/v1/charge/one-step", payload);
       const cobranca = resposta?.data || resposta;
 
       const totalReais =
@@ -630,23 +847,29 @@ export function registrarRotasEfi(
         status: cobranca.status,
       });
     } catch (err: any) {
-      if (err.message === "NAO_AUTENTICADO") {
-        return res.status(401).json({ success: false, mensagem: "Faça login para emitir boletos." });
+      // Falta de conta cadastrada não é "erro do sistema": é uma etapa que o
+      // usuário ainda não fez. Responde com a instrução, não com um 500.
+      if (
+        err.message === "NAO_AUTENTICADO" ||
+        err.message === "SEM_CREDENCIAIS_USUARIO" ||
+        err.message === "BANCO_SEM_EMISSAO" ||
+        err.message === "SEM_CHAVE_CRIPTO"
+      ) {
+        const { status, mensagem } = explicarFalhaConta(err);
+        return res.status(status).json({ success: false, mensagem });
       }
       console.error("[Efí Boleto]", err.response?.data || err.message);
 
       // 401 = a Efí recusou as credenciais. A causa quase sempre é a mesma:
-      // o par de chaves não corresponde ao ambiente configurado. As chaves de
+      // o par de chaves não corresponde ao ambiente escolhido. As chaves de
       // homologação NÃO funcionam em produção, e vice-versa.
       if (err.response?.status === 401) {
-        const ambiente = process.env.EFI_SANDBOX !== "false" ? "Homologação" : "Produção";
         return res.status(401).json({
           success: false,
           mensagem:
-            `A Efí recusou as credenciais. O sistema está configurado para ${ambiente}, ` +
-            `então EFI_CLIENT_ID e EFI_CLIENT_SECRET precisam ser o par de ${ambiente}. ` +
-            `Confira no painel da Efí e lembre de fazer Redeploy na Vercel depois de alterar.`,
-          ambiente,
+            "A Efí recusou as credenciais cadastradas. Confira, em Configurações → Banco, " +
+            "se o Client ID e o Client Secret são do mesmo ambiente escolhido " +
+            "(as chaves de homologação não funcionam em produção, e vice-versa).",
         });
       }
 
@@ -776,12 +999,18 @@ export function registrarRotasEfi(
         },
         message: String(descricao || "Emitido via MEI Flow").slice(0, 80),
         metadata: {
-          notification_url: `${APP_URL}/api/efi/webhook?token=${process.env.EFI_WEBHOOK_TOKEN || ""}`,
+          notification_url:
+            // ⚠️ O `u=` NÃO É ENFEITE. Quando a Efí avisa que o boleto foi pago,
+            // ela chama esta URL — e o servidor precisa saber de QUEM é a conta
+            // para consultar a notificação com o token certo. Sem isso, a baixa
+            // do pagamento tentaria ler a cobrança de um usuário usando a conta
+            // de outro, e falharia (ou pior, leria a errada).
+            `${APP_URL}/api/efi/webhook?token=${process.env.EFI_WEBHOOK_TOKEN || ""}&u=${encodeURIComponent(uid)}`,
           custom_id: `mfc_${uid.slice(0, 10)}_${Date.now()}`,
         },
       };
 
-      const resposta = await efiCobrancas("POST", "/v1/carnet", payload);
+      const resposta = await efiCobrancas(uid, "POST", "/v1/carnet", payload);
       const carne = resposta?.data || resposta;
       const parcelasEfi: any[] = carne?.charges || [];
       const valorParcela = Math.round((total / n) * 100) / 100;
@@ -824,6 +1053,14 @@ export function registrarRotasEfi(
         primeiroVencimento,
       });
     } catch (err: any) {
+      if (
+        err.message === "SEM_CREDENCIAIS_USUARIO" ||
+        err.message === "BANCO_SEM_EMISSAO" ||
+        err.message === "SEM_CHAVE_CRIPTO"
+      ) {
+        const { status, mensagem } = explicarFalhaConta(err);
+        return res.status(status).json({ success: false, mensagem });
+      }
       if (err.message === "NAO_AUTENTICADO") {
         return res.status(401).json({ success: false, mensagem: "Faça login para emitir carnê." });
       }
@@ -963,12 +1200,18 @@ export function registrarRotasEfi(
         .filter((c: any) => !["paid", "settled", "canceled", "cancelled", "unpaid", "expired"].includes(String(c.status)))
         .slice(0, 60); // teto de segurança por chamada
 
+      // Confere a conta UMA vez, antes do laço. Sem isto, a falta de
+      // credencial cairia no catch de cada item, seria só um aviso no log, e a
+      // tela responderia "Tudo já estava em dia" — a pior resposta possível,
+      // porque nada foi verificado.
+      if (abertas.length) await getTokenCobrancas(uid);
+
       let atualizadas = 0, pagas = 0;
       const detalhes: any[] = [];
 
       for (const c of abertas) {
         try {
-          const r = await efiCobrancas("GET", `/v1/charge/${c.id}`);
+          const r = await efiCobrancas(uid, "GET", `/v1/charge/${c.id}`);
           const dados = r?.data || r;
           const status = String(dados?.status || "");
           if (!status || status === c.status) continue;
@@ -1001,8 +1244,14 @@ export function registrarRotasEfi(
             : "Tudo já estava em dia.",
       });
     } catch (err: any) {
-      if (err.message === "NAO_AUTENTICADO") {
-        return res.status(401).json({ success: false, mensagem: "Faça login." });
+      if (
+        err.message === "NAO_AUTENTICADO" ||
+        err.message === "SEM_CREDENCIAIS_USUARIO" ||
+        err.message === "BANCO_SEM_EMISSAO" ||
+        err.message === "SEM_CHAVE_CRIPTO"
+      ) {
+        const { status, mensagem } = explicarFalhaConta(err);
+        return res.status(status).json({ success: false, mensagem });
       }
       console.error("[Efí Sincronizar]", err.response?.data || err.message);
       res.status(500).json({ success: false, mensagem: `Erro ao sincronizar: ${err.message}` });
@@ -1034,7 +1283,24 @@ export function registrarRotasEfi(
         return;
       }
 
-      const detalhe = await efiCobrancas("GET", `/v1/notification/${notificationToken}`);
+      // De quem é esta cobrança? Vem no próprio endereço que a Efí chamou,
+      // porque foi assim que ele foi montado na hora de emitir.
+      //
+      // Boletos emitidos ANTES desta mudança não têm o `u=`. Para eles, o
+      // caminho antigo continua: a conta compartilhada do sistema — que era a
+      // única que existia quando aqueles boletos nasceram. Assim nada que já
+      // estava rodando quebra, e nada novo depende disso.
+      const donoDaCobranca = String(req.query?.u || "").trim();
+      if (!donoDaCobranca) {
+        console.warn(
+          "[Efí Webhook] Cobrança sem dono no endereço — usando a conta compartilhada. " +
+            "Isso só deve acontecer com boletos emitidos antes do cofre por usuário."
+        );
+      }
+
+      const detalhe = donoDaCobranca
+        ? await efiCobrancas(donoDaCobranca, "GET", `/v1/notification/${notificationToken}`)
+        : await efiCobrancasContaDoSistema("GET", `/v1/notification/${notificationToken}`);
       const historico = detalhe?.data || [];
       const ultimo = Array.isArray(historico) ? historico[historico.length - 1] : historico;
 
@@ -1065,25 +1331,30 @@ export function registrarRotasEfi(
   // Por isso todo "dinheiro saindo" passa pela Efí.
   //
   // Tudo aqui exige o certificado digital (EFI_CERT_P12_BASE64).
+  //
+  // ⚠️ AQUI O DINHEIRO SAI DA CONTA. Enquanto o token do Pix ficava numa
+  //    variável só, alimentada pelo ambiente, qualquer usuário logado que
+  //    chamasse /api/efi/pix/enviar estaria mandando dinheiro DA CONTA DO DONO
+  //    DO SISTEMA. Agora vale a mesma regra do boleto: a conta é a do usuário,
+  //    e a compartilhada só entra com a chave EFI_CONTA_COMPARTILHADA ligada.
   // ==========================================================================
 
-  function basePix(): string {
-    return process.env.EFI_SANDBOX !== "false"
-      ? "https://pix-h.api.efipay.com.br"
-      : "https://pix.api.efipay.com.br";
+  function basePix(ambiente: "homologacao" | "producao"): string {
+    return ambiente === "producao"
+      ? "https://pix.api.efipay.com.br"
+      : "https://pix-h.api.efipay.com.br";
   }
 
-  async function getTokenPix(): Promise<string> {
-    const cached = tokenCache.pix;
-    if (cached && cached.exp > Date.now() + 30_000) return cached.token;
+  async function getTokenPix(uid: string): Promise<{ token: string; conta: ContaEfi }> {
+    const conta = await contaEfi(uid, "pix");
+    const etiqueta = `${uid}|pix|${conta.ambiente}`;
 
-    const clientId = process.env.EFI_PIX_CLIENT_ID || process.env.EFI_CLIENT_ID;
-    const clientSecret = process.env.EFI_PIX_CLIENT_SECRET || process.env.EFI_CLIENT_SECRET;
-    if (!clientId || !clientSecret) throw new Error("SEM_CREDENCIAIS_PIX");
+    const cached = tokenCache.get(etiqueta);
+    if (cached && cached.exp > Date.now() + 30_000) return { token: cached.token, conta };
 
-    const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+    const basic = Buffer.from(`${conta.clientId}:${conta.clientSecret}`).toString("base64");
     const { data } = await axios.post(
-      `${basePix()}/oauth/token`,
+      `${basePix(conta.ambiente)}/oauth/token`,
       { grant_type: "client_credentials" },
       {
         headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/json" },
@@ -1092,18 +1363,18 @@ export function registrarRotasEfi(
       }
     );
 
-    tokenCache.pix = {
+    tokenCache.set(etiqueta, {
       token: data.access_token,
       exp: Date.now() + (data.expires_in || 600) * 1000,
-    };
-    return data.access_token;
+    });
+    return { token: data.access_token, conta };
   }
 
-  async function efiPix(method: "GET" | "POST" | "PUT", caminho: string, corpo?: any) {
-    const token = await getTokenPix();
+  async function efiPix(uid: string, method: "GET" | "POST" | "PUT", caminho: string, corpo?: any) {
+    const { token, conta } = await getTokenPix(uid);
     const { data } = await axios.request({
       method,
-      url: `${basePix()}${caminho}`,
+      url: `${basePix(conta.ambiente)}${caminho}`,
       data: corpo,
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       httpsAgent: getEfiAgent(),
@@ -1126,6 +1397,12 @@ export function registrarRotasEfi(
     if (err.message === "NAO_AUTENTICADO") {
       return { status: 401, mensagem: "Faça login para movimentar dinheiro." };
     }
+    // As falhas de conta ("você ainda não cadastrou seu banco") são as mesmas
+    // do boleto — e a frase precisa ser a mesma, senão a pessoa acha que são
+    // dois problemas diferentes.
+    if (err.message === "SEM_CREDENCIAIS_USUARIO" || err.message === "BANCO_SEM_EMISSAO") {
+      return explicarFalhaConta(err);
+    }
     return {
       status: 502,
       mensagem: `Erro no Pix: ${
@@ -1140,8 +1417,8 @@ export function registrarRotasEfi(
   /** Saldo da conta Efí. */
   app.get("/api/efi/saldo", async (req: any, res: any) => {
     try {
-      await exigirUsuarioAutenticado(req);
-      const dados = await efiPix("GET", "/v2/gn/saldo/");
+      const uid = await exigirUsuarioAutenticado(req);
+      const dados = await efiPix(uid, "GET", "/v2/gn/saldo/");
       res.json({ success: true, saldo: dados });
     } catch (err: any) {
       const { status, mensagem } = explicarFalhaPix(err);
@@ -1189,7 +1466,7 @@ export function registrarRotasEfi(
       // devolve a operação original em vez de criar outra.
       const idEnvio = `mf${Date.now()}${crypto.randomBytes(4).toString("hex")}`.slice(0, 35);
 
-      const resposta = await efiPix("PUT", `/v3/gn/pix/${idEnvio}`, {
+      const resposta = await efiPix(uid, "PUT", `/v3/gn/pix/${idEnvio}`, {
         valor: Number(valor).toFixed(2),
         pagador: { chave: chaveOrigem, infoPagador: String(descricao || "Pagamento via MEI Flow").slice(0, 140) },
         favorecido: { chave: String(chave) },
@@ -1232,7 +1509,7 @@ export function registrarRotasEfi(
       }
 
       const idEnvio = `mq${Date.now()}${crypto.randomBytes(4).toString("hex")}`.slice(0, 35);
-      const resposta = await efiPix("PUT", `/v2/gn/pix/${idEnvio}/qrcode`, {
+      const resposta = await efiPix(uid, "PUT", `/v2/gn/pix/${idEnvio}/qrcode`, {
         pagador: { chave: chaveOrigem },
         pixCopiaECola: String(qrcode).trim(),
       });
@@ -1266,7 +1543,7 @@ export function registrarRotasEfi(
         return res.status(403).json({ success: false, mensagem: "Envio não encontrado." });
       }
 
-      const dados = await efiPix("GET", `/v2/gn/pix/enviados/id-envio/${idEnvio}`);
+      const dados = await efiPix(uid, "GET", `/v2/gn/pix/enviados/id-envio/${idEnvio}`);
       const status = String(dados?.status || "");
       const concluido = ["REALIZADO", "CONCLUIDA", "LIQUIDADO"].includes(status.toUpperCase());
 
@@ -1335,11 +1612,11 @@ export function registrarRotasEfi(
   /** Pix enviados num período. */
   app.get("/api/efi/pix/enviados", async (req: any, res: any) => {
     try {
-      await exigirUsuarioAutenticado(req);
+      const uid = await exigirUsuarioAutenticado(req);
       const fim = req.query.fim || new Date().toISOString();
       const inicio =
         req.query.inicio || new Date(Date.now() - 30 * 86400000).toISOString();
-      const dados = await efiPix("GET", `/v2/gn/pix/enviados?inicio=${inicio}&fim=${fim}`);
+      const dados = await efiPix(uid, "GET", `/v2/gn/pix/enviados?inicio=${inicio}&fim=${fim}`);
       res.json({ success: true, enviados: dados });
     } catch (err: any) {
       const { status, mensagem } = explicarFalhaPix(err);

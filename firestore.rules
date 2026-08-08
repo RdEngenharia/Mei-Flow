@@ -146,5 +146,15 @@ service cloud.firestore {
     match /conexoes/{doc} {
       allow read, write: if false;
     }
+
+    // banco_credenciais guarda o Client ID e o Client Secret da conta bancaria
+    // de cada usuario, cifrados. Com esse par se emite boleto no nome dele e
+    // se movimenta a conta dele. Fica no mesmo nivel do certificado digital:
+    // nenhum navegador le, nenhum navegador escreve. So o servidor, pelo
+    // Admin SDK, que passa por cima destas regras.
+
+    match /banco_credenciais/{doc} {
+      allow read, write: if false;
+    }
   }
 }

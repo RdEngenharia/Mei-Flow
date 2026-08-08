@@ -32,7 +32,29 @@
  *    norma. Se precisar mexer, confira antes contra o Anexo I.
  */
 
-import { LOGO_NFSE_BASE64, temLogoNfse } from "./logoNfse";
+/**
+ * ----------------------------------------------------------------------------
+ * LOGOMARCA OFICIAL DA NFS-e
+ *
+ * A norma manda que o canto esquerdo do DANFSe leve a marca da NFS-e — não a
+ * do emissor. Enquanto a string abaixo estiver vazia, o gerador desenha uma
+ * aproximação com texto: fica parecida, não deixa o documento sem cabeçalho, e
+ * não impede nada. Se um dia a imagem oficial for baixada de
+ * https://www.gov.br/nfse/pt-br/biblioteca/documentacao-tecnica/logos-danfs-e/
+ * basta colar aqui como "data:image/png;base64,…" que o desenho de reserva sai
+ * de cena sozinho.
+ *
+ * ⚠️ POR QUE ISTO MORA AQUI DENTRO, E NÃO NUM ARQUIVO SÓ SEU
+ *
+ * Morava. Era um `logoNfse.ts` separado — e o arquivo ficou no computador sem
+ * entrar no Git, o que derrubou o servidor inteiro com "Cannot find module
+ * './logoNfse'". Uma constante de duas linhas não vale um arquivo que pode
+ * faltar: aqui dentro, ou o gerador existe inteiro, ou não existe.
+ */
+const LOGO_NFSE_BASE64 = "";
+
+const temLogoNfse = () =>
+  typeof LOGO_NFSE_BASE64 === "string" && LOGO_NFSE_BASE64.startsWith("data:image");
 
 export type DadosDanfse = {
   numeroNfse?: string | number;
@@ -318,9 +340,9 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
    * dados do ambiente à direita.
    *
    * A norma manda usar a logomarca oficial da NFS-e, que ela mesma publica. Se
-   * a imagem estiver disponível em logoNfse.ts, é ela que vai. Enquanto não
-   * estiver, desenhamos uma aproximação com texto — parecida o bastante para o
-   * documento não sair sem cabeçalho, e substituída assim que o arquivo chegar.
+   * LOGO_NFSE_BASE64 (lá no topo deste arquivo) tiver a imagem, é ela que vai.
+   * Vazia, desenhamos uma aproximação com texto — parecida o bastante para o
+   * documento não sair sem cabeçalho, e substituída assim que a imagem chegar.
    *
    * ⚠️ Esta NÃO é a logo do MEI. O cabeçalho do DANFSe é padronizado
    *    nacionalmente e não tem campo para a marca do emissor.
