@@ -888,6 +888,12 @@ export default function App() {
   };
 
   // Gerar e Iniciar o Processo de NFS-e via Emissor Nacional do Governo
+  // CAMINHO MANUAL ANTIGO — hoje sem nenhum botao chamando.
+  //
+  // Copiava o CNPJ, abria o Emissor Nacional e mostrava um modal com os dados da
+  // venda para preenchimento a mao. Foi substituido pela gaveta de Nota Fiscal.
+  // Fica guardado de proposito: se a emissao automatica demorar a passar no
+  // Portal, e so voltar a chamar isto no botao NFS-e do Livro Caixa.
   const handleDownloadNFSe = (tx: Transacao, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (tx.tipo !== "entrada") {
@@ -1990,11 +1996,7 @@ ${meiName}`;
 
             {/* SEÇÃO INTEGRADA: NOTA FISCAL (certificado A1 + dados fiscais) */}
             <div className="mt-8">
-              <NotaFiscalPanel
-                triggerToast={triggerToast}
-                abrirExterno={abrirNotaFiscal}
-                onFechado={() => setAbrirNotaFiscal(false)}
-              />
+              <NotaFiscalPanel triggerToast={triggerToast} />
             </div>
 
             {/* SEÇÃO INTEGRADA: ARQUIVO DIGITAL DO MEI */}
@@ -2435,7 +2437,9 @@ ${meiName}`;
                                       if (isCpfEmissor) {
                                         triggerToast("⚠ Emissão de NFS-e indisponível para Pessoa Física (CPF). Altere seu perfil para CNPJ para habilitar.");
                                       } else {
-                                        handleDownloadNFSe(tx, e);
+                                        // Antes isto abria o site do governo. Agora abre a gaveta de
+                                        // Nota Fiscal — de onde o portal continua acessivel em um clique.
+                                        setAbrirNotaFiscal(true);
                                       }
                                     }}
                                     className={`px-2 py-1 border rounded-lg transition-all text-[11px] font-bold flex items-center gap-1 ${
@@ -2589,6 +2593,16 @@ ${meiName}`;
       {/* ================= MODAIS DE CADASTRO SIMULADOS ================= */}
       
       {/* MODAL 1: REGISTRAR VENDA (ENTRADA) */}
+      {/* Gaveta de Nota Fiscal sempre montada: o cartao vive na Home, mas os
+          botoes NFS-e estao no Livro Caixa. Sem esta instancia global, clicar
+          neles fora da Home nao abriria nada. */}
+      <NotaFiscalPanel
+        semCartao
+        triggerToast={triggerToast}
+        abrirExterno={abrirNotaFiscal}
+        onFechado={() => setAbrirNotaFiscal(false)}
+      />
+
       {showVendaModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden my-auto">

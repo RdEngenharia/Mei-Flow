@@ -31,6 +31,15 @@ interface Props {
   abrirExterno?: boolean;
   /** Avisa quem abriu de fora que a gaveta fechou, para ele poder abrir de novo depois. */
   onFechado?: () => void;
+  /**
+   * Renderiza SÓ a gaveta, sem o cartão.
+   *
+   * A gaveta precisa existir em qualquer tela — o botão NFS-e do Livro Caixa
+   * está numa tela, o cartão está em outra. Então o App monta duas vezes: o
+   * cartão na Home (sem controle externo) e uma gaveta invisível fora de todas
+   * as telas, que é a que os botões espalhados pelo sistema abrem.
+   */
+  semCartao?: boolean;
 }
 
 type Cert = {
@@ -58,7 +67,7 @@ const cnpjBR = (v?: string) => {
   return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
 };
 
-export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado }: Props) {
+export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado, semCartao }: Props) {
   const [aberto, setAberto] = useState(false);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -216,6 +225,7 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado 
   return (
     <div className="w-full">
       {/* ------------------------------------------------------ cartão fechado */}
+      {!semCartao && (
       <button
         onClick={() => setAberto(true)}
         className="w-full bg-white p-6 rounded-3xl border border-slate-200/50 shadow-xs cursor-pointer hover:border-indigo-300 hover:shadow-md transition-all duration-300 flex items-center justify-between group"
@@ -250,6 +260,7 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado 
           <ChevronRight className="w-4 h-4 transform group-hover:translate-x-0.5 transition-transform" />
         </div>
       </button>
+      )}
 
       {/* ------------------------------------------------------------- gaveta */}
       {aberto && (
