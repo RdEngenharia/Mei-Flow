@@ -2,9 +2,13 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   FileText, X, Loader2, AlertTriangle, CheckCircle2, ShieldCheck, Upload,
   Trash2, ChevronRight, Lock, RefreshCw, CalendarClock, ExternalLink,
+  Search, Plus, Star,
 } from "lucide-react";
 import { auth } from "../firebase";
 import { getApiUrl } from "../utils/nativeFile";
+import {
+  buscarServicos, formatarCodigoServico, descricaoDoCodigo, ServicoNacional,
+} from "../data/servicosNfse";
 
 /**
  * NOTA FISCAL — certificado digital A1 e dados fiscais do MEI.
@@ -41,6 +45,15 @@ interface Props {
    */
   semCartao?: boolean;
 }
+
+/** Um serviço que o usuário pré-configurou. O apelido é como ele chama. */
+type ServicoConfig = {
+  codigo: string;
+  apelido: string;
+  nbs: string;
+  descricao: string;
+  padrao: boolean;
+};
 
 type Cert = {
   configurado: boolean;
@@ -85,13 +98,20 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
   // Dados fiscais
   const [cnpj, setCnpj] = useState("");
   const [codMunicipio, setCodMunicipio] = useState("");
-  const [codigoServico, setCodigoServico] = useState("");
-  const [codigoNbs, setCodigoNbs] = useState("");
+  const [servicos, setServicos] = useState<ServicoConfig[]>([]);
   const [serie, setSerie] = useState("");
   const [proximoNumero, setProximoNumero] = useState("");
   const [descricaoPadrao, setDescricaoPadrao] = useState("");
   const [emitirAoPagar, setEmitirAoPagar] = useState(true);
   const [salvando, setSalvando] = useState(false);
+
+  // Busca de serviço
+  const [buscandoServico, setBuscandoServico] = useState(false);
+  const [termo, setTermo] = useState("");
+  const [escolhido, setEscolhido] = useState<ServicoNacional | null>(null);
+  const [apelidoNovo, setApelidoNovo] = useState("");
+  const [descricaoNova, setDescricaoNova] = useState("");
+  const resultados = buscarServicos(termo, 30);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -111,8 +131,26 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
       if (c) {
         setCnpj(c.cnpj || "");
         setCodMunicipio(c.codMunicipio || "");
-        setCodigoServico(c.codigoServico || "");
-        setCodigoNbs(c.codigoNbs || "");
+        // Quem configurou antes desta tela tinha um código só, solto. Viramos
+        // ele num serviço da lista para ninguém perder configuração.
+        const lista: ServicoConfig[] = Array.isArray(c.servicos) && c.servicos.length
+          ? c.servicos.map((s: any) => ({
+              codigo: String(s.codigo || ""),
+              apelido: String(s.apelido || ""),
+              nbs: String(s.nbs || ""),
+              descricao: String(s.descricao || ""),
+              padrao: s.padrao === true,
+            }))
+          : c.codigoServico
+            ? [{
+                codigo: String(c.codigoServico),
+                apelido: descricaoDoCodigo(c.codigoServico).slice(0, 40) || "Meu serviço",
+                nbs: String(c.codigoNbs || ""),
+                descricao: String(c.descricaoPadrao || ""),
+                padrao: true,
+              }]
+            : [];
+        setServicos(lista);
         setSerie(c.serie || "");
         setProximoNumero(String(dcfg.proximoNumero || 1));
         setDescricaoPadrao(c.descricaoPadrao || "");
@@ -208,6 +246,42 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
     }
   }
 
+  function adicionarServico() {
+    if (!escolhido) return;
+    if (servicos.some((s) => s.codigo === escolhido.c)) {
+      setErro("Esse serviço já está na sua lista.");
+      return;
+    }
+    setServicos([
+      ...servicos,
+      {
+        codigo: escolhido.c,
+        // Sem apelido, o nome oficial serve — mas cortado, senão vira parágrafo.
+        apelido: (apelidoNovo.trim() || escolhido.d).slice(0, 60),
+        nbs: "",
+        descricao: descricaoNova.trim(),
+        padrao: servicos.length === 0,
+      },
+    ]);
+    setEscolhido(null);
+    setApelidoNovo("");
+    setDescricaoNova("");
+    setTermo("");
+    setBuscandoServico(false);
+    setErro(null);
+  }
+
+  function removerServico(codigo: string) {
+    const resto = servicos.filter((s) => s.codigo !== codigo);
+    // Se o habitual saiu, alguém precisa assumir o posto.
+    if (resto.length && !resto.some((s) => s.padrao)) resto[0].padrao = true;
+    setServicos(resto);
+  }
+
+  function marcarHabitual(codigo: string) {
+    setServicos(servicos.map((s) => ({ ...s, padrao: s.codigo === codigo })));
+  }
+
   async function salvarConfig(e: React.FormEvent) {
     e.preventDefault();
     setSalvando(true);
@@ -217,7 +291,7 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
         method: "PUT",
         headers: await comToken(),
         body: JSON.stringify({
-          cnpj, codMunicipio, codigoServico, codigoNbs, serie,
+          cnpj, codMunicipio, serie, servicos,
           proximoNumero: Number(proximoNumero || 1), descricaoPadrao, emitirAoPagar,
         }),
       });
@@ -455,18 +529,171 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
 
               {/* ------------------------------------------------ dados fiscais */}
               <form onSubmit={salvarConfig} className="bg-white border border-slate-200/60 rounded-3xl p-5 space-y-3.5 text-left">
-                <h4 className="text-sm font-extrabold text-slate-800">Dados fiscais</h4>
-                {(!codMunicipio || !codigoServico) && (
+                <h4 className="text-sm font-extrabold text-slate-800">Meus serviços</h4>
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  Cadastre uma vez o que você faz, com o nome que você usa. Depois, para emitir uma nota,
+                  é só escolher esse nome — nada de procurar código.
+                </p>
+
+                {servicos.length === 0 && !buscandoServico && (
                   <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3 leading-relaxed">
-                    O texto cinza dentro dos campos é só exemplo — ainda não está preenchido.
-                    Digite os seus números por cima dele.
+                    Você ainda não cadastrou nenhum serviço. Sem isso o Portal não sabe o que você presta
+                    e recusa a nota.
                   </p>
                 )}
-                <p className="text-[11px] text-slate-500 leading-relaxed">
-                  Preenche uma vez e vale para todas as notas. O código do município é o código do IBGE da sua
-                  cidade, com 7 dígitos, e o código do serviço é o mesmo que você já escolhe hoje no Portal
-                  Nacional.
-                </p>
+
+                {/* lista dos servicos ja cadastrados */}
+                {servicos.map((s) => (
+                  <div key={s.codigo} className="bg-slate-50 border border-slate-200/60 rounded-2xl p-3.5 flex items-start gap-3">
+                    <button
+                      type="button"
+                      onClick={() => marcarHabitual(s.codigo)}
+                      title={s.padrao ? "É o seu serviço habitual" : "Marcar como habitual"}
+                      className={`mt-0.5 shrink-0 w-8 h-8 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
+                        s.padrao
+                          ? "bg-amber-100 text-amber-600 border border-amber-200"
+                          : "bg-white text-slate-300 border border-slate-200 hover:text-amber-500"
+                      }`}
+                    >
+                      <Star className={`w-4 h-4 ${s.padrao ? "fill-amber-500" : ""}`} />
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-extrabold text-slate-800 truncate">{s.apelido}</p>
+                      <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+                        {formatarCodigoServico(s.codigo)} · {descricaoDoCodigo(s.codigo).slice(0, 60) || "código informado manualmente"}
+                      </p>
+                      {s.descricao && (
+                        <p className="text-[10px] text-slate-500 mt-1 italic truncate">"{s.descricao}"</p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removerServico(s.codigo)}
+                      className="mt-0.5 shrink-0 w-8 h-8 rounded-xl bg-white border border-slate-200 text-slate-400 hover:text-red-600 hover:border-red-200 flex items-center justify-center transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+
+                {/* busca de servico novo */}
+                {!buscandoServico ? (
+                  <button
+                    type="button"
+                    onClick={() => { setBuscandoServico(true); setErro(null); }}
+                    className="w-full py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-extrabold text-xs rounded-2xl transition-colors cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
+                  >
+                    <Plus className="w-4 h-4" /> Adicionar serviço
+                  </button>
+                ) : (
+                  <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-4 space-y-3">
+                    {!escolhido ? (
+                      <>
+                        <div className="relative">
+                          <Search className="w-4 h-4 text-slate-300 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                          <input
+                            autoFocus
+                            value={termo}
+                            onChange={(e) => setTermo(e.target.value)}
+                            placeholder="O que você faz? Ex.: energia solar, unha, aula, frete"
+                            className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 transition-colors"
+                          />
+                        </div>
+
+                        {termo.trim().length > 0 && resultados.length === 0 && (
+                          <p className="text-[11px] text-slate-500 leading-relaxed">
+                            Nada encontrado para "{termo}". Tente uma palavra mais simples — "solar" em vez de
+                            "usina fotovoltaica", "cabelo" em vez de "hairstylist". Dá para buscar pelo número
+                            também, se você já souber.
+                          </p>
+                        )}
+
+                        <div className="max-h-72 overflow-y-auto space-y-1.5">
+                          {resultados.map((r) => (
+                            <button
+                              key={r.c}
+                              type="button"
+                              onClick={() => { setEscolhido(r); setApelidoNovo(""); }}
+                              className="w-full text-left bg-white border border-slate-200 hover:border-indigo-300 rounded-xl p-3 transition-colors cursor-pointer"
+                            >
+                              <p className="text-[11px] text-slate-700 leading-snug">{r.d}</p>
+                              <p className="text-[10px] text-slate-400 font-bold mt-1">{formatarCodigoServico(r.c)}</p>
+                            </button>
+                          ))}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => { setBuscandoServico(false); setTermo(""); }}
+                          className="w-full py-2.5 text-slate-500 hover:text-slate-700 font-bold text-[11px] cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="bg-white border border-indigo-200 rounded-xl p-3">
+                          <p className="text-[11px] text-slate-700 leading-snug">{escolhido.d}</p>
+                          <p className="text-[10px] text-indigo-600 font-bold mt-1">{formatarCodigoServico(escolhido.c)}</p>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                            Como você chama esse serviço?
+                          </label>
+                          <input
+                            autoFocus
+                            value={apelidoNovo}
+                            onChange={(e) => setApelidoNovo(e.target.value)}
+                            placeholder="Ex.: Compensação de energia solar"
+                            maxLength={60}
+                            className="mt-1.5 w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 transition-colors"
+                          />
+                          <p className="text-[10px] text-slate-400 mt-1.5">
+                            É esse nome que vai aparecer na hora de emitir a nota. Só você vê.
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                            Texto que sai na nota (opcional)
+                          </label>
+                          <input
+                            value={descricaoNova}
+                            onChange={(e) => setDescricaoNova(e.target.value)}
+                            placeholder="Ex.: Referente a compensacao de energia de usina fotovoltaica"
+                            maxLength={300}
+                            className="mt-1.5 w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 transition-colors"
+                          />
+                          <p className="text-[10px] text-slate-400 mt-1.5">
+                            Se o lançamento tiver descrição própria, ela tem preferência sobre esta.
+                          </p>
+                        </div>
+
+                        <div className="flex gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => setEscolhido(null)}
+                            className="px-4 py-3 bg-white border border-slate-200 text-slate-600 font-extrabold text-xs rounded-2xl cursor-pointer"
+                          >
+                            Voltar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={adicionarServico}
+                            className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-2xl transition-colors cursor-pointer uppercase tracking-wide"
+                          >
+                            Salvar serviço
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <div className="h-px bg-slate-100 my-1" />
+
+                <h4 className="text-sm font-extrabold text-slate-800">Dados da empresa</h4>
 
                 <div className="grid grid-cols-2 gap-2.5">
                   <div>
@@ -492,66 +719,41 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
                   </div>
                 </div>
 
-                <div>
-                  <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Código nacional do serviço</label>
-                  <input
-                    value={codigoServico}
-                    onChange={(e) => setCodigoServico(e.target.value)}
-                    placeholder="Ex.: 070101"
-                    inputMode="numeric"
-                    className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Série da DPS</label>
-                    <input
-                      value={serie}
-                      onChange={(e) => setSerie(e.target.value)}
-                      placeholder="Ex.: 00001"
-                      inputMode="numeric"
-                      maxLength={5}
-                      className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
-                    />
+                <details className="bg-slate-50 border border-slate-200/60 rounded-2xl px-4 py-3">
+                  <summary className="text-[11px] font-extrabold text-slate-600 cursor-pointer">
+                    Já emitia nota em outro sistema?
+                  </summary>
+                  <div className="mt-3 space-y-3">
+                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                      Só mexa aqui se estiver migrando. A série do MEI Flow tem que ser sua, entre 1 e 49999.
+                      Não copie a série da nota emitida no site do governo — as de 50000 a 79999 são reservadas
+                      a ele e o Portal recusa.
+                    </p>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Série</label>
+                        <input
+                          value={serie}
+                          onChange={(e) => setSerie(e.target.value)}
+                          placeholder="Ex.: 00001"
+                          inputMode="numeric"
+                          maxLength={5}
+                          className="mt-1.5 w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Próxima nota</label>
+                        <input
+                          value={proximoNumero}
+                          onChange={(e) => setProximoNumero(e.target.value.replace(/\D/g, ""))}
+                          placeholder="Ex.: 1"
+                          inputMode="numeric"
+                          className="mt-1.5 w-full px-4 py-3 bg-white border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 transition-colors"
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Número da próxima nota</label>
-                    <input
-                      value={proximoNumero}
-                      onChange={(e) => setProximoNumero(e.target.value.replace(/\D/g, ""))}
-                      placeholder="Ex.: 1"
-                      inputMode="numeric"
-                      className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
-                    />
-                  </div>
-                </div>
-
-                <p className="text-[11px] text-slate-500 leading-relaxed bg-amber-50 border border-amber-200 rounded-xl p-3">
-                  A série do MEI Flow tem que ser <strong>sua</strong>, entre 1 e 49999 — algo como 00001.
-                  Não copie a série da nota que você emitiu no site do governo (as de 50000 a 79999 são
-                  reservadas a ele, e o Portal recusa). Como a série é nova, a numeração dela começa no 1.
-                </p>
-
-                <div>
-                  <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Código NBS (opcional)</label>
-                  <input
-                    value={codigoNbs}
-                    onChange={(e) => setCodigoNbs(e.target.value)}
-                    placeholder="Ex.: 1.0205.00.00"
-                    className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Descrição padrão do serviço</label>
-                  <input
-                    value={descricaoPadrao}
-                    onChange={(e) => setDescricaoPadrao(e.target.value)}
-                    placeholder="Usada quando a cobrança não tiver descrição"
-                    className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
-                  />
-                </div>
+                </details>
 
                 <label className="flex items-start gap-3 bg-slate-50 border border-slate-200/60 rounded-2xl p-3.5 cursor-pointer">
                   <input

@@ -455,7 +455,8 @@ function explicar(err: any): { status: number; mensagem: string; detalhe?: any }
     CERTIFICADO_VENCIDO: [400, "Este certificado digital está vencido. Renove-o para continuar emitindo notas."],
     SEM_CHAVE_CRIPTO: [503, "O servidor está sem a chave de segurança NFSE_CRYPTO_KEY, então não pode guardar certificados."],
     COFRE_CORROMPIDO: [503, "O certificado guardado não pôde ser lido — provavelmente a chave de segurança do servidor mudou. Envie o certificado novamente."],
-    SEM_CONFIG: [400, "Antes de emitir, preencha os dados fiscais: CNPJ, código do município e código do serviço."],
+    SEM_CONFIG: [400, "Antes de emitir, preencha seus dados fiscais na tela de Nota Fiscal."],
+    SEM_SERVICO: [400, "Cadastre o serviço que você presta na tela de Nota Fiscal — é uma vez só."],
     VALOR_INVALIDO: [400, "O valor da nota precisa ser maior que zero."],
   };
   if (mapa[err.message]) return { status: mapa[err.message][0], mensagem: mapa[err.message][1] };
@@ -499,11 +500,39 @@ function explicar(err: any): { status: number; mensagem: string; detalhe?: any }
 async function emitirNota(
   db: any,
   uid: string,
-  dados: { clienteNome?: string; clienteDocumento?: string; valor: number; descricao?: string }
+  dados: {
+    clienteNome?: string;
+    clienteDocumento?: string;
+    valor: number;
+    descricao?: string;
+    /** Código do serviço pré-configurado que o usuário escolheu na hora. */
+    servicoId?: string;
+  }
 ): Promise<any> {
   const cfgSnap = await db.collection("nfse_config").doc(uid).get();
   const cfg = cfgSnap.exists ? cfgSnap.data() : null;
-  if (!cfg?.cnpj || !cfg?.codMunicipio || !cfg?.codigoServico) throw new Error("SEM_CONFIG");
+  if (!cfg?.cnpj || !cfg?.codMunicipio) throw new Error("SEM_CONFIG");
+
+  /**
+   * QUAL SERVIÇO USAR.
+   *
+   * A empresa pode ter dois CNAEs e prestar serviços diferentes — o eletricista
+   * que também vende projeto, a cabeleireira que também faz estética. Então o
+   * usuário pré-configura os serviços dele, com o apelido que quiser, e na hora
+   * de emitir só escolhe o nome. Aqui a gente resolve: o que ele escolheu, ou o
+   * marcado como habitual, ou o único que existe.
+   *
+   * O último `||` é a compatibilidade com quem configurou antes desta tela
+   * existir, quando havia um código só, solto na configuração.
+   */
+  const servicos: any[] = Array.isArray(cfg.servicos) ? cfg.servicos : [];
+  const servico =
+    servicos.find((s) => so(s.codigo) === so(dados.servicoId)) ||
+    servicos.find((s) => s.padrao) ||
+    servicos[0] ||
+    { codigo: cfg.codigoServico, nbs: cfg.codigoNbs, descricao: cfg.descricaoPadrao };
+
+  if (!so(servico?.codigo)) throw new Error("SEM_SERVICO");
 
   const valor = Number(dados.valor || 0);
   if (!(valor > 0)) throw new Error("VALOR_INVALIDO");
@@ -524,10 +553,10 @@ async function emitirNota(
       doc: dados.clienteDocumento || "",
       nome: dados.clienteNome || "Consumidor",
     },
-    descricao: dados.descricao || cfg.descricaoPadrao || "Prestacao de servicos",
+    descricao: dados.descricao || servico.descricao || cfg.descricaoPadrao || "Prestacao de servicos",
     valor,
-    codigoServico: cfg.codigoServico,
-    codigoNbs: cfg.codigoNbs || "",
+    codigoServico: servico.codigo,
+    codigoNbs: servico.nbs || "",
     competencia: hoje,
   });
 
@@ -546,7 +575,11 @@ async function emitirNota(
 
   const chave = data?.chaveAcesso || data?.ChaveAcesso || "";
   const xmlNota = desempacotar(data?.nfseXmlGZipB64 || data?.NfseXmlGZipB64 || "");
-  return { chave, numero, serie, idDps, xml: xmlNota };
+  return {
+    chave, numero, serie, idDps, xml: xmlNota,
+    servicoApelido: servico.apelido || "",
+    servicoCodigo: so(servico.codigo),
+  };
 }
 
 /**
@@ -755,7 +788,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
     try {
       const uid = await exigirUsuario(req);
       const { cnpj, codMunicipio, codigoServico, codigoNbs, serie, proximoNumero: primeiroNumero,
-              descricaoPadrao, ativo, emitirAoPagar } = req.body;
+              descricaoPadrao, ativo, emitirAoPagar, servicos } = req.body;
 
       const cnpjLimpo = so(cnpj);
       if (cnpjLimpo.length !== 14) {
@@ -767,8 +800,44 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
           mensagem: "O código do município tem 7 dígitos (código IBGE da sua cidade).",
         });
       }
-      if (!so(codigoServico)) {
-        return res.status(400).json({ success: false, mensagem: "Informe o código nacional do serviço que você presta." });
+      /**
+       * SERVIÇOS PRÉ-CONFIGURADOS.
+       *
+       * Chegam como lista: apelido que o usuário deu, código nacional, NBS e a
+       * descrição que sai na nota. Um deles é o habitual. O `codigoServico`
+       * solto continua sendo gravado a partir do habitual, para não quebrar
+       * quem já tinha configurado antes desta lista existir.
+       */
+      const listaServicos = (Array.isArray(servicos) ? servicos : [])
+        .map((s: any) => ({
+          codigo: so(s?.codigo),
+          apelido: String(s?.apelido || "").slice(0, 60),
+          nbs: so(s?.nbs),
+          descricao: String(s?.descricao || "").slice(0, 300),
+          padrao: s?.padrao === true,
+        }))
+        .filter((s: any) => s.codigo.length >= 4);
+
+      // Códigos repetidos viram confusão na hora de escolher — mantemos o primeiro.
+      const vistos = new Set<string>();
+      const servicosLimpos = listaServicos.filter((s: any) => {
+        if (vistos.has(s.codigo)) return false;
+        vistos.add(s.codigo);
+        return true;
+      });
+
+      // Alguém tem que ser o habitual, senão emitir sem escolher não sabe o que usar.
+      if (servicosLimpos.length && !servicosLimpos.some((s: any) => s.padrao)) {
+        servicosLimpos[0].padrao = true;
+      }
+
+      const habitual = servicosLimpos.find((s: any) => s.padrao);
+      const codigoFinal = habitual?.codigo || so(codigoServico);
+      if (!codigoFinal) {
+        return res.status(400).json({
+          success: false,
+          mensagem: "Cadastre pelo menos um serviço — é o que diz ao Portal o que você presta.",
+        });
       }
 
       /**
@@ -797,8 +866,9 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         userId: uid,
         cnpj: cnpjLimpo,
         codMunicipio: so(codMunicipio),
-        codigoServico: so(codigoServico),
-        codigoNbs: so(codigoNbs),
+        servicos: servicosLimpos,
+        codigoServico: codigoFinal,
+        codigoNbs: habitual ? habitual.nbs : so(codigoNbs),
         serie: so(serie) || "00001",
         descricaoPadrao: String(descricaoPadrao || "").slice(0, 300),
         ativo: ativo !== false,
@@ -873,7 +943,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
   app.post("/api/nfse/avulsa", async (req: any, res: any) => {
     try {
       const uid = await exigirUsuario(req);
-      const { lancamentoId, clienteNome, clienteDocumento, valor, descricao } = req.body || {};
+      const { lancamentoId, clienteNome, clienteDocumento, valor, descricao, servicoId } = req.body || {};
 
       if (lancamentoId) {
         const jaTem = await db
@@ -900,6 +970,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         clienteDocumento,
         valor: Number(valor || 0),
         descricao,
+        servicoId,
       });
 
       await db.collection("nfse_emitidas").doc(r.chave || r.idDps).set({

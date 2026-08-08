@@ -98,6 +98,10 @@ export default function App() {
   // Qual lancamento esta com a nota sendo emitida agora (para o botao virar
   // ampulheta so naquela linha, e nao na tabela inteira).
   const [emitindoNota, setEmitindoNota] = useState<string | null>(null);
+  // Serviços pré-configurados do usuário. Se ele tem mais de um, perguntamos
+  // qual antes de emitir; com um só, emite direto sem atrapalhar.
+  const [servicosNfse, setServicosNfse] = useState<any[] | null>(null);
+  const [escolherServicoPara, setEscolherServicoPara] = useState<Transacao | null>(null);
 
   // State e Credenciais de Autenticação MEI
   const [userId, setUserId] = useState("user_49281");
@@ -899,12 +903,30 @@ export default function App() {
    * responde dizendo o que falta — e ai sim abrimos a gaveta de configuracao,
    * que e o unico caso em que faz sentido abrir.
    */
-  const emitirNotaDoLancamento = async (tx: Transacao) => {
+  const emitirNotaDoLancamento = async (tx: Transacao, servicoId?: string) => {
     if (emitindoNota) return;
     setEmitindoNota(tx.id);
     try {
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error("Faca login novamente.");
+
+      // Primeira emissao da sessao: descobrimos quantos servicos ele cadastrou.
+      let lista = servicosNfse;
+      if (!servicoId && lista === null) {
+        const rc = await fetch(getApiUrl("/api/nfse/config"), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const dc = await rc.json();
+        lista = Array.isArray(dc?.config?.servicos) ? dc.config.servicos : [];
+        setServicosNfse(lista);
+      }
+
+      // Dois ou mais servicos: ele escolhe pelo nome que ele mesmo deu.
+      if (!servicoId && lista && lista.length > 1) {
+        setEscolherServicoPara(tx);
+        setEmitindoNota(null);
+        return;
+      }
 
       const r = await fetch(getApiUrl("/api/nfse/avulsa"), {
         method: "POST",
@@ -915,6 +937,7 @@ export default function App() {
           clienteDocumento: tx.clienteDocumento || "",
           valor: tx.valor,
           descricao: tx.descricao || "",
+          servicoId: servicoId || "",
         }),
       });
       const d = await r.json();
@@ -930,6 +953,7 @@ export default function App() {
         throw new Error(d.mensagem || "O Portal Nacional recusou a nota.");
       }
 
+      setEscolherServicoPara(null);
       triggerToast(d.jaEmitida ? `ℹ ${d.mensagem}` : `✓ Nota ${d.numero} emitida com sucesso!`);
     } catch (e: any) {
       triggerToast(`⚠ ${e.message}`);
@@ -2649,8 +2673,47 @@ ${meiName}`;
         semCartao
         triggerToast={triggerToast}
         abrirExterno={abrirNotaFiscal}
-        onFechado={() => setAbrirNotaFiscal(false)}
+        onFechado={() => { setAbrirNotaFiscal(false); setServicosNfse(null); }}
       />
+
+      {/* Escolha do servico, so aparece para quem cadastrou mais de um */}
+      {escolherServicoPara && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[60] flex items-center justify-center p-5">
+          <div className="bg-white rounded-3xl w-full max-w-md p-6 space-y-4 shadow-xl">
+            <div className="text-left">
+              <h3 className="font-bold text-lg text-slate-900">Qual serviço?</h3>
+              <p className="text-xs text-slate-400 font-medium mt-0.5">
+                Nota de {escolherServicoPara.clienteNome || "cliente"} — {Number(escolherServicoPara.valor || 0)
+                  .toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              {(servicosNfse || []).map((s: any) => (
+                <button
+                  key={s.codigo}
+                  onClick={() => emitirNotaDoLancamento(escolherServicoPara, s.codigo)}
+                  className="w-full text-left bg-slate-50 border border-slate-200 hover:border-indigo-400 hover:bg-white rounded-2xl p-4 transition-colors cursor-pointer flex items-center justify-between gap-3"
+                >
+                  <span className="text-sm font-bold text-slate-800 truncate">{s.apelido || s.codigo}</span>
+                  {s.padrao && (
+                    <span className="shrink-0 text-[9px] font-extrabold uppercase tracking-widest text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                      Habitual
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={() => setEscolherServicoPara(null)}
+              className="w-full py-3 text-slate-500 hover:text-slate-700 font-bold text-xs cursor-pointer"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
 
       {showVendaModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
