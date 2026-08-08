@@ -19,8 +19,22 @@
  * vezes menor. E, o mais importante, o MESMO código roda no servidor — que é o
  * que permite guardar o PDF no Arquivo Digital junto do XML.
  *
+ * ----------------------------------------------------------------------------
+ * SOBRE ESTE LEIAUTE
+ *
+ * Durante um tempo o sistema teve DUAS folhas diferentes: esta e uma versão em
+ * HTML que o navegador imprimia. O usuário reparou e resumiu bem — "é como se
+ * estivesse com dois servidores de notas fiscais". Ele preferiu a aparência da
+ * folha em HTML: mais leve, com cartões de borda clara em vez de blocos
+ * pesados, números em fonte de máquina de escrever, e o total sem faixa preta.
+ *
+ * Este arquivo passou a ser essa folha. A versão em HTML foi removida, e este é
+ * o ÚNICO desenho de nota fiscal do sistema. Ao mexer aqui, lembre que o
+ * resultado é o que vai para o cliente do MEI e para a guarda dos cinco anos.
+ *
  * ⚠️ AO MEXER NO LEIAUTE: a função devolve a altura usada. O teste renderiza a
- *    folha e falha se passar de uma página. Rode-o.
+ *    folha e falha se passar de uma página. Rode-o. E suba `VERSAO_FOLHA` no
+ *    nfse.ts se a mudança valer refazer as notas já arquivadas.
  */
 
 export type DadosDanfse = {
@@ -130,13 +144,13 @@ const iniciais = (nome?: string) => {
   return p.filter((w) => w.length > 1).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "MF";
 };
 
+const TINTA = { escuro: [15, 23, 42], texto: [51, 65, 85], claro: [100, 116, 139],
+                fraco: [148, 163, 184], linha: [226, 232, 240], fundo: [248, 250, 252],
+                marca: [79, 70, 229], ok: [4, 120, 87], alerta: [185, 28, 28] } as const;
+
 // ---------------------------------------------------------------------------
 // Desenho
 // ---------------------------------------------------------------------------
-
-const TINTA = { escuro: [15, 23, 42], texto: [51, 65, 85], claro: [100, 116, 139],
-                fraco: [148, 163, 184], linha: [203, 213, 225], fundo: [248, 250, 252],
-                marca: [79, 70, 229], ok: [5, 150, 105], alerta: [220, 38, 38] } as const;
 
 /**
  * Monta a DANFSe. Recebe o jsPDF já instanciado para funcionar igual no
@@ -145,177 +159,191 @@ const TINTA = { escuro: [15, 23, 42], texto: [51, 65, 85], claro: [100, 116, 139
  * @returns altura ocupada em mm, para o teste conferir que cabe na página.
  */
 export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = {}): number {
-  const M = 12;                  // margem
-  const L = 210 - M * 2;         // largura útil = 186mm
+  const M = 13;                  // margem
+  const L = 210 - M * 2;         // largura útil = 184mm
   let y = M;
 
   const cor = (c: readonly number[]) => doc.setTextColor(c[0], c[1], c[2]);
   const traco = (c: readonly number[]) => doc.setDrawColor(c[0], c[1], c[2]);
   const preenche = (c: readonly number[]) => doc.setFillColor(c[0], c[1], c[2]);
 
-  const rotulo = (t: string, x: number, yy: number) => {
-    doc.setFont("helvetica", "bold").setFontSize(5.6);
-    cor(TINTA.fraco);
-    doc.text(String(t || "").toUpperCase(), x, yy);
+  /**
+   * Rótulo pequeno em maiúsculas com as letras afastadas.
+   *
+   * O jsPDF não tem letter-spacing, e é justamente esse respiro entre as letras
+   * que dá o ar leve da folha que o usuário escolheu. Então desenhamos letra a
+   * letra. É pouco texto — só rótulos — então o custo é irrelevante.
+   */
+  const rotulo = (t: string, x: number, yy: number, tam = 5.4, espaco = 0.35, tinta: readonly number[] = TINTA.fraco) => {
+    doc.setFont("helvetica", "bold").setFontSize(tam);
+    cor(tinta);
+    let cx = x;
+    for (const letra of String(t || "").toUpperCase()) {
+      doc.text(letra, cx, yy);
+      cx += doc.getTextWidth(letra) + espaco;
+    }
   };
-  const valor = (t: string, x: number, yy: number, tam = 8, peso: "normal" | "bold" = "normal") => {
-    doc.setFont("helvetica", peso).setFontSize(tam);
+
+  /** Largura que `rotulo` vai ocupar, para poder alinhar à direita. */
+  const larguraRotulo = (t: string, tam = 5.4, espaco = 0.35) => {
+    doc.setFont("helvetica", "bold").setFontSize(tam);
+    let w = 0;
+    for (const letra of String(t || "").toUpperCase()) w += doc.getTextWidth(letra) + espaco;
+    return Math.max(0, w - espaco);
+  };
+
+  /** Valor em fonte de máquina de escrever — como os números da folha na tela. */
+  const valorMono = (t: string, x: number, yy: number, tam = 7.6) => {
+    doc.setFont("courier", "normal").setFontSize(tam);
     cor(TINTA.texto);
     doc.text(String(t ?? "—") || "—", x, yy);
   };
 
-  /** Cabeçalho de bloco: barra clara com o título. */
-  const blocoTitulo = (titulo: string, altura: number, destaque = false) => {
-    preenche(destaque ? [238, 242, 255] : TINTA.fundo);
-    traco(TINTA.linha);
-    doc.setLineWidth(0.2);
-    doc.roundedRect(M, y, L, altura, 1.5, 1.5, "FD");
-    preenche(destaque ? [224, 231, 255] : [241, 245, 249]);
-    doc.rect(M + 0.2, y + 0.2, L - 0.4, 5, "F");
-    doc.setFont("helvetica", "bold").setFontSize(5.8);
-    cor(destaque ? TINTA.marca : TINTA.claro);
-    doc.text(titulo.toUpperCase(), M + 3, y + 3.5);
+  const valorTexto = (t: string, x: number, yy: number, tam = 7.6) => {
+    doc.setFont("helvetica", "normal").setFontSize(tam);
+    cor(TINTA.texto);
+    doc.text(String(t ?? "—") || "—", x, yy);
   };
 
-  // ---------------------------------------------------------------- topo
+  /**
+   * Corta com reticências o que não couber numa linha.
+   *
+   * O quebra-linhas do jsPDF parte a palavra onde der: um e-mail longo saía
+   * como "RODRIGUES.SOLAR@HOTMAIL.C" e "OM" na linha de baixo. Para campos que
+   * são um dado único — e-mail, telefone, documento — cortar é mais honesto e
+   * mais legível do que partir no meio.
+   */
+  const encurtar = (texto: string, largura: number, tam: number) => {
+    doc.setFont("helvetica", "normal").setFontSize(tam);
+    const s = String(texto ?? "—") || "—";
+    if (doc.getTextWidth(s) <= largura) return s;
+    let corte = s;
+    while (corte.length > 1 && doc.getTextWidth(corte + "…") > largura) {
+      corte = corte.slice(0, -1);
+    }
+    return corte + "…";
+  };
+
+  /**
+   * Cartão de borda clara com uma faixa de título — o elemento que se repete na
+   * folha inteira e responde pela leveza dela.
+   */
+  const cartao = (x: number, largura: number, altura: number, titulo: string, destaque = false) => {
+    preenche([255, 255, 255]);
+    traco(TINTA.linha);
+    doc.setLineWidth(0.2);
+    doc.roundedRect(x, y, largura, altura, 1.8, 1.8, "FD");
+    if (titulo) {
+      preenche(destaque ? [238, 242, 255] : TINTA.fundo);
+      doc.roundedRect(x + 0.15, y + 0.15, largura - 0.3, 5.6, 1.6, 1.6, "F");
+      doc.rect(x + 0.15, y + 3.5, largura - 0.3, 2.25, "F");
+      traco(TINTA.linha);
+      doc.line(x + 0.15, y + 5.75, x + largura - 0.15, y + 5.75);
+      rotulo(titulo, x + 3.5, y + 3.9, 5.4, 0.45, destaque ? TINTA.marca : TINTA.claro);
+    }
+  };
+
+  const ehTeste = String(d.ambiente || "").startsWith("homolog");
   const nomeTopo = extras.nomeExibicao || d.prestador?.nome || "—";
 
+  // ---------------------------------------------------------------- topo
   if (extras.logoBase64) {
-    try { doc.addImage(extras.logoBase64, "PNG", M, y, 14, 14, undefined, "FAST"); }
+    preenche([255, 255, 255]);
+    traco(TINTA.linha);
+    doc.setLineWidth(0.2);
+    doc.roundedRect(M, y, 15, 15, 2, 2, "FD");
+    try { doc.addImage(extras.logoBase64, "PNG", M + 1.4, y + 1.4, 12.2, 12.2, undefined, "FAST"); }
     catch { /* logo inválida não pode derrubar a nota */ }
   } else {
     preenche(TINTA.marca);
-    doc.roundedRect(M, y, 14, 14, 2.5, 2.5, "F");
-    doc.setFont("helvetica", "bold").setFontSize(9);
+    doc.roundedRect(M, y, 15, 15, 2.5, 2.5, "F");
+    doc.setFont("helvetica", "bold").setFontSize(9.5);
     doc.setTextColor(255, 255, 255);
-    doc.text(iniciais(nomeTopo), M + 7, y + 9, { align: "center" });
+    doc.text(iniciais(nomeTopo), M + 7.5, y + 9.6, { align: "center" });
   }
 
-  doc.setFont("helvetica", "bold").setFontSize(13);
+  doc.setFont("helvetica", "bold").setFontSize(14);
   cor(TINTA.escuro);
-  doc.text(String(nomeTopo).slice(0, 42), M + 17, y + 5.5);
-  doc.setFont("helvetica", "normal").setFontSize(7);
+  doc.text(String(nomeTopo).toUpperCase().slice(0, 32), M + 19, y + 6.4);
+  doc.setFont("helvetica", "normal").setFontSize(6.8);
   cor(TINTA.claro);
-  doc.text("Documento Auxiliar da Nota Fiscal de Serviço eletrônica", M + 17, y + 10);
+  doc.text("Documento Auxiliar da Nota Fiscal de Serviço eletrônica", M + 19, y + 10.6);
 
   /**
    * Bloco do número, à direita.
    *
-   * ⚠️ Rótulo alinhado à direita PRECISA usar { align: "right" } na primeira
-   *    escrita. A versão anterior escrevia à esquerda e tentava tapar com um
-   *    retângulo branco — resultado: "NFS-E NºNFS-E Nº" na folha do usuário.
+   * ⚠️ Rótulo alinhado à direita PRECISA ser posicionado pela largura medida.
+   *    A versão que escrevia à esquerda e tapava com um retângulo branco
+   *    produziu "NFS-E NºNFS-E Nº" na folha que chegou ao usuário.
    */
   const dir = M + L;
-  doc.setFont("helvetica", "bold").setFontSize(5.6);
-  cor(TINTA.fraco);
-  doc.text("NFS-E Nº", dir, y + 3, { align: "right" });
+  rotulo("NFS-e Nº", dir - larguraRotulo("NFS-e Nº"), y + 3);
 
-  doc.setFont("helvetica", "bold").setFontSize(20);
+  doc.setFont("helvetica", "bold").setFontSize(21);
   cor(TINTA.escuro);
-  doc.text(String(d.numeroNfse || d.numeroDps || "—"), dir, y + 11, { align: "right" });
+  doc.text(String(d.numeroNfse || d.numeroDps || "—"), dir, y + 11.5, { align: "right" });
 
-  doc.setFont("helvetica", "normal").setFontSize(6.5);
+  doc.setFont("courier", "normal").setFontSize(6.6);
   cor(TINTA.fraco);
-  doc.text(`Série ${d.serie || "—"} · DPS nº ${d.numeroDps || "—"}`, dir, y + 15, { align: "right" });
+  doc.text(`Série ${d.serie || "—"} · DPS nº ${d.numeroDps || "—"}`, dir, y + 15.5, { align: "right" });
 
-  // Selo de situação, abaixo da série para não montar por cima dela.
-  const ehTeste = String(d.ambiente || "").startsWith("homolog");
-  const selo = ehTeste ? "TESTE — SEM VALIDADE FISCAL" : "AUTORIZADA";
-  doc.setFont("helvetica", "bold").setFontSize(5.8);
-  const larguraSelo = doc.getTextWidth(selo) + 5;
-  preenche(ehTeste ? [254, 226, 226] : [209, 250, 229]);
-  traco(ehTeste ? [252, 165, 165] : [110, 231, 183]);
+  const selo = ehTeste ? "Teste — sem validade fiscal" : "Autorizada";
+  const larguraSelo = larguraRotulo(selo, 5.4, 0.4) + 6;
+  preenche(ehTeste ? [254, 242, 242] : [236, 253, 245]);
+  traco(ehTeste ? [254, 202, 202] : [167, 243, 208]);
   doc.setLineWidth(0.2);
-  doc.roundedRect(dir - larguraSelo, y + 17, larguraSelo, 5, 1.2, 1.2, "FD");
-  cor(ehTeste ? TINTA.alerta : TINTA.ok);
-  doc.text(selo, dir - 2.5, y + 20.4, { align: "right" });
+  doc.roundedRect(dir - larguraSelo, y + 18, larguraSelo, 5.4, 1.4, 1.4, "FD");
+  rotulo(selo, dir - larguraSelo + 3, y + 21.6, 5.4, 0.4, ehTeste ? TINTA.alerta : TINTA.ok);
 
-  y += 24;
+  y += 26;
 
-  // linha de marca
-  traco(TINTA.marca);
-  doc.setLineWidth(0.5);
-  doc.line(M, y, M + L * 0.55, y);
-  y += 6;
+  // Fio fino que se dissolve da esquerda para a direita — o mesmo gesto do
+  // degradê que a folha na tela usa embaixo do cabeçalho.
+  doc.setLineWidth(0.35);
+  for (let i = 0; i < 26; i++) {
+    const t = i / 26;
+    doc.setDrawColor(
+      Math.round(79 + (255 - 79) * t),
+      Math.round(70 + (255 - 70) * t),
+      Math.round(229 + (255 - 229) * t)
+    );
+    doc.line(M + (L * i) / 26, y, M + (L * (i + 1)) / 26, y);
+  }
+  y += 6.5;
 
   // ------------------------------------------------------------- datas
-  /**
-   * ⚠️ O CAMPO "AMBIENTE" FOI REMOVIDO DE PROPÓSITO — NÃO O TRAGA DE VOLTA.
-   *
-   * Ele imprimia "Produção" em toda nota. Isso era útil enquanto a emissão
-   * estava sendo construída e havia dúvida sobre qual mundo estava em uso;
-   * passada essa fase, é uma palavra do nosso vocabulário num documento que vai
-   * para o cliente do MEI. O selo de TESTE, logo acima, continua aparecendo
-   * quando a nota não vale — que é o único caso em que o ambiente importa.
-   */
   const col = L / 3;
-  const datas: [string, string][] = [
-    ["Emissão", dataBR(String(d.emitidaEm || "").slice(0, 10))],
-    ["Competência", competenciaBR(d.competencia)],
-    ["Local da prestação", extras.municipio || (d.servico?.localPrestacao ? `IBGE ${d.servico.localPrestacao}` : "—")],
-  ];
-  datas.forEach(([r, v], i) => {
-    rotulo(r, M + col * i, y);
-    valor(v, M + col * i, y + 4, 7.5, "bold");
-  });
-  y += 8;
+  ([["Emissão", dataBR(String(d.emitidaEm || "").slice(0, 10)), true],
+    ["Competência", competenciaBR(d.competencia), true],
+    ["Local da prestação", d.municipio || extras.municipio
+      || (d.servico?.localPrestacao ? `IBGE ${d.servico.localPrestacao}` : "—"), false]] as [string, string, boolean][])
+    .forEach(([r, v, mono], i) => {
+      rotulo(r, M + col * i, y);
+      if (mono) valorMono(v, M + col * i, y + 4.4, 8);
+      else valorTexto(v, M + col * i, y + 4.4, 8);
+    });
+  y += 9.5;
 
   // ------------------------------------------- prestador / tomador
-  /**
-   * ⚠️ ALTURA CALCULADA, NÃO CHUTADA.
-   *
-   * Com 40mm fixos, a última linha (regime tributário / município) ficava com o
-   * rótulo dentro e o valor fora do cartão — aparecia um rótulo solto no papel.
-   * São 4 linhas, e a do endereço ocupa duas.
-   */
-  const alturaPartes = 53;
-  const meia = (L - 3) / 2;
-
-  const parte = (x: number, titulo: string, destaque: boolean, linhas: [string, string][], nome: string, sub?: string) => {
-    preenche(destaque ? [238, 242, 255] : [241, 245, 249]);
-    traco(TINTA.linha);
-    doc.setLineWidth(0.2);
-    doc.roundedRect(x, y, meia, alturaPartes, 1.5, 1.5, "FD");
-    preenche([255, 255, 255]);
-    doc.rect(x + 0.2, y + 5, meia - 0.4, alturaPartes - 5.2, "F");
-    doc.setFont("helvetica", "bold").setFontSize(5.8);
-    cor(destaque ? TINTA.marca : TINTA.claro);
-    doc.text(titulo.toUpperCase(), x + 3, y + 3.5);
-
-    doc.setFont("helvetica", "bold").setFontSize(9);
-    cor(TINTA.escuro);
-    doc.text(String(nome).slice(0, 38), x + 3, y + 10);
-    if (sub) {
-      doc.setFont("helvetica", "normal").setFontSize(6.2);
-      cor(TINTA.claro);
-      doc.text(String(sub).slice(0, 52), x + 3, y + 13.5);
-    }
-
-    let yy = y + 18;
-    linhas.forEach(([r, v]) => {
-      rotulo(r, x + 3, yy);
-      const texto = doc.splitTextToSize(String(v || "—"), meia - 6);
-      doc.setFont("helvetica", "normal").setFontSize(6.8);
-      cor(TINTA.texto);
-      doc.text(texto.slice(0, 2), x + 3, yy + 3);
-      yy += 3 + texto.slice(0, 2).length * 2.9 + 1.2;
-    });
-  };
+  const meia = (L - 4) / 2;
+  type Par = [string, string, boolean?];
 
   const p = d.prestador || {};
   const endPrest = p.logradouro
     ? `${p.logradouro}${p.numero ? ", " + p.numero : ""}${p.bairro ? " — " + p.bairro : ""}` +
-      `${extras.municipio ? "\n" + extras.municipio : ""}${p.cep ? " · CEP " + cepBR(p.cep) : ""}`
+      `${d.municipio ? "\n" + d.municipio : ""}${p.uf ? " / " + p.uf : ""}${p.cep ? " · CEP " + cepBR(p.cep) : ""}`
     : "—";
 
-  parte(M, "Prestador do serviço", true, [
-    ["CNPJ · Inscrição Municipal", `${docBR(p.cnpj)}   ·   ${p.inscricaoMunicipal || "—"}`],
+  const paresPrest: Par[] = [
+    ["CNPJ", docBR(p.cnpj), true],
+    ["Inscrição municipal", p.inscricaoMunicipal || "—", true],
     ["Endereço", endPrest],
-    ["Telefone · E-mail", `${foneBR(p.fone) || "—"}   ·   ${p.email || "—"}`],
+    ["Telefone", foneBR(p.fone) || "—", true],
+    ["E-mail", p.email || "—", true],
     ["Regime tributário", d.regime?.opSimpNac === "3" ? "Simples Nacional — ME/EPP"
       : d.regime?.opSimpNac === "1" ? "Não optante pelo Simples Nacional"
-      : "Simples Nacional — MEI"],
-  ], extras.nomeExibicao || p.nome || "—", extras.nomeExibicao && p.nome !== extras.nomeExibicao ? p.nome : undefined);
+      : "Simples Nacional — Microempreendedor Individual (MEI)"],
+  ];
 
   const t = d.tomador;
   const e = extras.tomadorEndereco;
@@ -324,158 +352,226 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
       `${e.cidade ? "\n" + e.cidade : ""}${e.uf ? " / " + e.uf : ""}${e.cep ? " · CEP " + cepBR(e.cep) : ""}`
     : "Não informado no cadastro";
 
+  const paresToma: Par[] = t ? [
+    ["CPF / CNPJ", docBR(t.documento), true],
+    ["Tipo", soDigitos(t.documento).length === 14 ? "Pessoa jurídica" : "Pessoa física", true],
+    ["Endereço", endToma],
+    ["Telefone", foneBR(extras.tomadorTelefone) || "—", true],
+    ["E-mail", t.email || extras.tomadorEmail || "—", true],
+    ["Município de incidência do ISSQN",
+      `${d.municipio || extras.municipio || "—"}${d.servico?.localPrestacao ? " · IBGE " + d.servico.localPrestacao : ""}`],
+  ] : [];
+
+  /**
+   * ⚠️ ALTURA MEDIDA, NÃO CHUTADA.
+   *
+   * Com altura fixa, a última linha do cartão saía com o rótulo dentro e o
+   * valor fora — um rótulo solto no meio do papel. Aqui os dois cartões são
+   * medidos antes e o maior manda, para terminarem juntos.
+   */
+  const medirParte = (pares: Par[], temSub: boolean) => {
+    let h = temSub ? 19 : 16;
+    for (let i = 0; i < pares.length; i++) {
+      const [, valor, meioLado] = pares[i];
+      const largura = meioLado ? (meia - 10) / 2 : meia - 7;
+      doc.setFont("helvetica", "normal").setFontSize(6.8);
+      if (meioLado && pares[i + 1]?.[2]) {
+        // Campo de meia largura é sempre uma linha só — ele é cortado, não quebrado.
+        h += 3.4 + 3 + 1.8;
+        i++;
+      } else {
+        const linhas = doc.splitTextToSize(String(valor || "—"), largura).slice(0, 2);
+        h += 3.4 + linhas.length * 3 + 1.8;
+      }
+    }
+    return h + 1;
+  };
+
+  const temSubPrest = !!(extras.nomeExibicao && p.nome && p.nome !== extras.nomeExibicao);
+  const alturaPartes = Math.max(
+    medirParte(paresPrest, temSubPrest),
+    t ? medirParte(paresToma, false) : 32
+  );
+
+  const desenharParte = (x: number, titulo: string, destaque: boolean, pares: Par[], nome: string, sub?: string) => {
+    cartao(x, meia, alturaPartes, titulo, destaque);
+
+    doc.setFont("helvetica", "bold").setFontSize(9.5);
+    cor(TINTA.escuro);
+    doc.text(String(nome).slice(0, 32), x + 3.5, y + 11);
+    if (sub) {
+      doc.setFont("helvetica", "normal").setFontSize(6.2);
+      cor(TINTA.claro);
+      doc.text(String(sub).slice(0, 48), x + 3.5, y + 14.4);
+    }
+
+    let yy = y + (sub ? 19 : 16);
+    for (let i = 0; i < pares.length; i++) {
+      const [r, v, meioLado] = pares[i];
+      const largura = meioLado ? (meia - 10) / 2 : meia - 7;
+      rotulo(r, x + 3.5, yy, 5.2, 0.3);
+
+      if (meioLado && pares[i + 1]?.[2]) {
+        // Dois campos lado a lado, uma linha cada, cortados se não couberem.
+        doc.setFont("helvetica", "normal").setFontSize(6.8);
+        cor(TINTA.texto);
+        doc.text(encurtar(v, largura, 6.8), x + 3.5, yy + 3.4);
+
+        const x2 = x + 3.5 + largura + 3;
+        rotulo(pares[i + 1][0], x2, yy, 5.2, 0.3);
+        doc.setFont("helvetica", "normal").setFontSize(6.8);
+        cor(TINTA.texto);
+        doc.text(encurtar(pares[i + 1][1], largura, 6.8), x2, yy + 3.4);
+        yy += 3.4 + 3 + 1.8;
+        i++;
+      } else {
+        doc.setFont("helvetica", "normal").setFontSize(6.8);
+        cor(TINTA.texto);
+        const l1 = doc.splitTextToSize(String(v || "—"), largura).slice(0, 2);
+        doc.text(l1, x + 3.5, yy + 3.4);
+        yy += 3.4 + l1.length * 3 + 1.8;
+      }
+    }
+  };
+
+  desenharParte(M, "Prestador do serviço", true, paresPrest,
+    extras.nomeExibicao || p.nome || "—",
+    temSubPrest ? p.nome : undefined);
+
   if (t) {
-    parte(M + meia + 3, "Tomador do serviço", false, [
-      ["CPF / CNPJ", docBR(t.documento)],
-      ["Endereço", endToma],
-      ["Telefone · E-mail", `${foneBR(extras.tomadorTelefone) || "—"}   ·   ${t.email || extras.tomadorEmail || "—"}`],
-      ["Município de incidência do ISSQN", `${extras.municipio || "—"}${d.servico?.localPrestacao ? "  IBGE " + d.servico.localPrestacao : ""}`],
-    ], t.nome || "—", soDigitos(t.documento).length === 14 ? "Pessoa jurídica" : "Pessoa física");
+    desenharParte(M + meia + 4, "Tomador do serviço", false, paresToma, t.nome || "—");
   } else {
-    const x = M + meia + 3;
-    preenche([241, 245, 249]);
-    traco(TINTA.linha);
-    doc.roundedRect(x, y, meia, alturaPartes, 1.5, 1.5, "FD");
-    preenche([255, 255, 255]);
-    doc.rect(x + 0.2, y + 5, meia - 0.4, alturaPartes - 5.2, "F");
-    doc.setFont("helvetica", "bold").setFontSize(5.8);
-    cor(TINTA.claro);
-    doc.text("TOMADOR DO SERVIÇO", x + 3, y + 3.5);
+    const x = M + meia + 4;
+    cartao(x, meia, alturaPartes, "Tomador do serviço");
     doc.setFont("helvetica", "bold").setFontSize(8);
     cor(TINTA.claro);
-    doc.text("Tomador não identificado", x + meia / 2, y + alturaPartes / 2, { align: "center" });
+    doc.text("Tomador não identificado", x + meia / 2, y + alturaPartes / 2 + 1, { align: "center" });
     doc.setFont("helvetica", "normal").setFontSize(6);
     cor(TINTA.fraco);
-    doc.text("A nota foi emitida sem identificação do cliente.", x + meia / 2, y + alturaPartes / 2 + 4, { align: "center" });
+    doc.text("A nota foi emitida sem identificação do cliente.", x + meia / 2, y + alturaPartes / 2 + 5, { align: "center" });
   }
-  y += alturaPartes + 3;
+  y += alturaPartes + 4;
 
   // ------------------------------------------------------------ serviço
-  const descricao = doc.splitTextToSize(String(d.servico?.descricao || "—"), L - 6);
+  doc.setFont("helvetica", "normal").setFontSize(9);
+  const descricao = doc.splitTextToSize(String(d.servico?.descricao || "—"), L - 8);
+  doc.setFont("helvetica", "normal").setFontSize(6.2);
   const oficial = extras.textoServicoOficial
-    ? doc.splitTextToSize(extras.textoServicoOficial, L - 6) : [];
-  const altServico = 14 + descricao.length * 3.4 + (oficial.length ? oficial.slice(0, 3).length * 2.8 + 3 : 0);
-  blocoTitulo("Discriminação do serviço", altServico);
-  doc.setFont("helvetica", "normal").setFontSize(8.5);
-  cor(TINTA.escuro);
-  doc.text(descricao, M + 3, y + 9.5);
+    ? doc.splitTextToSize(`Lista de serviços: ${extras.textoServicoOficial}`, L - 8).slice(0, 2) : [];
+  const altServico = 11 + descricao.length * 3.8 + 9.5 + (oficial.length ? oficial.length * 2.9 + 2 : 0);
 
-  let yServ = y + 9.5 + descricao.length * 3.4 + 1.5;
-  const c3 = (L - 6) / 3;
-  ([["Cód. Tributação Nacional", codServico(d.servico?.codigoTributacao)],
+  cartao(M, L, altServico, "Discriminação do serviço");
+  doc.setFont("helvetica", "normal").setFontSize(9);
+  cor(TINTA.escuro);
+  doc.text(descricao, M + 4, y + 11);
+
+  const yServ = y + 11 + descricao.length * 3.8 + 2.5;
+  const c3 = (L - 8) / 3;
+  ([["Cód. tributação nacional", codServico(d.servico?.codigoTributacao)],
     ["Cód. NBS", codNbs(d.servico?.codigoNbs)],
     ["Local da prestação", d.servico?.localPrestacao || "—"]] as [string, string][])
     .forEach(([r, v], i) => {
-      rotulo(r, M + 3 + c3 * i, yServ);
-      valor(v, M + 3 + c3 * i, yServ + 3.4, 7.5, "bold");
+      rotulo(r, M + 4 + c3 * i, yServ);
+      valorMono(v, M + 4 + c3 * i, yServ + 3.8);
     });
   if (oficial.length) {
-    doc.setFont("helvetica", "normal").setFontSize(5.8);
-    cor(TINTA.fraco);
-    doc.text(oficial.slice(0, 3), M + 3, yServ + 8);
+    doc.setFont("helvetica", "normal").setFontSize(6.2);
+    cor(TINTA.claro);
+    doc.text(oficial, M + 4, yServ + 8.5);
   }
-  y += altServico + 3;
+  y += altServico + 3.5;
 
   // --------------------------------------------------------- tributação
-  blocoTitulo("Tributação", 13);
-  const c5 = (L - 6) / 5;
-  ([["Tipo de tributação", d.valores?.issTributavel === false ? "Não tributável" : "Operação tributável"],
-    ["Retenção do ISSQN", d.valores?.issRetido ? "Retido" : "Não retido"],
-    ["Base de cálculo", d.valores?.baseCalculo ? brl(d.valores.baseCalculo) : "—"],
-    ["Alíquota", d.valores?.aliquota ? `${d.valores.aliquota}%` : "—"],
-    ["ISSQN apurado", d.valores?.valorIss ? brl(d.valores.valorIss) : "—"]] as [string, string][])
-    .forEach(([r, v], i) => {
-      rotulo(r, M + 3 + c5 * i, y + 8);
-      valor(v, M + 3 + c5 * i, y + 11.3, 7);
+  cartao(M, L, 16, "Tributação");
+  const c5 = (L - 8) / 5;
+  ([["Tipo de tributação", d.valores?.issTributavel === false ? "Não tributável" : "Operação tributável", false],
+    ["Retenção do ISSQN", d.valores?.issRetido ? "Retido" : "Não retido", false],
+    ["Base de cálculo", d.valores?.baseCalculo ? brl(d.valores.baseCalculo) : "—", true],
+    ["Alíquota", d.valores?.aliquota ? `${d.valores.aliquota}%` : "—", true],
+    ["ISSQN apurado", d.valores?.valorIss ? brl(d.valores.valorIss) : "—", true]] as [string, string, boolean][])
+    .forEach(([r, v, mono], i) => {
+      rotulo(r, M + 4 + c5 * i, y + 10);
+      if (mono) valorMono(v, M + 4 + c5 * i, y + 13.6, 7.2);
+      else valorTexto(v, M + 4 + c5 * i, y + 13.6, 7.2);
     });
-  y += 16;
+  y += 19.5;
 
   // ------------------------------------------ informações complementares
   const info = String(d.servico?.informacoesComplementares || "").trim();
-  const infoLinhas = info ? doc.splitTextToSize(info, L - 6) : [];
-  const altInfo = 9 + Math.max(1, infoLinhas.slice(0, 4).length) * 3.2 + 4;
-  blocoTitulo("Informações complementares", altInfo);
+  doc.setFont("helvetica", "normal").setFontSize(7.2);
+  const infoLinhas = info ? doc.splitTextToSize(info, L - 8).slice(0, 4) : [];
+  const altInfo = 10.5 + infoLinhas.length * 3.3 + 5;
+  cartao(M, L, altInfo, "Informações complementares");
   if (infoLinhas.length) {
-    doc.setFont("helvetica", "normal").setFontSize(7);
+    doc.setFont("helvetica", "normal").setFontSize(7.2);
     cor(TINTA.texto);
-    doc.text(infoLinhas.slice(0, 4), M + 3, y + 9);
+    doc.text(infoLinhas, M + 4, y + 11);
   }
   doc.setFont("helvetica", "normal").setFontSize(5.8);
   cor(TINTA.fraco);
   doc.text(
     `Totais aproximados dos tributos conforme Lei nº 12.741/2012: ${d.valores?.totalTributos ? brl(d.valores.totalTributos) : "não informado"}.`,
-    M + 3, y + altInfo - 2.5
+    M + 4, y + altInfo - 3
   );
-  y += altInfo + 3;
+  y += altInfo + 5;
 
   // ------------------------------------------------------------ valores
-  const altVal = 22;
-  preenche(TINTA.escuro);
-  doc.roundedRect(M, y, L, altVal, 2, 2, "F");
-  const larguraTotal = 52;
-  preenche([30, 41, 59]);
-  doc.roundedRect(M + L - larguraTotal, y, larguraTotal, altVal, 2, 2, "F");
-  doc.rect(M + L - larguraTotal, y, 3, altVal, "F");
-
-  const cv = (L - larguraTotal - 8) / 3;
-  const linhasVal: [string, string][] = [
-    ["Valor do serviço", brl(d.valores?.servico)],
+  /**
+   * ⚠️ SEM FAIXA PRETA AQUI — foi escolha do usuário.
+   *
+   * A versão anterior punha os valores dentro de um bloco escuro com o total em
+   * branco. Ele preferiu esta: os valores respirando no papel e o total grande
+   * e discreto à direita. Num documento que vai para o cliente do MEI, tinta
+   * pesada não acrescenta nada.
+   */
+  const cv = (L - 62) / 3;
+  ([["Valor do serviço", brl(d.valores?.servico)],
     ["Desconto incondicionado", brl(d.valores?.descontoIncondicionado)],
     ["Deduções / Reduções", brl(d.valores?.deducoes)],
     ["Desconto condicionado", brl(d.valores?.descontoCondicionado)],
     ["ISSQN retido", brl(d.valores?.issRetido ? d.valores?.valorIss : 0)],
-    ["Total das retenções", brl(d.valores?.issRetido ? d.valores?.valorIss : 0)],
-  ];
-  linhasVal.forEach(([r, v], i) => {
-    const x = M + 4 + cv * (i % 3);
-    const yy = y + 7 + Math.floor(i / 3) * 9;
-    doc.setFont("helvetica", "bold").setFontSize(5.4);
-    doc.setTextColor(148, 163, 184);
-    doc.text(r.toUpperCase(), x, yy);
-    doc.setFont("helvetica", "normal").setFontSize(7.2);
-    doc.setTextColor(241, 245, 249);
-    doc.text(v, x, yy + 3.6);
-  });
+    ["Total das retenções", brl(d.valores?.issRetido ? d.valores?.valorIss : 0)]] as [string, string][])
+    .forEach(([r, v], i) => {
+      const x = M + 2 + cv * (i % 3);
+      const yy = y + 4 + Math.floor(i / 3) * 9.5;
+      rotulo(r, x, yy);
+      valorMono(v, x, yy + 4);
+    });
 
-  doc.setFont("helvetica", "bold").setFontSize(5.4);
-  doc.setTextColor(148, 163, 184);
-  doc.text("VALOR LÍQUIDO DA NFS-E", M + L - 4, y + 8, { align: "right" });
-  doc.setFont("helvetica", "bold").setFontSize(15);
-  doc.setTextColor(255, 255, 255);
-  doc.text(brl(d.valores?.liquido || d.valores?.servico), M + L - 4, y + 16, { align: "right" });
-  y += altVal + 3;
+  rotulo("Valor líquido da NFS-e", dir - larguraRotulo("Valor líquido da NFS-e"), y + 5);
+  doc.setFont("courier", "bold").setFontSize(17);
+  cor(TINTA.claro);
+  doc.text(brl(d.valores?.liquido || d.valores?.servico), dir, y + 14.5, { align: "right" });
+  y += 23;
 
   // -------------------------------------------------------- verificação
-  const altQr = 26;
-  preenche([248, 250, 252]);
-  traco(TINTA.linha);
-  doc.setLineWidth(0.2);
-  doc.roundedRect(M, y, L, altQr, 1.5, 1.5, "FD");
+  const altQr = 27;
+  cartao(M, L, altQr, "");
 
   if (extras.qrBase64) {
-    try { doc.addImage(extras.qrBase64, "PNG", M + 3, y + 3, 20, 20, undefined, "FAST"); }
+    try { doc.addImage(extras.qrBase64, "PNG", M + 4, y + 4, 19, 19, undefined, "FAST"); }
     catch { /* sem QR, a chave impressa resolve */ }
   }
-  rotulo("Chave de acesso da NFS-e", M + 27, y + 6);
+  rotulo("Chave de acesso da NFS-e", M + 28, y + 7.5);
   doc.setFont("courier", "normal").setFontSize(7.4);
   cor(TINTA.escuro);
-  doc.text(doc.splitTextToSize(chaveEmGrupos(d.chave) || "—", L - 32).slice(0, 2), M + 27, y + 10.5);
-  doc.setFont("helvetica", "normal").setFontSize(6.2);
+  doc.text(doc.splitTextToSize(chaveEmGrupos(d.chave) || "—", L - 34).slice(0, 2), M + 28, y + 12);
+  doc.setFont("helvetica", "normal").setFontSize(6.4);
   cor(TINTA.claro);
   doc.text(
     doc.splitTextToSize(
       "Aponte a câmera para o código ou consulte a chave em nfse.gov.br para conferir a autenticidade desta nota.",
-      L - 32
+      L - 34
     ).slice(0, 2),
-    M + 27, y + 18
+    M + 28, y + 19
   );
-  y += altQr + 4;
+  y += altQr + 5;
 
   // ------------------------------------------------------------- rodapé
-  traco([241, 245, 249]);
+  traco(TINTA.linha);
   doc.setLineWidth(0.2);
   doc.line(M, y, M + L, y);
-  doc.setFont("helvetica", "normal").setFontSize(5.6);
+  doc.setFont("helvetica", "normal").setFontSize(5.8);
   cor(TINTA.fraco);
   doc.text(
     "Documento auxiliar da NFS-e, gerado a partir do arquivo XML da nota. O documento fiscal é o próprio XML, guardado no Arquivo Digital.",

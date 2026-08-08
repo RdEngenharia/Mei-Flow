@@ -720,8 +720,13 @@ export function lerDadosDaNota(xmlNota: string) {
  *        QR Code nem chegava a ser gerado); endereço do QR corrigido para o
  *        mesmo que o Portal usa; valor do serviço lido do bloco certo; nome da
  *        cidade tirado do XML; número do arquivo tirado do XML.
+ *   v3 — leiaute unificado. O sistema tinha duas folhas de nota fiscal, com
+ *        aparências diferentes: esta e uma versão em HTML que o navegador
+ *        imprimia. O usuário preferiu a segunda ("é como se estivesse com dois
+ *        servidores de notas fiscais"), então este desenho passou a ser ela e a
+ *        outra foi apagada. Uma folha só, gerada num lugar só.
  */
-const VERSAO_FOLHA = 2;
+const VERSAO_FOLHA = 3;
 
 const MESES = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",

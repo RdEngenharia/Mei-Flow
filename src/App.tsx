@@ -2201,15 +2201,12 @@ ${meiName}`;
 
             {/* SEÇÃO INTEGRADA: NOTA FISCAL (certificado A1 + dados fiscais) */}
             <div className="mt-8">
-              <NotaFiscalPanel
-                triggerToast={triggerToast}
-                meiName={meiName}
-                cnpjPrestador={cnpjPrestador || ""}
-                inscricaoMunicipal={inscricaoMunicipal || ""}
-                telefonePrestador={telefonePrestador || ""}
-                companyLogo={planType === "premium" ? companyLogo : ""}
-                clientes={clientes}
-              />
+              {/*
+                As props de emissor e clientes saíram: este painel não desenha
+                mais a nota. A folha é desenhada uma vez só, no servidor, e vive
+                no Arquivo Digital — logo abaixo nesta mesma tela.
+              */}
+              <NotaFiscalPanel triggerToast={triggerToast} />
             </div>
 
             {/* SEÇÃO INTEGRADA: ARQUIVO DIGITAL DO MEI */}
@@ -2811,12 +2808,6 @@ ${meiName}`;
       <NotaFiscalPanel
         semCartao
         triggerToast={triggerToast}
-        meiName={meiName}
-        cnpjPrestador={cnpjPrestador || ""}
-        inscricaoMunicipal={inscricaoMunicipal || ""}
-        telefonePrestador={telefonePrestador || ""}
-        companyLogo={planType === "premium" ? companyLogo : ""}
-        clientes={clientes}
         abrirExterno={abrirNotaFiscal}
         onFechado={() => { setAbrirNotaFiscal(false); setServicosNfse(null); }}
       />

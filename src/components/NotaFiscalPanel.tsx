@@ -1,18 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { createPortal } from "react-dom";
 import {
   FileText, X, Loader2, AlertTriangle, CheckCircle2, ShieldCheck, Upload,
-  Trash2, ChevronRight, Lock, RefreshCw, CalendarClock, ExternalLink,
-  Search, Plus, Star, Printer, Download, Copy, Receipt,
+  Trash2, ChevronRight, Lock, RefreshCw, CalendarClock,
+  Search, Plus, Star, Receipt,
 } from "lucide-react";
 import { auth } from "../firebase";
-import { getApiUrl, savePdfCrossPlatform } from "../utils/nativeFile";
-import { desenharDanfse, nomeArquivoDanfse } from "../utils/danfsePdf";
-import { carregarLogoBase64 } from "../utils/logoImagem";
+import { getApiUrl } from "../utils/nativeFile";
 import {
   buscarServicos, formatarCodigoServico, descricaoDoCodigo, ServicoNacional,
 } from "../data/servicosNfse";
-import FolhaNotaFiscal from "./FolhaNotaFiscal";
 
 /**
  * NOTA FISCAL — certificado digital A1 e dados fiscais do MEI.
@@ -33,46 +29,17 @@ import FolhaNotaFiscal from "./FolhaNotaFiscal";
  *    um pode chamar a rota direto.
  */
 
-/** Uma nota já emitida, como a rota /api/nfse devolve. */
-type NotaEmitida = {
-  chave: string;
-  numero: number;
-  /** Número que o Portal deu à NFS-e. É ele que o cliente cita, não o da DPS. */
-  numeroNfse?: number;
-  serie: string;
-  clienteNome?: string;
-  clienteDocumento?: string;
-  valor: number;
-  descricaoServico?: string;
-  servicoCodigo?: string;
-  observacao?: string;
-  emitidaEm: string;
-  ambiente?: string;
-};
-
 interface Props {
   triggerToast?: (msg: string) => void;
-  /** Dados do emissor, usados na DANFSe que o MEI Flow monta. */
-  meiName?: string;
-  cnpjPrestador?: string;
-  inscricaoMunicipal?: string;
-  telefonePrestador?: string;
-  municipioPrestador?: string;
-  emailPrestador?: string;
-  companyLogo?: string;
-  enderecoPrestador?: {
-    cep?: string; logradouro?: string; numero?: string;
-    bairro?: string; cidade?: string; uf?: string;
-  };
   /**
-   * Cadastro de clientes, usado para completar o tomador na folha impressa.
+   * ⚠️ ESTE PAINEL NÃO DESENHA MAIS NOTA NENHUMA.
    *
-   * O Portal não recebe endereço nem telefone do tomador hoje — nós enviamos só
-   * nome, documento e e-mail. Então esses campos saem do cadastro que já existe
-   * aqui, o mesmo que o boleto usa. A nota oficial segue sem eles até a gente
-   * passar a enviá-los na DPS.
+   * Ele tinha uma penca de props — endereço, município, e-mail, logo, lista de
+   * clientes — só para montar a folha da nota aqui dentro. Essa folha saiu: a
+   * nota é desenhada uma vez só, no servidor, e vive no Arquivo Digital. As
+   * props foram junto. Se alguém precisar delas de volta, é sinal de que a
+   * segunda folha está voltando também — pense duas vezes.
    */
-  clientes?: any[];
   /** Abre a gaveta a partir de fora — usado pelo botão "Emitir Nota Fiscal" do topo. */
   abrirExterno?: boolean;
   /** Avisa quem abriu de fora que a gaveta fechou, para ele poder abrir de novo depois. */
@@ -113,41 +80,14 @@ async function comToken(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${t}`, "Content-Type": "application/json" };
 }
 
-const brl = (n: number) =>
-  Number(n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-
 const dataBR = (iso?: string) =>
   iso ? iso.split("-").reverse().join("/") : "—";
 
-/** Formata CPF (11) ou CNPJ (14); qualquer outra coisa volta como veio. */
-const docBR = (v?: string) => {
-  const n = String(v || "").replace(/\D/g, "");
-  if (n.length === 11) return n.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
-  if (n.length === 14) return n.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
-  return v || "";
-};
-
-const cepBR = (v?: string) => {
-  const n = String(v || "").replace(/\D/g, "");
-  return n.length === 8 ? n.replace(/(\d{5})(\d{3})/, "$1-$2") : (v || "");
-};
-
-const foneBR = (v?: string) => {
-  const n = String(v || "").replace(/\D/g, "");
-  if (n.length === 11) return n.replace(/(\d{2})(\d{5})(\d{4})/, "($1) $2-$3");
-  if (n.length === 10) return n.replace(/(\d{2})(\d{4})(\d{4})/, "($1) $2-$3");
-  return v || "";
-};
-
-/** Iniciais do nome, para o monograma de quem não tem logo. */
-const iniciais = (nome?: string) =>
-  String(nome || "MEI").trim().split(/\s+/).filter(w => w.length > 1)
-    .slice(0, 2).map(w => w[0]).join("").toUpperCase() || "MF";
-
-/** Quebra a chave de 50 dígitos em grupos de 4 — muito mais fácil de conferir. */
-const chaveEmGrupos = (c?: string) =>
-  String(c || "").replace(/\D/g, "").replace(/(.{4})/g, "$1 ").trim();
-
+/**
+ * Ajudantes de formatação que sobraram da época em que este painel desenhava a
+ * nota. Sumiram junto com ela — a formatação da folha agora mora inteira em
+ * danfsePdf.ts, num lugar só.
+ */
 const cnpjBR = (v?: string) => {
   const d = String(v || "").replace(/\D/g, "");
   if (d.length !== 14) return v || "—";
@@ -156,8 +96,6 @@ const cnpjBR = (v?: string) => {
 
 export default function NotaFiscalPanel({
   triggerToast, abrirExterno, onFechado, semCartao,
-  meiName, cnpjPrestador, inscricaoMunicipal, telefonePrestador, municipioPrestador,
-  emailPrestador, enderecoPrestador, clientes, companyLogo,
 }: Props) {
   const [aberto, setAberto] = useState(false);
   const [carregando, setCarregando] = useState(false);
@@ -183,17 +121,6 @@ export default function NotaFiscalPanel({
   const [emitirAoPagar, setEmitirAoPagar] = useState(true);
   const [salvando, setSalvando] = useState(false);
 
-  // Notas emitidas
-  const [notas, setNotas] = useState<NotaEmitida[]>([]);
-  const [carregandoNotas, setCarregandoNotas] = useState(false);
-  const [notaAberta, setNotaAberta] = useState<NotaEmitida | null>(null);
-  // Nota lida do XML — é daqui que a folha impressa tira tudo.
-  const [dadosNota, setDadosNota] = useState<any>(null);
-  const [lendoNota, setLendoNota] = useState(false);
-  const [qrCode, setQrCode] = useState("");
-  const [arquivando, setArquivando] = useState(false);
-  const [gerandoPdf, setGerandoPdf] = useState(false);
-  const folhaNotaRef = useRef<HTMLDivElement>(null);
 
   // Busca de serviço
   const [buscandoServico, setBuscandoServico] = useState(false);
@@ -260,33 +187,9 @@ export default function NotaFiscalPanel({
     }
   }, []);
 
-  /**
-   * ⚠️ ESTA DECLARAÇÃO PRECISA FICAR ANTES DO useEffect QUE A USA.
-   *
-   * Ela estava depois, e a tela inteira ficava branca com
-   * "Cannot access 'X' before initialization". O motivo: a lista de
-   * dependências do useEffect — `[aberto, carregar, carregarNotas]` — é
-   * avaliada na hora em que o useEffect é chamado, não depois. Como
-   * `carregarNotas` é `const`, ler o nome antes da linha que o cria estoura.
-   *
-   * Vale para qualquer const usada numa lista de dependências: declare acima.
-   */
-  const carregarNotas = useCallback(async () => {
-    setCarregandoNotas(true);
-    try {
-      const r = await fetch(getApiUrl("/api/nfse"), { headers: await comToken() });
-      const d = await r.json();
-      if (r.ok && Array.isArray(d.notas)) setNotas(d.notas);
-    } catch {
-      // Lista de notas não é crítica; a gaveta segue funcionando sem ela.
-    } finally {
-      setCarregandoNotas(false);
-    }
-  }, []);
-
   useEffect(() => {
-    if (aberto) { carregar(); carregarNotas(); }
-  }, [aberto, carregar, carregarNotas]);
+    if (aberto) carregar();
+  }, [aberto, carregar]);
 
   // O botão do topo levanta a bandeira; aqui a gaveta responde.
   useEffect(() => {
@@ -396,187 +299,6 @@ export default function NotaFiscalPanel({
     setServicos(servicos.map((s) => ({ ...s, padrao: s.codigo === codigo })));
   }
 
-  /**
-   * Lê a nota a partir do XML guardado.
-   *
-   * A folha nunca é montada com o que guardamos "à parte" — o XML é a fonte da
-   * verdade. Foi assim que apareceu a diferença mais séria: o número da NFS-e é
-   * atribuído pelo Portal e não é o número da DPS que nós escolhemos.
-   */
-  const abrirNota = useCallback(async (nota: NotaEmitida) => {
-    setNotaAberta(nota);
-    setDadosNota(null);
-    setQrCode("");
-    setLendoNota(true);
-    try {
-      const r = await fetch(getApiUrl(`/api/nfse/${nota.chave}/dados`), { headers: await comToken() });
-      const d = await r.json();
-      if (r.ok && d.success) {
-        setDadosNota(d.dados);
-
-        /**
-         * O QR é gerado aqui, no navegador, e não no servidor.
-         *
-         * A biblioteca só entra na memória quando alguém abre uma nota — ela
-         * não pesa no carregamento do aplicativo para quem nunca imprime. E o
-         * html2canvas fotografa a imagem normalmente, porque ela vira um
-         * data:image embutido, sem depender de rede na hora de gerar o PDF.
-         */
-        const alvo = d.dados?.linkVerificacao || d.dados?.chave || nota.chave;
-        if (alvo) {
-          try {
-            const { default: QRCode } = await import("qrcode");
-            setQrCode(await QRCode.toDataURL(alvo, { margin: 0, width: 240, errorCorrectionLevel: "M" }));
-          } catch {
-            setQrCode("");
-          }
-        }
-      }
-    } catch {
-      // Sem o XML, a folha cai para o resumo guardado — imperfeita, mas sai.
-    } finally {
-      setLendoNota(false);
-    }
-  }, []);
-
-  /** Baixa o XML — o documento fiscal de verdade, que o MEI é obrigado a guardar. */
-  async function baixarXml(nota: NotaEmitida) {
-    try {
-      const r = await fetch(getApiUrl(`/api/nfse/${nota.chave}/xml`), { headers: await comToken() });
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}));
-        throw new Error(d.mensagem || "Não consegui baixar o XML.");
-      }
-      const texto = await r.text();
-      const url = URL.createObjectURL(new Blob([texto], { type: "application/xml" }));
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `NFSe_${nota.numero}_${nota.serie}.xml`;
-      a.click();
-      URL.revokeObjectURL(url);
-      triggerToast?.("✓ XML baixado.");
-    } catch (e: any) {
-      triggerToast?.(`⚠ ${e.message}`);
-    }
-  }
-
-  /**
-   * Gera o PDF da DANFSe.
-   *
-   * Tenta a DANFSe oficial do Portal primeiro. Se ele não fornecer — que é o
-   * caso normal, porque esse endereço não está no manual dos contribuintes — o
-   * MEI Flow imprime a folha que ele mesmo monta a partir dos dados da nota.
-   * Nos dois casos o cliente consegue conferir pela chave de acesso.
-   */
-  async function baixarDanfse(nota: NotaEmitida) {
-    if (gerandoPdf) return;
-    setGerandoPdf(true);
-    try {
-      const r = await fetch(getApiUrl(`/api/nfse/${nota.chave}/danfse`), { headers: await comToken() });
-      const d = await r.json().catch(() => ({}));
-
-      if (r.ok && d.success && d.pdfBase64) {
-        const bytes = Uint8Array.from(atob(d.pdfBase64), (c) => c.charCodeAt(0));
-        const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `DANFSe_${nota.numero}_${nota.serie}.pdf`;
-        a.click();
-        URL.revokeObjectURL(url);
-        triggerToast?.("✓ DANFSe oficial do Portal baixada.");
-        return;
-      }
-
-      /**
-       * ⚠️ NÃO VOLTE A USAR html2canvas AQUI.
-       *
-       * Esta parte fotografava a folha da tela. O usuário recebeu um PDF com
-       * texto miúdo, fonte serifada, sem bordas, amontoado no canto — porque o
-       * html2canvas clona a página num quadro à parte e corre com o
-       * carregamento da folha de estilo. Quando perde a corrida, fotografa HTML
-       * cru, e não avisa. A logo também nunca saía: ela vem do Storage e a
-       * resposta não traz o cabeçalho que permitiria desenhá-la.
-       *
-       * Agora a DANFSe é DESENHADA com jsPDF, pelo MESMO módulo que o servidor
-       * usa para arquivar. Impresso aqui ou guardado lá, o papel é idêntico.
-       */
-      const dados = dadosNota || (await (async () => {
-        const rr = await fetch(getApiUrl(`/api/nfse/${nota.chave}/dados`), { headers: await comToken() });
-        const dd = await rr.json().catch(() => ({}));
-        return dd?.dados || null;
-      })());
-
-      if (!dados) {
-        triggerToast?.("⚠ Não consegui ler o XML da nota para montar o PDF.");
-        return;
-      }
-
-      let qr = qrCode;
-      if (!qr) {
-        try {
-          const { default: QRCode } = await import("qrcode");
-          qr = await QRCode.toDataURL(dados.linkVerificacao || dados.chave || nota.chave, {
-            margin: 0, width: 240, errorCorrectionLevel: "M",
-          });
-        } catch { qr = ""; }
-      }
-
-      const cli = clientes?.find((c: any) => {
-        const doc1 = String(c?.documento || c?.cpfCnpj || "").replace(/\D/g, "");
-        const doc2 = String(dados?.tomador?.documento || "").replace(/\D/g, "");
-        return doc1 && doc2 && doc1 === doc2;
-      });
-
-      const { jsPDF } = await import("jspdf");
-      const pdf = new jsPDF({ unit: "mm", format: "a4" });
-      desenharDanfse(pdf, dados, {
-        nomeExibicao: meiName,
-        municipio: municipioPrestador,
-        tomadorEndereco: cli ? {
-          logradouro: cli.endereco || cli.logradouro, numero: cli.numero,
-          bairro: cli.bairro, cidade: cli.cidade, uf: cli.uf, cep: cli.cep,
-        } : undefined,
-        tomadorTelefone: cli?.telefone,
-        tomadorEmail: cli?.email,
-        logoBase64: await carregarLogoBase64(companyLogo),
-        qrBase64: qr,
-      });
-
-      await savePdfCrossPlatform(pdf, nomeArquivoDanfse(dados));
-      triggerToast?.("✓ PDF da nota gerado.");
-    } catch (e: any) {
-      triggerToast?.(`⚠ ${e.message || "Não consegui gerar o PDF."}`);
-    } finally {
-      setGerandoPdf(false);
-    }
-  }
-
-  /** Manda o servidor guardar no Arquivo Digital as notas que ficaram de fora. */
-  async function arquivarPendentes() {
-    if (arquivando) return;
-    setArquivando(true);
-    try {
-      const r = await fetch(getApiUrl("/api/nfse/arquivar-pendentes"), {
-        method: "POST",
-        headers: await comToken(),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.mensagem || "Não consegui arquivar.");
-      triggerToast?.(`✓ ${d.mensagem}`);
-      if (d.problemas?.length) console.warn("[NFS-e] Notas com problema:", d.problemas);
-    } catch (e: any) {
-      triggerToast?.(`⚠ ${e.message}`);
-    } finally {
-      setArquivando(false);
-    }
-  }
-
-  function copiarChave(chave: string) {
-    navigator.clipboard?.writeText(chave)
-      .then(() => triggerToast?.("✓ Chave de acesso copiada. O cliente confere no site do governo."))
-      .catch(() => triggerToast?.("⚠ Não consegui copiar."));
-  }
-
   async function salvarConfig(e: React.FormEvent) {
     e.preventDefault();
     setSalvando(true);
@@ -593,25 +315,12 @@ export default function NotaFiscalPanel({
       const d = await r.json();
       if (!r.ok) throw new Error(d.mensagem || "Não consegui salvar.");
       triggerToast?.("Dados fiscais salvos.");
-      carregarNotas();
     } catch (e: any) {
       setErro(e.message);
     } finally {
       setSalvando(false);
     }
   }
-
-  /**
-   * Cliente do cadastro correspondente à nota aberta.
-   *
-   * Casa pelo documento, que é o único identificador que a nota carrega. Sem
-   * documento (tomador não identificado) não há o que casar.
-   */
-  const clienteDaNota = (() => {
-    const doc = String(dadosNota?.tomador?.documento || notaAberta?.clienteDocumento || "").replace(/\D/g, "");
-    if (!doc || !Array.isArray(clientes)) return null;
-    return clientes.find((c: any) => String(c?.documento || "").replace(/\D/g, "") === doc) || null;
-  })();
 
   const pronto = !!cert?.configurado;
   // Em produção cada clique gera documento fiscal de verdade. A tela precisa
@@ -1116,112 +825,30 @@ export default function NotaFiscalPanel({
                 </button>
               </form>
 
-              {/* ------------------------------------------- notas emitidas */}
-              <div className="bg-white border border-slate-200/60 rounded-3xl p-5 text-left space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-extrabold text-slate-800 flex items-center gap-1.5">
-                    <Receipt className="w-4 h-4 text-indigo-500" /> Notas emitidas
-                  </h4>
-                  <button
-                    type="button"
-                    onClick={carregarNotas}
-                    disabled={carregandoNotas}
-                    className="w-8 h-8 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-lg flex items-center justify-center cursor-pointer disabled:opacity-50"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${carregandoNotas ? "animate-spin" : ""}`} />
-                  </button>
-                </div>
+              {/*
+                ⚠️ A LISTA DE NOTAS EMITIDAS SAIU DAQUI — DE PROPÓSITO.
 
-                <p className="text-[11px] text-slate-500 leading-relaxed">
-                  O XML de cada nota é guardado automaticamente no seu Arquivo
-                  Digital, na pasta do mês da emissão — ele é o documento fiscal de verdade e a lei obriga a
-                  guardar. Notas de teste não vão para lá, para não sujar a guarda fiscal.
-                </p>
+                O sistema tinha dois caminhos para a mesma nota: esta tela e o
+                Arquivo Digital. Duas listas, dois botões de PDF, e — pior —
+                duas folhas desenhadas por códigos diferentes, que saíam com
+                aparências diferentes. O usuário resumiu: "é como se estivesse
+                com dois servidores de notas fiscais".
 
-                {notas.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={arquivarPendentes}
-                    disabled={arquivando}
-                    className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
-                  >
-                    {arquivando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                    {arquivando ? "Arquivando..." : "Conferir e arquivar notas no Arquivo Digital"}
-                  </button>
-                )}
-
-                {carregandoNotas && notas.length === 0 ? (
-                  <div className="flex justify-center py-6 text-slate-400">
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  </div>
-                ) : notas.length === 0 ? (
-                  <p className="text-[11px] text-slate-400 italic py-2">
-                    Nenhuma nota emitida ainda.
+                Agora esta tela cuida de UMA coisa: deixar a emissão pronta
+                (certificado, dados fiscais, serviços) e emitir. Tudo que é
+                consultar nota já emitida — ver, imprimir, baixar o XML — vive
+                no Arquivo Digital, que é onde os documentos ficam guardados
+                pelos cinco anos de qualquer jeito.
+              */}
+              <div className="bg-indigo-50/50 border border-indigo-100 rounded-3xl p-5 text-left flex items-start gap-3">
+                <Receipt className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h4 className="text-sm font-extrabold text-slate-800">Suas notas ficam no Arquivo Digital</h4>
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    Assim que uma nota é emitida, o PDF e o XML entram sozinhos na pasta do mês.
+                    É lá que você abre, imprime e baixa — num lugar só, junto do resto dos seus documentos.
                   </p>
-                ) : (
-                  <div className="space-y-2 max-h-72 overflow-y-auto">
-                    {notas.map((n) => (
-                      <div key={n.chave || n.numero} className="bg-slate-50 border border-slate-200/60 rounded-2xl p-3.5 space-y-2">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-xs font-extrabold text-slate-800 truncate">
-                              Nº {n.numeroNfse || n.numero}
-                              <span className="text-slate-300 font-normal"> · {n.clienteNome || "Sem tomador"}</span>
-                            </p>
-                            <p className="text-[10px] text-slate-400 font-medium mt-0.5">
-                              {dataBR(String(n.emitidaEm || "").slice(0, 10))}
-                              {n.descricaoServico ? ` · ${n.descricaoServico.slice(0, 40)}` : ""}
-                            </p>
-                          </div>
-                          <span className="shrink-0 text-xs font-extrabold text-slate-900 font-mono">
-                            {Number(n.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-                          </span>
-                        </div>
-
-                        <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-slate-200/70">
-                          <button
-                            type="button"
-                            onClick={() => abrirNota(n)}
-                            className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-[10px] font-bold cursor-pointer"
-                          >
-                            Ver / Imprimir
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => baixarXml(n)}
-                            className="px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold cursor-pointer flex items-center gap-1"
-                          >
-                            <Download className="w-3 h-3" /> XML
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => copiarChave(n.chave)}
-                            className="px-2 py-1 bg-white border border-slate-200 hover:bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold cursor-pointer flex items-center gap-1"
-                            title="Copiar a chave de acesso"
-                          >
-                            <Copy className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Rota de fuga: enquanto a emissão automática não estiver 100%, o
-                  caminho manual continua a um clique de distância. */}
-              <div className="bg-white border border-slate-200/60 rounded-3xl p-5 text-left">
-                <h4 className="text-sm font-extrabold text-slate-800">Prefere emitir na mão?</h4>
-                <p className="text-[11px] text-slate-500 leading-relaxed mt-1.5">
-                  O Emissor Nacional continua disponível. Abre em outra aba, sem sair do MEI Flow.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => window.open("https://www.nfse.gov.br/EmissorNacional/Login", "_blank")}
-                  className="mt-3.5 w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs rounded-2xl transition-colors cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
-                >
-                  <ExternalLink className="w-4 h-4" /> Abrir o portal do governo
-                </button>
+                </div>
               </div>
 
               <p className="text-[10px] text-slate-400 text-center leading-relaxed px-4">
@@ -1233,71 +860,6 @@ export default function NotaFiscalPanel({
         </div>
       )}
 
-      {/* ==================================== DANFSe — a folha da nota ======= */}
-      {notaAberta && createPortal((
-        <div id="print-overlay" className="fixed inset-0 z-[70] bg-slate-900/80 backdrop-blur-sm flex justify-center items-start p-4 sm:p-8 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col my-4">
-
-            <div className="pt-safe px-6 pb-4 bg-slate-100 border-b border-slate-200 flex items-center justify-between print:hidden">
-              <h3 className="font-bold text-slate-800 text-sm">
-                Nota nº {notaAberta.numero}
-                {(notaAberta.ambiente || "").startsWith("homolog") && (
-                  <span className="ml-2 text-[9px] font-extrabold uppercase tracking-widest text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
-                    Teste
-                  </span>
-                )}
-              </h3>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => baixarDanfse(notaAberta)}
-                  disabled={gerandoPdf}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all flex items-center gap-2 cursor-pointer disabled:opacity-60"
-                >
-                  {gerandoPdf
-                    ? <><Loader2 className="w-4 h-4 animate-spin" /><span>Gerando...</span></>
-                    : <><Download className="w-4 h-4" /><span>Baixar PDF</span></>}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className="px-3 py-2 bg-white hover:bg-slate-200 text-slate-600 border border-slate-200 text-xs font-bold rounded-xl cursor-pointer"
-                  title="Mandar direto para a impressora"
-                >
-                  <Printer className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => { setNotaAberta(null); setDadosNota(null); setQrCode(""); }}
-                  className="bg-white hover:bg-slate-200 text-slate-600 border border-slate-200 p-2 rounded-xl cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* A folha vive em FolhaNotaFiscal.tsx — lá está o aviso sobre
-                por que ela cabe em uma página e de onde vem cada dado. */}
-            <FolhaNotaFiscal
-              refFolha={folhaNotaRef}
-              nota={notaAberta}
-              dados={dadosNota}
-              cliente={clienteDaNota}
-              qrCode={qrCode}
-              carregando={lendoNota}
-              meiName={meiName}
-              cnpjPrestador={cnpjPrestador}
-              cnpjDoCertificado={cert?.cnpj}
-              inscricaoMunicipal={inscricaoMunicipal}
-              telefonePrestador={telefonePrestador}
-              emailPrestador={emailPrestador}
-              municipioPrestador={municipioPrestador}
-              enderecoPrestador={enderecoPrestador}
-              companyLogo={companyLogo}
-            />
-
-          </div>
-        </div>
-      ), document.body)}
     </div>
   );
 }
