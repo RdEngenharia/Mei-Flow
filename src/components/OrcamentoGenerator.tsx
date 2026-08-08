@@ -53,6 +53,9 @@ interface OrcamentoGeneratorProps {
   cnpjPrestador?: string;
   inscricaoMunicipal?: string;
   telefonePrestador?: string;
+  emailPrestador?: string;
+  /** Endereço da empresa — aparece no cabeçalho da proposta. */
+  enderecoPrestador?: { cep?: string; logradouro?: string; numero?: string; bairro?: string; cidade?: string; uf?: string };
   clientes: Cliente[];
   onTriggerUpgrade: () => void;
   onGoBack: () => void;
@@ -100,6 +103,8 @@ export default function OrcamentoGenerator({
   cnpjPrestador,
   inscricaoMunicipal,
   telefonePrestador,
+  emailPrestador,
+  enderecoPrestador,
   clientes,
   onTriggerUpgrade,
   onGoBack,
@@ -526,6 +531,8 @@ export default function OrcamentoGenerator({
         cnpjPrestador,
         inscricaoMunicipal,
         telefonePrestador,
+        emailPrestador,
+        enderecoPrestador,
         // Se a logo ainda não terminou de baixar, buscamos agora em vez de
         // entregar um PDF sem ela.
         logoBase64: logoPronta || (planType === "premium" ? await carregarLogoBase64(companyLogo) : undefined),
@@ -1374,7 +1381,17 @@ export default function OrcamentoGenerator({
                   <div className="space-y-0.5 text-slate-500 font-medium text-[11px]">
                     {cnpjPrestador && <p className="font-mono">CNPJ: {cnpjPrestador}</p>}
                     {inscricaoMunicipal && <p className="font-mono">Insc. Municipal: {inscricaoMunicipal}</p>}
+                    {enderecoPrestador?.logradouro && (
+                      <p>
+                        {enderecoPrestador.logradouro}
+                        {enderecoPrestador.numero ? `, ${enderecoPrestador.numero}` : ""}
+                        {enderecoPrestador.bairro ? ` — ${enderecoPrestador.bairro}` : ""}
+                        {enderecoPrestador.cidade ? ` · ${enderecoPrestador.cidade}` : ""}
+                        {enderecoPrestador.uf ? `/${enderecoPrestador.uf}` : ""}
+                      </p>
+                    )}
                     {telefonePrestador && <p className="flex items-center gap-1.5"><Phone className="w-3 h-3 text-slate-400" /> {telefonePrestador}</p>}
+                    {emailPrestador && <p>{emailPrestador}</p>}
                   </div>
                 </div>
 

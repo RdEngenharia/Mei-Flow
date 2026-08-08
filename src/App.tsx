@@ -58,6 +58,7 @@ import DasnModal from "./components/DasnModal";
 import ArquivoDigitalMei from "./components/ArquivoDigitalMei";
 import CobrancasPanel from "./components/CobrancasPanel";
 import NotaFiscalPanel from "./components/NotaFiscalPanel";
+import PainelAcompanhamento from "./components/PainelAcompanhamento";
 import { jsPDF } from "jspdf";
 import { savePdfCrossPlatform, isNativePlatform, getApiUrl } from "./utils/nativeFile";
 import { prepararLogo, cabeNoFirestore, carregarLogoBase64 } from "./utils/logoImagem";
@@ -104,7 +105,7 @@ export default function App() {
   const [servicosNfse, setServicosNfse] = useState<any[] | null>(null);
   // Nota em conferencia: o lancamento, o servico escolhido e a observacao.
   const [notaEmAndamento, setNotaEmAndamento] = useState<
-    { tx: Transacao; servicoId: string; observacao: string } | null
+    { tx: Transacao; servicoId: string; observacao: string; descricao: string } | null
   >(null);
 
   // State e Credenciais de Autenticação MEI
@@ -145,6 +146,20 @@ export default function App() {
   const [invoiceLimit, setInvoiceLimit] = useState<number>(30);
   const [invoiceUsed, setInvoiceUsed] = useState<number>(0);
   const [companyLogo, setCompanyLogo] = useState("");
+  /**
+   * ENDEREÇO E E-MAIL DA EMPRESA.
+   *
+   * Não existiam. O orçamento saía com nome, CNPJ e telefone e mais nada — e o
+   * componente até aceitava um `enderecoPrestador`, que nunca foi preenchido
+   * por ninguém. Agora vêm do cadastro, como o resto.
+   */
+  const [emailPrestador, setEmailPrestador] = useState(() => localStorage.getItem("meiflow_email_prestador") || "");
+  const [enderecoPrestador, setEnderecoPrestador] = useState<{
+    cep?: string; logradouro?: string; numero?: string; bairro?: string; cidade?: string; uf?: string;
+  }>(() => {
+    try { return JSON.parse(localStorage.getItem("meiflow_endereco_prestador") || "{}"); }
+    catch { return {}; }
+  });
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
   // ESTADOS DE AUTENTICAÇÃO INTEGRADA EMAIL e SENHA
@@ -365,6 +380,15 @@ export default function App() {
              * neste navegador antes de dar a logo por perdida — foi exatamente o
              * caso de "configuro, fecho o navegador e ela some".
              */
+            if (profile.emailPrestador !== undefined) {
+              setEmailPrestador(profile.emailPrestador || "");
+              localStorage.setItem("meiflow_email_prestador", profile.emailPrestador || "");
+            }
+            if (profile.enderecoPrestador) {
+              setEnderecoPrestador(profile.enderecoPrestador);
+              localStorage.setItem("meiflow_endereco_prestador", JSON.stringify(profile.enderecoPrestador));
+            }
+
             const logoLocal = (() => {
               try { return localStorage.getItem("meiflow_company_logo") || ""; }
               catch { return ""; }
@@ -623,18 +647,24 @@ export default function App() {
     }
   };
 
-  const handleSaveMeiProfile = async (
-    newName: string, 
-    newCnpj: string, 
-    newInscricao: string, 
-    newTelefone: string, 
-    logo?: string
-  ) => {
+  const handleSaveMeiProfile = async (dados: {
+    name: string; cnpj: string; inscricao: string; telefone: string;
+    email: string;
+    endereco: { cep?: string; logradouro?: string; numero?: string; bairro?: string; cidade?: string; uf?: string };
+    logo?: string;
+  }) => {
+    const newName = dados.name;
+    const newCnpj = dados.cnpj;
+    const newInscricao = dados.inscricao;
+    const newTelefone = dados.telefone;
+    const logo = dados.logo;
     try {
       setMeiName(newName);
       setCnpjPrestador(newCnpj);
       setInscricaoMunicipal(newInscricao);
       setTelefonePrestador(newTelefone);
+      setEmailPrestador(dados.email || "");
+      setEnderecoPrestador(dados.endereco || {});
       setIsCpfEmissor(false);
 
       /**
@@ -713,6 +743,8 @@ export default function App() {
       localStorage.setItem("meiflow_cnpj_prestador", newCnpj);
       localStorage.setItem("meiflow_inscricao_municipal", newInscricao);
       localStorage.setItem("meiflow_telefone_prestador", newTelefone);
+      localStorage.setItem("meiflow_email_prestador", dados.email || "");
+      localStorage.setItem("meiflow_endereco_prestador", JSON.stringify(dados.endereco || {}));
       localStorage.setItem("meiflow_is_cpf_emissor", "false");
 
       if (user) {
@@ -723,6 +755,8 @@ export default function App() {
           telefone: newTelefone,
           planType: planType,
           companyLogo: resolvedLogoUrl,
+          emailPrestador: dados.email || "",
+          enderecoPrestador: dados.endereco || {},
           isCpfEmissor: false
         });
 
@@ -770,6 +804,8 @@ export default function App() {
       localStorage.setItem("meiflow_cnpj_prestador", newCnpj);
       localStorage.setItem("meiflow_inscricao_municipal", newInscricao);
       localStorage.setItem("meiflow_telefone_prestador", newTelefone);
+      localStorage.setItem("meiflow_email_prestador", dados.email || "");
+      localStorage.setItem("meiflow_endereco_prestador", JSON.stringify(dados.endereco || {}));
       localStorage.setItem("meiflow_is_cpf_emissor", "false");
 
       if (user) {
@@ -1030,10 +1066,21 @@ export default function App() {
       const cliente = clientes.find((c) => c.id === tx.clienteId);
       const habitual = lista.find((s: any) => s.padrao) || lista[0];
 
+      /**
+       * ⚠️ A DESCRIÇÃO DA NOTA VEM DO SERVIÇO, NÃO DO LANÇAMENTO.
+       *
+       * Antes ela era o `tx.descricao` — que, quando a venda nasce de um
+       * boleto, é preenchido automaticamente com "Recebimento de FULANO". A
+       * nota chegava ao cliente dizendo que ele comprou "Recebimento de
+       * Sailandia", que não é serviço nenhum. Agora ela nasce do serviço
+       * pré-configurado e fica EDITÁVEL na janela de conferência: o que estiver
+       * escrito aqui é exatamente o que sai impresso na nota.
+       */
       setNotaEmAndamento({
         tx,
         servicoId: String(habitual?.codigo || ""),
         observacao: String(cliente?.observacaoNfse || ""),
+        descricao: String(habitual?.descricao || habitual?.apelido || tx.descricao || ""),
       });
     } catch (e: any) {
       triggerToast(`⚠ ${e.message}`);
@@ -1048,7 +1095,7 @@ export default function App() {
    */
   const confirmarEmissaoNota = async () => {
     if (!notaEmAndamento || emitindoNota) return;
-    const { tx, servicoId, observacao } = notaEmAndamento;
+    const { tx, servicoId, observacao, descricao } = notaEmAndamento;
     setEmitindoNota(tx.id);
     try {
       const token = await auth.currentUser?.getIdToken();
@@ -1062,7 +1109,9 @@ export default function App() {
           clienteNome: tx.clienteNome || "",
           clienteDocumento: tx.clienteDocumento || "",
           valor: tx.valor,
-          descricao: tx.descricao || "",
+          // O que o usuário escreveu na janela — e não o texto automático do
+          // lançamento, que costuma ser "Recebimento de FULANO".
+          descricao: (descricao || "").trim() || tx.descricao || "",
           servicoId,
           observacao,
         }),
@@ -2697,6 +2746,8 @@ ${meiName}`;
             cnpjPrestador={cnpjPrestador || ""}
             inscricaoMunicipal={inscricaoMunicipal || ""}
             telefonePrestador={telefonePrestador || ""}
+            emailPrestador={emailPrestador || ""}
+            enderecoPrestador={enderecoPrestador}
             clientes={clientes}
             onTriggerUpgrade={() => setShowUpgradeModal(true)}
             onGoBack={() => setCurrentView("home")}
@@ -2805,6 +2856,21 @@ ${meiName}`;
       {/* Gaveta de Nota Fiscal sempre montada: o cartao vive na Home, mas os
           botoes NFS-e estao no Livro Caixa. Sem esta instancia global, clicar
           neles fora da Home nao abriria nada. */}
+      {/*
+        PAINEL DE ACOMPANHAMENTO — abre junto com o sistema, todo dia.
+
+        Fica aqui, e não dentro do funil, de propósito: o usuário foi direto ao
+        ponto — "não basta apenas estar lá escrito". Um lembrete que só aparece
+        para quem entra na tela certa é um lembrete que não acontece. Ele mesmo
+        decide se aparece: sem ninguém para contatar hoje, não renderiza nada.
+      */}
+      {user && (
+        <PainelAcompanhamento
+          userId={user.uid}
+          triggerToast={triggerToast}
+        />
+      )}
+
       <NotaFiscalPanel
         semCartao
         triggerToast={triggerToast}
@@ -2833,7 +2899,21 @@ ${meiName}`;
                     <button
                       key={s.codigo}
                       type="button"
-                      onClick={() => setNotaEmAndamento({ ...notaEmAndamento, servicoId: String(s.codigo) })}
+                      onClick={() => {
+                        // Trocar de serviço troca a descrição sugerida — mas
+                        // nunca por cima do que o usuário já escreveu à mão.
+                        const anterior = (servicosNfse || []).find((x: any) => String(x.codigo) === notaEmAndamento.servicoId);
+                        const eraSugestao = !notaEmAndamento.descricao
+                          || notaEmAndamento.descricao === String(anterior?.descricao || "")
+                          || notaEmAndamento.descricao === String(anterior?.apelido || "");
+                        setNotaEmAndamento({
+                          ...notaEmAndamento,
+                          servicoId: String(s.codigo),
+                          descricao: eraSugestao
+                            ? String(s.descricao || s.apelido || "")
+                            : notaEmAndamento.descricao,
+                        });
+                      }}
                       className={`w-full text-left rounded-2xl p-3.5 border transition-colors cursor-pointer flex items-center justify-between gap-3 ${
                         notaEmAndamento.servicoId === String(s.codigo)
                           ? "bg-indigo-50 border-indigo-400"
@@ -2855,6 +2935,31 @@ ${meiName}`;
                 Serviço: {(servicosNfse || [])[0]?.apelido || "—"}
               </p>
             )}
+
+            {/*
+              DESCRIÇÃO DO SERVIÇO — o texto que sai impresso na nota.
+
+              É o campo mais importante desta janela: é ele que diz ao cliente o
+              que ele comprou. Fica editável de propósito, porque o serviço
+              pré-configurado é um rótulo geral e cada nota costuma ter um
+              detalhe próprio.
+            */}
+            <div className="text-left">
+              <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                Descrição do serviço
+              </label>
+              <textarea
+                rows={2}
+                value={notaEmAndamento.descricao}
+                onChange={(e) => setNotaEmAndamento({ ...notaEmAndamento, descricao: e.target.value })}
+                placeholder="Ex.: Instalação de sistema fotovoltaico 5,5 kWp"
+                maxLength={2000}
+                className="mt-1.5 w-full border border-slate-200 rounded-2xl py-3 px-4 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-y"
+              />
+              <p className="text-[10px] text-slate-400 mt-1.5 leading-relaxed">
+                É este texto que aparece na nota como discriminação do serviço.
+              </p>
+            </div>
 
             {/* Observacao desta nota */}
             <div className="text-left">
@@ -3747,6 +3852,8 @@ ${meiName}`;
           currentCnpj={cnpjPrestador}
           currentInscricao={inscricaoMunicipal}
           currentTelefone={telefonePrestador}
+          currentEmail={emailPrestador}
+          currentEndereco={enderecoPrestador}
           planType={planType}
           companyLogo={companyLogo || ""}
           onClose={() => setShowMeiConfigModal(false)}

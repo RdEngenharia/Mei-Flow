@@ -1,15 +1,44 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import { X, Building, Check, Search, Sparkles, KeyRound, ChevronRight } from "lucide-react";
+
+export interface DadosEndereco {
+  cep?: string;
+  logradouro?: string;
+  numero?: string;
+  bairro?: string;
+  cidade?: string;
+  uf?: string;
+}
+
+export interface DadosDaEmpresa {
+  name: string;
+  cnpj: string;
+  inscricao: string;
+  telefone: string;
+  email: string;
+  endereco: DadosEndereco;
+  logo?: string;
+}
 
 interface MeiConfigModalProps {
   currentName: string;
   currentCnpj: string;
   currentInscricao: string;
   currentTelefone: string;
+  currentEmail: string;
+  currentEndereco: DadosEndereco;
   planType: "free" | "premium";
   companyLogo: string;
   onClose: () => void;
-  onSave: (name: string, cnpj: string, inscricao: string, telefone: string, logo?: string) => Promise<void>;
+  /**
+   * ⚠️ ASSINATURA EM OBJETO, DE PROPÓSITO.
+   *
+   * Era uma lista de cinco argumentos posicionais. Acrescentar endereço e
+   * e-mail deixaria nove, e trocar dois de lugar por engano gravaria o CEP no
+   * campo do telefone sem nenhum erro de compilação. Objeto nomeado não tem
+   * esse risco e não obriga a mexer aqui de novo no próximo campo.
+   */
+  onSave: (dados: DadosDaEmpresa) => Promise<void>;
   onTriggerUpgrade: () => void;
   onOpenChangePassword: () => void;
 }
@@ -19,6 +48,8 @@ export default function MeiConfigModal({
   currentCnpj,
   currentInscricao,
   currentTelefone,
+  currentEmail,
+  currentEndereco,
   planType,
   companyLogo,
   onClose,
@@ -30,6 +61,21 @@ export default function MeiConfigModal({
   const [cnpj, setCnpj] = useState(currentCnpj);
   const [inscricao, setInscricao] = useState(currentInscricao);
   const [telefone, setTelefone] = useState(currentTelefone);
+  const [email, setEmail] = useState(currentEmail || "");
+  /**
+   * ENDEREÇO DA EMPRESA.
+   *
+   * Faltava por completo — e por isso não saía nem no orçamento nem em lugar
+   * nenhum. Um orçamento sem o endereço de quem está propondo passa a impressão
+   * de improviso, ainda mais em obra, onde o cliente quer saber onde a empresa
+   * fica.
+   */
+  const [cep, setCep] = useState(currentEndereco?.cep || "");
+  const [logradouro, setLogradouro] = useState(currentEndereco?.logradouro || "");
+  const [numero, setNumero] = useState(currentEndereco?.numero || "");
+  const [bairro, setBairro] = useState(currentEndereco?.bairro || "");
+  const [cidade, setCidade] = useState(currentEndereco?.cidade || "");
+  const [uf, setUf] = useState(currentEndereco?.uf || "");
   const [logoBase64, setLogoBase64] = useState(companyLogo);
   const [loading, setLoading] = useState(false);
   const [searchingCnpj, setSearchingCnpj] = useState(false);
@@ -55,17 +101,17 @@ export default function MeiConfigModal({
   const handleLookupCnpj = async () => {
     const cleaned = cnpj.replace(/\D/g, "");
     if (cleaned.length !== 14) {
-      setSearchError("Por favor, digite um CNPJ vÃ¡lido com 14 dÃ­gitos.");
+      setSearchError("Por favor, digite um CNPJ válido com 14 dígitos.");
       return;
     }
     setSearchingCnpj(true);
     setSearchError("");
 
     try {
-      // Consulta via rota prÃ³pria do backend (em vez de chamar BrasilAPI/Speedio
+      // Consulta via rota própria do backend (em vez de chamar BrasilAPI/Speedio
       // diretamente do navegador), porque dentro do APK (Capacitor) a origem
-      // "https://localhost" Ã© bloqueada pelo CORS dessas APIs externas, sobre o
-      // qual nÃ£o temos controle. Nossa rota faz essa consulta servidor-a-servidor.
+      // "https://localhost" é bloqueada pelo CORS dessas APIs externas, sobre o
+      // qual não temos controle. Nossa rota faz essa consulta servidor-a-servidor.
       const isNative = typeof window !== "undefined" && !!(window as any).Capacitor?.isNativePlatform?.();
       const apiBase = isNative ? "https://meiflow.rdhomologacao.com.br" : window.location.origin;
       const response = await fetch(`${apiBase}/api/cnpj/lookup?cnpj=${cleaned}`);
@@ -84,15 +130,31 @@ export default function MeiConfigModal({
             setTelefone(data.ddd_telefone_1);
           }
         }
+        /**
+         * A consulta do CNPJ já devolve o endereço completo. Antes ele era
+         * jogado fora: só nome e telefone eram aproveitados, e o usuário
+         * digitava o resto à mão — ou, como aconteceu, não digitava.
+         */
+        if (data.logradouro) setLogradouro(String(data.logradouro));
+        if (data.numero) setNumero(String(data.numero));
+        if (data.bairro) setBairro(String(data.bairro));
+        if (data.municipio || data.cidade) setCidade(String(data.municipio || data.cidade));
+        if (data.uf) setUf(String(data.uf).toUpperCase().slice(0, 2));
+        if (data.cep) {
+          const c = String(data.cep).replace(/\D/g, "");
+          setCep(c.length === 8 ? `${c.slice(0, 5)}-${c.slice(5)}` : String(data.cep));
+        }
+        if (data.email) setEmail(String(data.email).toLowerCase());
+
         if (!finalName) {
           setSearchError("Dados obtidos incompletos, preencha manualmente.");
         }
       } else {
-        setSearchError("NÃ£o foi possÃ­vel buscar automaticamente. Por favor, digite os dados abaixo.");
+        setSearchError("Não foi possível buscar automaticamente. Por favor, digite os dados abaixo.");
       }
     } catch (err: any) {
       console.warn("[MeiConfig lookup bypassed gracefully]");
-      setSearchError("NÃ£o foi possÃ­vel buscar automaticamente. Por favor, digite os dados abaixo.");
+      setSearchError("Não foi possível buscar automaticamente. Por favor, digite os dados abaixo.");
     } finally {
       setSearchingCnpj(false);
     }
@@ -101,7 +163,11 @@ export default function MeiConfigModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    await onSave(name, cnpj, inscricao, telefone, logoBase64);
+    await onSave({
+      name, cnpj, inscricao, telefone, email,
+      endereco: { cep, logradouro, numero, bairro, cidade, uf },
+      logo: logoBase64,
+    });
     setLoading(false);
   };
 
@@ -112,7 +178,7 @@ export default function MeiConfigModal({
         <div className="pt-safe px-6 pb-4 bg-slate-900 text-white flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Building className="w-4 h-4 text-blue-400" />
-            <h3 className="font-bold text-xs tracking-tight uppercase">ConfiguraÃ§Ãµes do MEI</h3>
+            <h3 className="font-bold text-xs tracking-tight uppercase">Configurações do MEI</h3>
           </div>
           <button
             onClick={onClose}
@@ -125,14 +191,14 @@ export default function MeiConfigModal({
         {/* Content */}
         <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
           <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
-            Preencha os dados do seu CNPJ MEI. Estas informaÃ§Ãµes sÃ£o utilizadas para a identificaÃ§Ã£o da sua atividade em recibos, relatÃ³rios e emissÃµes de notas fiscais.
+            Preencha os dados do seu CNPJ MEI. Estas informações são utilizadas para a identificação da sua atividade em recibos, relatórios e emissões de notas fiscais.
           </p>
 
           {/* AUTO LOOKUP CNPJ PANEL */}
           <div className="p-3 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-100/60 rounded-xl space-y-2">
             <div className="flex items-center gap-1.5 text-blue-800 font-bold text-[10px] uppercase tracking-wide">
               <Sparkles className="w-3.5 h-3.5 text-blue-600 animate-pulse" />
-              <span>Consulta de CNPJ AutomÃ¡tica</span>
+              <span>Consulta de CNPJ Automática</span>
             </div>
             
             <div className="flex gap-1.5">
@@ -164,28 +230,28 @@ export default function MeiConfigModal({
               <p className="text-[9px] text-rose-500 font-bold leading-tight">{searchError}</p>
             ) : (
               <p className="text-[9px] text-slate-400 font-medium leading-tight">
-                Insira apenas nÃºmeros e clique em buscar para preencher RazÃ£o Social e Telefone de forma instantÃ¢nea.
+                Insira apenas números e clique em buscar para preencher Razão Social e Telefone de forma instantânea.
               </p>
             )}
           </div>
 
           <div>
             <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
-              RazÃ£o Social (Nome da Empresa) *
+              Razão Social (Nome da Empresa) *
             </label>
             <input
               type="text"
               required
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Ex: JoÃ£o da Silva MEI"
+              placeholder="Ex: João da Silva MEI"
               className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white"
             />
           </div>
 
           <div>
             <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
-              InscriÃ§Ã£o Municipal (IM)
+              Inscrição Municipal (IM)
             </label>
             <input
               type="text"
@@ -209,10 +275,67 @@ export default function MeiConfigModal({
             />
           </div>
 
+          {/* ENDEREÇO DA EMPRESA — sai no orçamento e nos documentos */}
+          <div className="pt-2 border-t border-slate-100 space-y-2">
+            <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500">
+              Endereço da empresa
+            </label>
+
+            <div className="grid grid-cols-3 gap-2">
+              <input
+                type="text" value={cep} onChange={(e) => setCep(e.target.value)}
+                placeholder="CEP"
+                className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white font-mono"
+              />
+              <input
+                type="text" value={logradouro} onChange={(e) => setLogradouro(e.target.value)}
+                placeholder="Rua / Avenida"
+                className="col-span-2 w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white"
+              />
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <input
+                type="text" value={numero} onChange={(e) => setNumero(e.target.value)}
+                placeholder="Número"
+                className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white font-mono"
+              />
+              <input
+                type="text" value={bairro} onChange={(e) => setBairro(e.target.value)}
+                placeholder="Bairro"
+                className="col-span-2 w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white"
+              />
+            </div>
+
+            <div className="grid grid-cols-4 gap-2">
+              <input
+                type="text" value={cidade} onChange={(e) => setCidade(e.target.value)}
+                placeholder="Cidade"
+                className="col-span-3 w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white"
+              />
+              <input
+                type="text" value={uf} maxLength={2}
+                onChange={(e) => setUf(e.target.value.toUpperCase().replace(/[^A-Z]/g, ""))}
+                placeholder="UF"
+                className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white font-mono uppercase"
+              />
+            </div>
+
+            <input
+              type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+              placeholder="E-mail comercial"
+              className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2 px-3 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none focus:bg-white"
+            />
+
+            <p className="text-[9px] text-slate-400 leading-relaxed">
+              Aparece no cabeçalho dos seus orçamentos. Buscar pelo CNPJ acima já preenche tudo isto.
+            </p>
+          </div>
+
           {/* LOGOTIPO DA EMPRESA */}
           <div className="pt-2 border-t border-slate-100">
             <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1 flex items-center justify-between">
-              <span>Logotipo da Empresa {planType === "free" ? "ðŸ”’" : ""}</span>
+              <span>Logotipo da Empresa {planType === "free" ? "🔒" : ""}</span>
               {planType === "free" && (
                 <span className="text-[8px] text-blue-600 font-bold lowercase bg-blue-50 px-1.5 py-0.5 rounded-full">premium</span>
               )}
@@ -224,8 +347,8 @@ export default function MeiConfigModal({
                 className="w-full bg-slate-50 border border-dashed border-slate-200 text-slate-400 rounded-xl py-3 px-3 text-center text-xs cursor-pointer hover:bg-blue-50/50 hover:border-blue-200 transition-all flex flex-col items-center gap-1"
                 id="logo-upload-locked-trigger"
               >
-                <div className="font-bold text-xs text-slate-600">ðŸ”’ Configurar Logo Personalizada</div>
-                <div className="text-[9px] text-slate-400">Exclusivo para usuÃ¡rios Premium</div>
+                <div className="font-bold text-xs text-slate-600">🔒 Configurar Logo Personalizada</div>
+                <div className="text-[9px] text-slate-400">Exclusivo para usuários Premium</div>
               </div>
             ) : (
               <div className="space-y-2">
@@ -260,10 +383,10 @@ export default function MeiConfigModal({
             )}
           </div>
 
-          {/* SEGURANÃ‡A DA CONTA */}
+          {/* SEGURANÇA DA CONTA */}
           <div className="pt-2 border-t border-slate-100">
             <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
-              SeguranÃ§a da Conta
+              Segurança da Conta
             </label>
             <button
               type="button"
@@ -296,7 +419,7 @@ export default function MeiConfigModal({
               ) : (
                 <>
                   <Check className="w-3.5 h-3.5" />
-                  <span>Salvar AlteraÃ§Ãµes</span>
+                  <span>Salvar Alterações</span>
                 </>
               )}
             </button>

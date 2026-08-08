@@ -48,6 +48,8 @@ export type ExtrasOrcamento = {
   inscricaoMunicipal?: string;
   telefonePrestador?: string;
   emailPrestador?: string;
+  /** Endereço da empresa — faltava, e por isso não saía no papel. */
+  enderecoPrestador?: { cep?: string; logradouro?: string; numero?: string; bairro?: string; cidade?: string; uf?: string };
   /** Logo já convertida para data:image/...;base64. */
   logoBase64?: string;
   /** No plano gratuito o rodapé é a assinatura do MEI Flow. */
@@ -167,10 +169,30 @@ export function desenharOrcamento(doc: any, d: DadosOrcamento, extras: ExtrasOrc
     extras.emailPrestador || "",
   ].filter(Boolean).join("   ·   ");
 
+  /**
+   * ⚠️ O ENDEREÇO PRECISA CABER SEM EMPURRAR O RESTO.
+   *
+   * Ele não existia no cabeçalho — o orçamento saía com nome, CNPJ e telefone e
+   * mais nada, o que num documento comercial passa impressão de improviso. Como
+   * a folha é medida linha a linha, a linha nova entra aqui e o resto desce
+   * junto, sem número mágico espalhado.
+   */
+  const e = extras.enderecoPrestador || {};
+  const endereco = e.logradouro
+    ? [
+        `${e.logradouro}${e.numero ? ", " + e.numero : ""}${e.bairro ? " — " + e.bairro : ""}`,
+        [e.cidade, e.uf].filter(Boolean).join(" / "),
+        e.cep ? `CEP ${String(e.cep).replace(/\D/g, "").replace(/(\d{5})(\d{3})/, "$1-$2")}` : "",
+      ].filter(Boolean).join("   ·   ")
+    : "";
+
   doc.setFont("helvetica", "normal").setFontSize(7);
   cor(TINTA.claro);
-  if (identidade) doc.text(identidade, M + 20, y + 10.5);
-  if (contato) doc.text(contato, M + 20, y + 14.5);
+  let yTopo = y + 10.5;
+  if (identidade) { doc.text(identidade, M + 20, yTopo); yTopo += 4; }
+  if (endereco) { doc.text(String(endereco).slice(0, 95), M + 20, yTopo); yTopo += 4; }
+  if (contato) { doc.text(contato, M + 20, yTopo); yTopo += 4; }
+  const alturaTopo = Math.max(21, yTopo - y + 1);
 
   // Bloco do número, à direita.
   // ⚠️ Rótulo alinhado à direita PRECISA usar { align: "right" } na primeira
@@ -193,7 +215,7 @@ export function desenharOrcamento(doc: any, d: DadosOrcamento, extras: ExtrasOrc
   cor(TINTA.fraco);
   doc.text(`Emitido em ${dataBR(d.createdAt)}`, dir, y + 18, { align: "right" });
 
-  y += 21;
+  y += alturaTopo;
   traco(TINTA.marca);
   doc.setLineWidth(0.5);
   doc.line(M, y, M + L * 0.5, y);

@@ -832,6 +832,8 @@ export async function saveUserProfileToFirebase(
     asaasAccessToken?: string;
     planType?: "free" | "premium";
     companyLogo?: string;
+    emailPrestador?: string;
+    enderecoPrestador?: { cep?: string; logradouro?: string; numero?: string; bairro?: string; cidade?: string; uf?: string };
     isCpfEmissor?: boolean;
   }
 ): Promise<void> {
@@ -878,7 +880,9 @@ export async function saveUserProfileToFirebase(
       inscricaoMunicipal: profileData.inscricaoMunicipal || '',
       telefone: profileData.telefone || '',
       asaasAccessToken: profileData.asaasAccessToken || '',
-      companyLogo: safeCompanyLogo
+      companyLogo: safeCompanyLogo,
+      emailPrestador: profileData.emailPrestador || '',
+      enderecoPrestador: profileData.enderecoPrestador || {}
     };
 
     await setDoc(docRef, dataToSave, { merge: true });
@@ -906,6 +910,8 @@ export async function fetchUserProfileFromFirebase(userId: string): Promise<{
   asaasAccessToken?: string;
   planType?: "free" | "premium";
   companyLogo?: string;
+  emailPrestador?: string;
+  enderecoPrestador?: { cep?: string; logradouro?: string; numero?: string; bairro?: string; cidade?: string; uf?: string };
   isCpfEmissor?: boolean;
   invoiceLimit?: number;
   invoiceUsed?: number;
@@ -924,6 +930,8 @@ export async function fetchUserProfileFromFirebase(userId: string): Promise<{
         asaasAccessToken: data.asaasAccessToken || '',
         planType: data.planType || 'free',
         companyLogo: data.logoUrl || data.companyLogo || '',
+        emailPrestador: data.emailPrestador || '',
+        enderecoPrestador: data.enderecoPrestador || {},
         isCpfEmissor: data.isCpfEmissor || false,
         invoiceLimit: data.invoiceLimit !== undefined ? data.invoiceLimit : 30,
         invoiceUsed: data.invoiceUsed !== undefined ? data.invoiceUsed : 0
@@ -943,6 +951,8 @@ export async function fetchUserProfileFromFirebase(userId: string): Promise<{
         asaasAccessToken: data.asaasAccessToken || '',
         planType: data.planType || 'free',
         companyLogo: data.companyLogo || '',
+        emailPrestador: data.emailPrestador || '',
+        enderecoPrestador: data.enderecoPrestador || {},
         isCpfEmissor: data.isCpfEmissor || false,
         invoiceLimit: data.invoiceLimit !== undefined ? data.invoiceLimit : 30,
         invoiceUsed: data.invoiceUsed !== undefined ? data.invoiceUsed : 0
