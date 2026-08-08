@@ -432,7 +432,33 @@ export async function emitirNfseDaCobranca(
 export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebaseConfig: any) {
   const exigirUsuario = (req: any) => verificarLogin(req);
 
-  /** Diagnóstico do certificado — use antes de tentar emitir. */
+  /**
+   * Teste rápido, SEM login — para conferir pelo navegador se o certificado
+   * foi lido no servidor. Não devolve nome, CNPJ nem nada do certificado:
+   * só se carregou, até quando vale e em que ambiente está. Assim dá para
+   * diagnosticar sem precisar estar logado e sem expor dado nenhum.
+   */
+  app.get("/api/nfse/status", (_req: any, res: any) => {
+    try {
+      const c = abrirCertificado();
+      const dias = Math.floor((c.validade.getTime() - Date.now()) / 86400000);
+      res.json({
+        success: true,
+        certificado: "carregado",
+        validoAte: c.validade.toISOString().slice(0, 10),
+        diasRestantes: dias,
+        ambiente: ehProducao() ? "Produção" : "Homologação",
+        mensagem: dias < 30
+          ? `Certificado OK, mas vence em ${dias} dias.`
+          : "Certificado lido com sucesso. Pode emitir notas.",
+      });
+    } catch (err: any) {
+      const { status, mensagem } = explicar(err);
+      res.status(status).json({ success: false, certificado: "falhou", mensagem });
+    }
+  });
+
+  /** Diagnóstico completo do certificado — exige login. */
   app.get("/api/nfse/certificado", async (req: any, res: any) => {
     try {
       await exigirUsuario(req);
