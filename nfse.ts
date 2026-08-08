@@ -470,6 +470,37 @@ function tagQualquer(xml: string, nomes: string[]): string {
 }
 
 /**
+ * ============================================================================
+ * ENDEREÇO DA CONSULTA PÚBLICA — o que vai dentro do QR Code
+ * ============================================================================
+ *
+ * ⚠️ ESTE ENDEREÇO NÃO É CHUTE, E NÃO PODE SER "ARRUMADO" NO OLHO.
+ *
+ * Ele foi extraído lendo o QR Code de duas DANFSe oficiais emitidas pelo
+ * Portal para este mesmo CNPJ. As duas trazem exatamente:
+ *
+ *   https://www.nfse.gov.br/ConsultaPublica?tpc=1&chave=<50 dígitos>
+ *
+ * A versão anterior montava `…/consultapublica?chaveAcesso=<chave>`, e errava
+ * em três pontos ao mesmo tempo:
+ *
+ *   1. `consultapublica` em minúsculas — o caminho do Portal tem maiúsculas;
+ *   2. faltava o parâmetro `tpc=1`, que é fixo e diz o tipo da consulta;
+ *   3. o parâmetro se chama `chave`, e não `chaveAcesso`.
+ *
+ * Resultado prático: a câmera do celular abria a página e ela dava erro. O
+ * cliente do MEI conclui que a nota é falsa — o QR é justamente o que deveria
+ * provar o contrário.
+ *
+ * Se um dia isso precisar mudar, o jeito de descobrir o endereço certo é o
+ * mesmo: pegar uma DANFSe gerada pelo próprio Portal e ler o QR dela.
+ */
+export function linkConsultaNfse(chave?: string): string {
+  const n = String(chave || "").replace(/\D/g, "");
+  return n ? `https://www.nfse.gov.br/ConsultaPublica?tpc=1&chave=${n}` : "";
+}
+
+/**
  * Lê um ATRIBUTO de uma tag — `<infNFSe Id="NFS2925...">` devolve o Id.
  *
  * Existe porque a chave de acesso da NFS-e nacional não é um elemento, é um
@@ -565,7 +596,7 @@ export function lerDadosDaNota(xmlNota: string) {
   const linkVerificacao = /^https?:\/\//i.test(linkNoXml)
     ? linkNoXml
     : chaveLida
-      ? `https://www.nfse.gov.br/consultapublica?chaveAcesso=${chaveLida}`
+      ? linkConsultaNfse(chaveLida)
       : "";
 
   return {
@@ -672,6 +703,26 @@ export function lerDadosDaNota(xmlNota: string) {
  * "Março" — faz o documento ser salvo no banco e NÃO aparecer na pasta. O mesmo
  * cuidado existe no efi.ts, pelo mesmo motivo.
  */
+/**
+ * VERSÃO DO DESENHO DA FOLHA.
+ *
+ * ⚠️ SUBA ESTE NÚMERO sempre que a DANFSe gerada mudar de um jeito que valha
+ *    refazer as notas já arquivadas — correção de dado errado, campo que
+ *    faltava, QR que não funcionava.
+ *
+ * Ele é gravado junto de cada arquivo. Quando o usuário clica em "Arquivar
+ * notas pendentes", tudo que estiver numa versão anterior é REFEITO no lugar,
+ * em vez de ser ignorado por já existir.
+ *
+ * Histórico:
+ *   v1 — primeira DANFSe desenhada.
+ *   v2 — chave de acesso lida do atributo Id (antes vinha vazia, e sem chave o
+ *        QR Code nem chegava a ser gerado); endereço do QR corrigido para o
+ *        mesmo que o Portal usa; valor do serviço lido do bloco certo; nome da
+ *        cidade tirado do XML; número do arquivo tirado do XML.
+ */
+const VERSAO_FOLHA = 2;
+
 const MESES = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
@@ -711,9 +762,15 @@ async function arquivarNaPasta(
     titular?: string;
     numeroNota?: string;
     valorNota?: number;
+    /**
+     * Versão do desenho da folha. Um documento guardado com versão anterior é
+     * REFEITO quando o reparo passa por ele. Ver `VERSAO_FOLHA`.
+     */
+    versao?: number;
   }
 ) {
   if (!db || !adminStorage) return null;
+  const bucketPadrao = firebaseConfig?.storageBucket || "mei-flow-692d9.firebasestorage.app";
 
   const jaExiste = await db
     .collection("documentos")
@@ -734,6 +791,62 @@ async function arquivarNaPasta(
      */
     const alvo = jaExiste.docs[0];
     const atual = alvo.data();
+
+    /**
+     * ⚠️ ARQUIVO VELHO PRECISA PODER SER REFEITO — E NÃO PODIA.
+     *
+     * Esta função era idempotente demais: se o `referenciaId` já existisse, ela
+     * devolvia o registro antigo e ia embora. Fazia sentido para não duplicar,
+     * mas criou um beco sem saída.
+     *
+     * O usuário recebeu uma nota arquivada sem QR Code e com "Chave de acesso:
+     * —" (o leitor não sabia ler a chave, que é um atributo e não uma tag).
+     * Depois de corrigir o leitor, ele clicou em "Arquivar notas pendentes" e
+     * baixou o arquivo de novo — e veio o MESMO PDF quebrado, porque o arquivo
+     * guardado nunca era regravado. A única saída teria sido apagar tudo à mão.
+     *
+     * Agora cada folha carrega a versão do desenho com que foi feita. Quando o
+     * reparo encontra uma versão anterior, ele REFAZ o arquivo: regrava o
+     * conteúdo, corrige o nome (que também estava errado — "NFSe_1" numa nota
+     * nº 3) e apaga o arquivo antigo do Storage se o caminho mudou.
+     */
+    const precisaRefazer = !!opts.versao && Number(atual.versaoFolha || 1) < opts.versao;
+
+    if (precisaRefazer) {
+      const anoR = opts.quando.getFullYear();
+      const mesR = MESES[opts.quando.getMonth()];
+      const limpoR = opts.nomeArquivo.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+      const caminhoNovo = `usuarios/${opts.userId}/${anoR}/${mesR}/${limpoR}`;
+      const balde = adminStorage.bucket(bucketPadrao);
+
+      await balde.file(caminhoNovo).save(opts.conteudo, {
+        metadata: { contentType: opts.contentType },
+      });
+      if (atual.storagePath && atual.storagePath !== caminhoNovo) {
+        await balde.file(atual.storagePath).delete().catch(() => {});
+      }
+
+      const urlNova = `/api/documentos/download?path=${encodeURIComponent(caminhoNovo)}`;
+      const refeito = {
+        nome: opts.nomeArquivo,
+        url: urlNova,
+        downloadUrl: urlNova,
+        storagePath: caminhoNovo,
+        tamanho: opts.conteudo.length,
+        tipo: opts.contentType,
+        versaoFolha: opts.versao,
+        grupo: opts.grupo || atual.grupo || "",
+        titular: opts.titular || atual.titular || "",
+        numeroNota: opts.numeroNota || atual.numeroNota || "",
+        valorNota: Number(opts.valorNota || atual.valorNota || 0),
+        formato: opts.contentType === "application/pdf" ? "pdf" : "xml",
+        atualizadoEm: new Date().toISOString(),
+      };
+      await alvo.ref.set(refeito, { merge: true });
+      console.log(`[NFS-e] Refeito (v${atual.versaoFolha || 1} -> v${opts.versao}): ${opts.nomeArquivo}`);
+      return { ...atual, ...refeito };
+    }
+
     if (opts.grupo && !atual.grupo) {
       const completo = {
         grupo: opts.grupo,
@@ -755,8 +868,7 @@ async function arquivarNaPasta(
   const storagePath = `usuarios/${opts.userId}/${ano}/${mes}/${limpo}`;
   const downloadUrl = `/api/documentos/download?path=${encodeURIComponent(storagePath)}`;
 
-  const bucketName = firebaseConfig?.storageBucket || "mei-flow-692d9.firebasestorage.app";
-  await adminStorage.bucket(bucketName).file(storagePath).save(opts.conteudo, {
+  await adminStorage.bucket(bucketPadrao).file(storagePath).save(opts.conteudo, {
     metadata: { contentType: opts.contentType },
   });
 
@@ -784,6 +896,7 @@ async function arquivarNaPasta(
     numeroNota: opts.numeroNota || "",
     valorNota: Number(opts.valorNota || 0),
     formato: opts.contentType === "application/pdf" ? "pdf" : "xml",
+    versaoFolha: opts.versao || VERSAO_FOLHA,
   };
   await db.collection("documentos").doc(docId).set(meta);
   console.log(`[NFS-e] Arquivado em ${mes}/${ano}: ${opts.nomeArquivo}`);
@@ -863,8 +976,16 @@ async function montarDanfsePdf(
     }
 
     if (dados.chave) {
+      /**
+       * O QR aponta para o MESMO endereço que a DANFSe oficial usa.
+       *
+       * Antes esta linha montava o endereço por conta própria, com o caminho em
+       * minúsculas e o parâmetro errado — e o QR abria uma página de erro.
+       * Agora usa o link já resolvido na leitura do XML (ou monta pelo mesmo
+       * caminho único), para não haver duas versões da verdade.
+       */
       extras.qrBase64 = await QRCode.toDataURL(
-        `https://www.nfse.gov.br/consultapublica?chaveAcesso=${dados.chave}`,
+        (dados as any).linkVerificacao || linkConsultaNfse(dados.chave),
         { margin: 0, width: 300, errorCorrectionLevel: "M" }
       );
     }
@@ -1155,6 +1276,7 @@ async function emitirNota(
         quando,
         referenciaId: `nfse_xml_${chave || idDps}`,
         ...identidadeDaNota,
+        versao: VERSAO_FOLHA,
       });
     }
 
@@ -1178,6 +1300,7 @@ async function emitirNota(
           quando,
           referenciaId: `nfse_pdf_${chave || idDps}`,
           ...identidadeDaNota,
+        versao: VERSAO_FOLHA,
         });
       }
     }
@@ -1879,6 +2002,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
             quando: isNaN(quando.getTime()) ? new Date() : quando,
             referenciaId: `nfse_xml_${chave}`,
             ...identidade,
+            versao: VERSAO_FOLHA,
           });
           arquivadas++;
 
@@ -1904,6 +2028,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
               quando: isNaN(quando.getTime()) ? new Date() : quando,
               referenciaId: `nfse_pdf_${chave}`,
               ...identidade,
+            versao: VERSAO_FOLHA,
             });
             pdfs++;
           }

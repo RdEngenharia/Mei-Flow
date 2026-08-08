@@ -662,6 +662,42 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
    * serve para nada e assusta. O XML só tem um uso — ser entregue ao contador —
    * então ele só oferece download.
    */
+  /**
+   * ATUALIZAR AS NOTAS FISCAIS GUARDADAS.
+   *
+   * Este botão fica AQUI de propósito.
+   *
+   * O usuário viu o problema nesta tela — a nota guardada sem QR Code — mas o
+   * único jeito de refazer o arquivo era um botão escondido na tela de Nota
+   * Fiscal, que é outro lugar do sistema. Ninguém encontra uma correção que
+   * mora longe do problema.
+   *
+   * O servidor decide o que refazer: cada arquivo guarda a versão do desenho
+   * com que foi feito, e só o que estiver desatualizado é regravado. Clicar
+   * duas vezes não duplica nem estraga nada.
+   */
+  const [atualizandoNotas, setAtualizandoNotas] = useState(false);
+  const atualizarNotasFiscais = async () => {
+    if (atualizandoNotas) return;
+    setAtualizandoNotas(true);
+    setErrorMsg(null);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error("Você precisa estar logado.");
+      const resposta = await fetch(getApiUrl("/api/nfse/arquivar-pendentes"), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      });
+      const corpo = await resposta.json();
+      if (!resposta.ok) throw new Error(corpo.mensagem || "Não consegui atualizar as notas.");
+      setSuccessMsg(corpo.mensagem || "Notas fiscais atualizadas.");
+    } catch (err: any) {
+      setErrorMsg(err.message || "Não consegui atualizar as notas fiscais.");
+    } finally {
+      setAtualizandoNotas(false);
+    }
+  };
+
   const baixarXml = async (docItem: DocumentoMEI) => {
     const nomeArquivo = docItem.nome.endsWith(".xml") ? docItem.nome : `${docItem.nome}.xml`;
     if (isNativePlatform()) {
@@ -993,7 +1029,16 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
                   <div className="space-y-2.5">
                     <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">
                       <span>Comprovantes desta pasta ({linhasDaPasta.length})</span>
-                      <span>Opções</span>
+                      <button
+                        type="button"
+                        onClick={atualizarNotasFiscais}
+                        disabled={atualizandoNotas}
+                        className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-600 hover:text-indigo-800 uppercase tracking-widest cursor-pointer disabled:opacity-50"
+                        title="Refaz as notas fiscais guardadas com o desenho mais recente e traz as que ainda não foram arquivadas"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${atualizandoNotas ? "animate-spin" : ""}`} />
+                        {atualizandoNotas ? "Atualizando..." : "Atualizar notas fiscais"}
+                      </button>
                     </div>
 
                     {linhasDaPasta.length === 0 ? (
