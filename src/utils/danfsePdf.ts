@@ -31,10 +31,12 @@ export type DadosDanfse = {
   emitidaEm?: string;
   competencia?: string;
   ambiente?: string;
+  /** Nome da cidade, lido do próprio XML da nota (xLocPrestacao / xLocEmi). */
+  municipio?: string;
   prestador?: {
     nome?: string; cnpj?: string; inscricaoMunicipal?: string; fone?: string;
     email?: string; logradouro?: string; numero?: string; bairro?: string;
-    cep?: string; municipio?: string;
+    cep?: string; municipio?: string; uf?: string;
   };
   tomador?: { nome?: string; documento?: string; email?: string } | null;
   servico?: {
@@ -237,12 +239,20 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
   y += 6;
 
   // ------------------------------------------------------------- datas
-  const col = L / 4;
+  /**
+   * ⚠️ O CAMPO "AMBIENTE" FOI REMOVIDO DE PROPÓSITO — NÃO O TRAGA DE VOLTA.
+   *
+   * Ele imprimia "Produção" em toda nota. Isso era útil enquanto a emissão
+   * estava sendo construída e havia dúvida sobre qual mundo estava em uso;
+   * passada essa fase, é uma palavra do nosso vocabulário num documento que vai
+   * para o cliente do MEI. O selo de TESTE, logo acima, continua aparecendo
+   * quando a nota não vale — que é o único caso em que o ambiente importa.
+   */
+  const col = L / 3;
   const datas: [string, string][] = [
     ["Emissão", dataBR(String(d.emitidaEm || "").slice(0, 10))],
     ["Competência", competenciaBR(d.competencia)],
     ["Local da prestação", extras.municipio || (d.servico?.localPrestacao ? `IBGE ${d.servico.localPrestacao}` : "—")],
-    ["Ambiente", ehTeste ? "Homologação" : "Produção"],
   ];
   datas.forEach(([r, v], i) => {
     rotulo(r, M + col * i, y);

@@ -470,6 +470,29 @@ function tagQualquer(xml: string, nomes: string[]): string {
 }
 
 /**
+ * Lê um ATRIBUTO de uma tag — `<infNFSe Id="NFS2925...">` devolve o Id.
+ *
+ * Existe porque a chave de acesso da NFS-e nacional não é um elemento, é um
+ * atributo. O leitor só sabia ler elementos, então a chave sempre voltava
+ * vazia e a nota saía sem QR Code.
+ */
+function atributo(xml: string, nomeTag: string, nomeAtr: string): string {
+  const m = String(xml || "").match(
+    new RegExp(`<(?:\\w+:)?${nomeTag}\\b[^>]*\\b${nomeAtr}\\s*=\\s*["']([^"']+)["']`)
+  );
+  return m ? m[1].trim() : "";
+}
+
+/**
+ * O Id vem como "NFS" + 50 dígitos. Só aceitamos se sobrar uma chave com cara
+ * de chave — 44 a 50 dígitos — para não transformar um Id qualquer em chave.
+ */
+function soDigitosSeChave(id: string): string {
+  const n = String(id || "").replace(/\D/g, "");
+  return n.length >= 44 && n.length <= 50 ? n : "";
+}
+
+/**
  * Extrai da NFS-e tudo que a folha impressa precisa.
  *
  * Feito com busca por nome de tag, e não com um leitor de XML completo, porque
@@ -482,9 +505,28 @@ export function lerDadosDaNota(xmlNota: string) {
 
   // O bloco do prestador aparece como <emit> na NFS-e e como <prest> na DPS.
   const blocoPrest = tagQualquer(x, ["emit", "prest"]);
-  const blocoToma = tag(x, "toma");
-  const blocoServ = tag(x, "serv");
-  const blocoValores = tag(x, "valores");
+
+  /**
+   * ⚠️ A NFS-e TEM DOIS BLOCOS <valores>, E LER O ERRADO ZERA A NOTA.
+   *
+   * O XML que o Portal devolve embrulha a DPS inteira dentro da NFS-e:
+   *
+   *   <infNFSe>
+   *     <valores> ... vBC, pAliqAplic, vISSQN, vLiq ...      ← o da NFS-e
+   *     <DPS><infDPS>
+   *       <valores><vServPrest><vServ> ...                   ← o da DPS
+   *
+   * O código lia `tag(x, "valores")`, que casa com o PRIMEIRO — o da NFS-e, que
+   * não tem `vServPrest`. Resultado no papel do usuário: "Valor do serviço
+   * R$ 0,00" ao lado de "Valor líquido R$ 5,00". Agora cada campo é buscado no
+   * bloco onde ele realmente mora.
+   */
+  const blocoDps = tag(x, "infDPS");
+  const dentroDps = blocoDps || x;
+  const blocoToma = tag(dentroDps, "toma");
+  const blocoServ = tag(dentroDps, "serv");
+  const blocoValores = tag(dentroDps, "valores");
+  const blocoValoresNfse = blocoDps ? tag(x.replace(blocoDps, ""), "valores") : "";
   const blocoCServ = tag(blocoServ, "cServ");
   const blocoInfoCompl = tag(blocoServ, "infoCompl");
 
@@ -501,7 +543,24 @@ export function lerDadosDaNota(xmlNota: string) {
    * E, nos dois casos, a chave de 50 dígitos vai impressa em texto na folha —
    * esse é o caminho que funciona sempre, com ou sem câmera.
    */
-  const chaveLida = tagQualquer(x, ["chaveAcesso", "ChaveAcesso"]);
+  /**
+   * ⚠️ A CHAVE DE ACESSO NÃO É UMA TAG — É UM ATRIBUTO.
+   *
+   * Este é o defeito que deixou o PDF arquivado sem QR Code e com "Chave de
+   * acesso: —". O código procurava por `<chaveAcesso>`, que simplesmente não
+   * existe no XML da NFS-e nacional. A chave de 50 dígitos vem no atributo Id
+   * do bloco `infNFSe`, prefixada com "NFS":
+   *
+   *   <infNFSe Id="NFS29250807...">
+   *
+   * Sem chave, `montarDanfsePdf` pulava a geração do QR (ele só é montado
+   * quando há chave) — e ninguém percebeu, porque nada disso dá erro.
+   */
+  const idInfNfse = atributo(x, "infNFSe", "Id");
+  const chaveLida =
+    soDigitosSeChave(idInfNfse) ||
+    tagQualquer(x, ["chaveAcesso", "ChaveAcesso", "chNFSe"]) ||
+    "";
   const linkNoXml = tagQualquer(x, ["link", "linkNFSe", "urlConsulta", "url"]);
   const linkVerificacao = /^https?:\/\//i.test(linkNoXml)
     ? linkNoXml
@@ -520,6 +579,17 @@ export function lerDadosDaNota(xmlNota: string) {
     competencia: tag(x, "dCompet"),
     ambiente: tag(x, "tpAmb") === "1" ? "producao" : "homologacao",
 
+    /**
+     * O NOME DA CIDADE VEM NO PRÓPRIO XML.
+     *
+     * A folha imprimia "IBGE 2925303" e "Município de incidência: —" porque o
+     * nome era procurado na configuração do usuário, onde ele nunca foi
+     * guardado (a configuração só tem o código IBGE). Mas o Portal já devolve
+     * o nome pronto em `xLocPrestacao` / `xLocEmi` / `xLocIncid` — não é
+     * preciso tabela do IBGE nenhuma, nem consulta a serviço externo.
+     */
+    municipio: tagQualquer(x, ["xLocPrestacao", "xLocEmi", "xLocIncid"]),
+
     prestador: {
       nome: tag(blocoPrest, "xNome"),
       cnpj: tagQualquer(blocoPrest, ["CNPJ", "CPF"]),
@@ -531,6 +601,7 @@ export function lerDadosDaNota(xmlNota: string) {
       bairro: tag(blocoPrest, "xBairro"),
       cep: tag(blocoPrest, "CEP"),
       municipio: tag(blocoPrest, "cMun"),
+      uf: tag(blocoPrest, "UF"),
     },
 
     // Sem bloco <toma>, o Portal imprime "tomador não identificado".
@@ -559,15 +630,32 @@ export function lerDadosDaNota(xmlNota: string) {
       liquido: Number(tagQualquer(x, ["vLiq", "vLiqNFSe"]) || 0),
       issRetido: tag(tag(tag(blocoValores, "trib"), "tribMun"), "tpRetISSQN") === "2",
       issTributavel: tag(tag(tag(blocoValores, "trib"), "tribMun"), "tribISSQN") === "1",
-      aliquota: Number(tag(tag(tag(blocoValores, "trib"), "tribMun"), "pAliq") || 0),
+      // A alíquota efetivamente aplicada é a que a NFS-e apurou (`pAliqAplic`);
+      // a `pAliq` da DPS é só o que o emissor declarou.
+      aliquota: Number(
+        tag(blocoValoresNfse, "pAliqAplic") ||
+        tag(tag(tag(blocoValores, "trib"), "tribMun"), "pAliq") || 0
+      ),
       valorIss: Number(tagQualquer(x, ["vISSQN", "vIss"]) || 0),
       baseCalculo: Number(tagQualquer(x, ["vBC", "vBCISSQN"]) || 0),
       totalTributos: Number(tagQualquer(x, ["vTotTrib", "vTotTribFed"]) || 0),
     },
-    /** Regime do prestador na data da competência — vira texto na folha. */
+    /**
+     * Regime do prestador na data da competência — vira texto na folha.
+     *
+     * ⚠️ O regime mora no `<prest>` da DPS, NUNCA no `<emit>` da NFS-e.
+     *
+     * Como `blocoPrest` casa com `<emit>` primeiro (é ele que traz nome e
+     * endereço), procurar o regime ali devolvia sempre vazio numa nota de
+     * produção. A folha então caía no texto padrão "Simples Nacional — MEI",
+     * que por acaso está certo para um MEI e estaria errado para qualquer
+     * outro. Aqui buscamos onde o campo realmente está.
+     */
     regime: {
-      opSimpNac: tag(tag(blocoPrest, "regTrib"), "opSimpNac"),
-      regEspTrib: tag(tag(blocoPrest, "regTrib"), "regEspTrib"),
+      opSimpNac: tag(tag(tag(dentroDps, "prest"), "regTrib"), "opSimpNac")
+        || tag(tag(blocoPrest, "regTrib"), "opSimpNac"),
+      regEspTrib: tag(tag(tag(dentroDps, "prest"), "regTrib"), "regEspTrib")
+        || tag(tag(blocoPrest, "regTrib"), "regEspTrib"),
     },
   };
 }
@@ -611,6 +699,18 @@ async function arquivarNaPasta(
     contentType: string;
     quando: Date;
     referenciaId: string;
+    /**
+     * IDENTIFICAÇÃO DA NOTA, para o Arquivo Digital juntar PDF e XML.
+     *
+     * Antes, cada nota gerava duas linhas soltas na lista — "NFSe_3_00001.pdf"
+     * e "NFSe_3_00001.xml" — e o usuário só descobria de quem era a nota
+     * abrindo o arquivo. Guardando estes campos, a tela consegue mostrar uma
+     * linha por nota, com o nome do cliente, e os dois botões ao lado.
+     */
+    grupo?: string;
+    titular?: string;
+    numeroNota?: string;
+    valorNota?: number;
   }
 ) {
   if (!db || !adminStorage) return null;
@@ -621,7 +721,32 @@ async function arquivarNaPasta(
     .where("referenciaId", "==", opts.referenciaId)
     .limit(1)
     .get();
-  if (!jaExiste.empty) return jaExiste.docs[0].data();
+  if (!jaExiste.empty) {
+    /**
+     * Já está guardado — não regravamos o arquivo, mas COMPLETAMOS a
+     * identificação se ela estiver faltando.
+     *
+     * Sem isto, as notas arquivadas antes de existirem os campos de
+     * agrupamento continuariam para sempre aparecendo como dois arquivos
+     * soltos com nome de código, e a única saída seria apagar e refazer.
+     * Assim, uma passada no botão "Arquivar notas pendentes" conserta a lista
+     * inteira.
+     */
+    const alvo = jaExiste.docs[0];
+    const atual = alvo.data();
+    if (opts.grupo && !atual.grupo) {
+      const completo = {
+        grupo: opts.grupo,
+        titular: opts.titular || "",
+        numeroNota: opts.numeroNota || "",
+        valorNota: Number(opts.valorNota || 0),
+        formato: opts.contentType === "application/pdf" ? "pdf" : "xml",
+      };
+      await alvo.ref.set(completo, { merge: true });
+      return { ...atual, ...completo };
+    }
+    return atual;
+  }
 
   const ano = opts.quando.getFullYear();
   const mes = MESES[opts.quando.getMonth()];
@@ -653,6 +778,12 @@ async function arquivarNaPasta(
     origem: "nfse",
     referenciaId: opts.referenciaId,
     automatico: true,
+    // Campos de agrupamento. Documentos antigos não os têm — a tela trata isso.
+    grupo: opts.grupo || "",
+    titular: opts.titular || "",
+    numeroNota: opts.numeroNota || "",
+    valorNota: Number(opts.valorNota || 0),
+    formato: opts.contentType === "application/pdf" ? "pdf" : "xml",
   };
   await db.collection("documentos").doc(docId).set(meta);
   console.log(`[NFS-e] Arquivado em ${mes}/${ano}: ${opts.nomeArquivo}`);
@@ -678,7 +809,15 @@ async function montarDanfsePdf(
     const { jsPDF } = await import("jspdf");
     const QRCode = (await import("qrcode")).default;
 
-    const extras: ExtrasDanfse = { municipio };
+    /**
+     * O nome da cidade sai do próprio XML. O parâmetro `municipio` (que vem da
+     * configuração fiscal) fica só como reserva — ele quase sempre chegava
+     * vazio, e era por isso que a folha imprimia "IBGE 2925303" no lugar de
+     * "Porto Seguro / BA".
+     */
+    const uf = (dados.prestador as any)?.uf;
+    const doXml = dados.municipio ? `${dados.municipio}${uf ? " / " + uf : ""}` : "";
+    const extras: ExtrasDanfse = { municipio: doXml || municipio };
 
     // Logo e nome de exibição vêm do perfil do MEI.
     try {
@@ -986,6 +1125,18 @@ async function emitirNota(
     const rotulo = `NFSe_${numeroNfse || numero}_${serie}`;
 
     /**
+     * O PDF e o XML da mesma nota compartilham esta identidade, e é ela que
+     * permite ao Arquivo Digital mostrar uma linha por nota — com o nome do
+     * cliente — em vez de dois arquivos soltos com nome de código.
+     */
+    const identidadeDaNota = {
+      grupo: `nfse_${chave || idDps}`,
+      titular: dados.clienteNome || "Tomador não identificado",
+      numeroNota: String(numeroNfse || numero || ""),
+      valorNota: Number(dados.valor || 0),
+    };
+
+    /**
      * ⚠️ ARQUIVO DIGITAL É SÓ PARA DOCUMENTO FISCAL DE VERDADE.
      *
      * Nota de homologação não existe para a Receita. Guardá-la na pasta dos
@@ -1003,6 +1154,7 @@ async function emitirNota(
         contentType: "application/xml",
         quando,
         referenciaId: `nfse_xml_${chave || idDps}`,
+        ...identidadeDaNota,
       });
     }
 
@@ -1025,6 +1177,7 @@ async function emitirNota(
           contentType: "application/pdf",
           quando,
           referenciaId: `nfse_pdf_${chave || idDps}`,
+          ...identidadeDaNota,
         });
       }
     }
@@ -1696,7 +1849,27 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         // A pasta é a do mês em que a nota foi emitida, e não a de hoje —
         // arquivar tudo em agosto bagunçaria a conferência do contador.
         const quando = new Date(n.emitidaEm || Date.now());
-        const rotulo = `NFSe_${n.numeroNfse || n.numero}_${n.serie}`;
+
+        /**
+         * ⚠️ O NÚMERO SAI DO XML, NÃO DO REGISTRO GUARDADO À PARTE.
+         *
+         * O arquivo chegou ao usuário como "NFSe_1_00001.pdf" sendo a nota nº 3.
+         * Motivo: `n.numeroNfse` só passou a ser gravado depois que as primeiras
+         * notas já existiam, e o código caía para `n.numero` — que é o número da
+         * DPS, uma numeração nossa, diferente da que o Portal atribui. O XML tem
+         * os dois e nunca mente.
+         */
+        const lido = lerDadosDaNota(n.xml);
+        const rotulo = `NFSe_${lido.numeroNfse || n.numeroNfse || n.numero}_${lido.serie || n.serie}`;
+
+        // A mesma identidade da emissão, para as notas antigas também
+        // aparecerem agrupadas e com o nome do cliente na lista.
+        const identidade = {
+          grupo: `nfse_${chave}`,
+          titular: lido.tomador?.nome || n.clienteNome || "Tomador não identificado",
+          numeroNota: String(lido.numeroNfse || n.numeroNfse || n.numero || ""),
+          valorNota: Number(lido.valores?.liquido || lido.valores?.servico || n.valor || 0),
+        };
         try {
           await arquivarNaPasta(db, adminStorage, firebaseConfig, {
             userId: uid,
@@ -1705,6 +1878,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
             contentType: "application/xml",
             quando: isNaN(quando.getTime()) ? new Date() : quando,
             referenciaId: `nfse_xml_${chave}`,
+            ...identidade,
           });
           arquivadas++;
 
@@ -1720,7 +1894,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
            * `arquivarNaPasta` é idempotente pelo referenciaId, então rodar de
            * novo não duplica nada.
            */
-          const pdf = await montarDanfsePdf(db, uid, lerDadosDaNota(n.xml), municipioCfg);
+          const pdf = await montarDanfsePdf(db, uid, lido, municipioCfg);
           if (pdf) {
             await arquivarNaPasta(db, adminStorage, firebaseConfig, {
               userId: uid,
@@ -1729,6 +1903,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
               contentType: "application/pdf",
               quando: isNaN(quando.getTime()) ? new Date() : quando,
               referenciaId: `nfse_pdf_${chave}`,
+              ...identidade,
             });
             pdfs++;
           }

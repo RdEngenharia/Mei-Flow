@@ -188,17 +188,25 @@ export default function FolhaNotaFiscal({
           <p className="text-[8px] font-bold uppercase tracking-widest text-slate-400">Competência</p>
           <p className="text-[11px] font-semibold text-slate-800 font-mono">{competenciaBR(dados?.competencia)}</p>
         </div>
-        <div>
+        {/*
+          O campo "Ambiente" saiu daqui.
+
+          Ele dizia "Produção" em toda nota, o que deixou de ser informação
+          assim que a fase de testes acabou — e num documento que vai para o
+          cliente, "Produção" é uma palavra do nosso mundo, não do dele. O aviso
+          de nota de TESTE continua logo acima, em vermelho, e é o único caso em
+          que o ambiente realmente importa.
+
+          O nome da cidade agora vem do próprio XML da nota (`dados.municipio`),
+          que é onde o Portal já o entrega pronto. Antes ele era procurado na
+          configuração do usuário, onde nunca foi guardado — e a folha acabava
+          imprimindo "IBGE 2925303" no lugar de "Porto Seguro".
+        */}
+        <div className="col-span-2">
           <p className="text-[8px] font-bold uppercase tracking-widest text-slate-400">Local da prestação</p>
           <p className="text-[11px] font-semibold text-slate-800">
-            {municipioPrestador || enderecoPrestador?.cidade ||
+            {dados?.municipio || municipioPrestador || enderecoPrestador?.cidade ||
               (dados?.servico?.localPrestacao ? `IBGE ${dados.servico.localPrestacao}` : "—")}
-          </p>
-        </div>
-        <div>
-          <p className="text-[8px] font-bold uppercase tracking-widest text-slate-400">Ambiente</p>
-          <p className="text-[11px] font-semibold text-slate-800">
-            {((dados?.ambiente || nota.ambiente || "")).startsWith("produ") ? "Produção" : "Homologação"}
           </p>
         </div>
       </div>

@@ -650,13 +650,19 @@ export default function NotaFiscalPanel({
                 ? `Certificado válido até ${dataBR(cert?.validoAte)}`
                 : "Configure seu certificado digital A1"}
             </p>
-            {pronto && (
-              <span className={`inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-widest border ${
-                emProducao
-                  ? "bg-red-50 text-red-700 border-red-200"
-                  : "bg-slate-100 text-slate-500 border-slate-200"
-              }`}>
-                {emProducao ? "Produção — notas valem de verdade" : "Homologação — notas de teste"}
+            {/*
+              O selo de ambiente saiu daqui.
+
+              Ele fazia sentido enquanto a emissão estava sendo montada e o
+              usuário precisava saber em qual mundo estava pisando. Passada essa
+              fase, "Produção — notas valem de verdade" vira ruído: produção é o
+              único modo que ele usa. O aviso de TESTE continua existindo, e só
+              aparece se por algum motivo o sistema voltar para homologação —
+              nesse caso ele precisa gritar.
+            */}
+            {pronto && !emProducao && (
+              <span className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-widest border bg-amber-50 text-amber-700 border-amber-200">
+                Modo de teste — estas notas não valem
               </span>
             )}
           </div>
@@ -680,7 +686,7 @@ export default function NotaFiscalPanel({
                 <div className="text-left">
                   <h3 className="font-bold text-xl text-slate-900 tracking-tight">Nota Fiscal</h3>
                   <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest mt-0.5">
-                    {cert?.ambiente || "Portal Nacional NFS-e"}
+                    Portal Nacional NFS-e
                   </p>
                 </div>
               </div>
@@ -702,18 +708,16 @@ export default function NotaFiscalPanel({
             </div>
 
             <div className="p-6 space-y-5">
-              {pronto && emProducao && (
-                <div className="bg-red-50 border border-red-200 p-4 rounded-2xl text-red-800 text-xs text-left leading-relaxed">
-                  <strong className="block mb-1">Você está em produção.</strong>
-                  As notas emitidas daqui valem para a Receita. Cancelar uma NFS-e exige justificativa e
-                  tem prazo, então confira valor e cliente antes de emitir.
-                </div>
-              )}
+              {/*
+                A faixa "Você está em produção" saiu: produção deixou de ser
+                novidade e o aviso só ocupava o topo da tela toda vez. A de
+                teste fica — se ela aparecer, alguma coisa está errada e o
+                usuário precisa ver antes de emitir.
+              */}
               {pronto && !emProducao && (
-                <div className="bg-slate-100 border border-slate-200 p-4 rounded-2xl text-slate-600 text-xs text-left leading-relaxed">
-                  <strong className="block mb-1">Ambiente de teste (homologação).</strong>
-                  As notas daqui não existem para a Receita e não servem para o cliente. Servem para
-                  conferir que tudo funciona antes de valer.
+                <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-amber-800 text-xs text-left leading-relaxed">
+                  <strong className="block mb-1">Atenção: o sistema está em modo de teste.</strong>
+                  As notas emitidas agora não existem para a Receita e não servem para o cliente.
                 </div>
               )}
               {erro && (
@@ -1129,7 +1133,7 @@ export default function NotaFiscalPanel({
                 </div>
 
                 <p className="text-[11px] text-slate-500 leading-relaxed">
-                  O XML de cada nota <strong>de produção</strong> é guardado automaticamente no seu Arquivo
+                  O XML de cada nota é guardado automaticamente no seu Arquivo
                   Digital, na pasta do mês da emissão — ele é o documento fiscal de verdade e a lei obriga a
                   guardar. Notas de teste não vão para lá, para não sujar a guarda fiscal.
                 </p>
@@ -1152,7 +1156,7 @@ export default function NotaFiscalPanel({
                   </div>
                 ) : notas.length === 0 ? (
                   <p className="text-[11px] text-slate-400 italic py-2">
-                    Nenhuma nota emitida {emProducao ? "em produção" : "em homologação"} ainda.
+                    Nenhuma nota emitida ainda.
                   </p>
                 ) : (
                   <div className="space-y-2 max-h-72 overflow-y-auto">

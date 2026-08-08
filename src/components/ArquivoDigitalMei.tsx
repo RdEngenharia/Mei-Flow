@@ -39,6 +39,39 @@ interface DocumentoMEI {
   isSimulated?: boolean;
   url?: string;
   criadoEm?: string;
+  /**
+   * IDENTIFICAÇÃO DA NOTA FISCAL, gravada pelo servidor ao arquivar.
+   *
+   * Nota fiscal gera DOIS arquivos: o XML (que é o documento fiscal de
+   * verdade, obrigatório guardar por cinco anos) e o PDF (que é o que se manda
+   * para o cliente). Sem estes campos, os dois apareciam como linhas separadas
+   * chamadas "NFSe_3_00001.xml" e "NFSe_3_00001.pdf" — e para saber de quem era
+   * a nota, só abrindo.
+   *
+   * São opcionais porque documentos enviados à mão pelo usuário não têm nota
+   * nenhuma por trás, e os arquivados antes desta mudança também não têm.
+   */
+  grupo?: string;
+  titular?: string;
+  numeroNota?: string;
+  valorNota?: number;
+  formato?: string;
+}
+
+/**
+ * Uma linha da lista: ou uma nota fiscal com seus dois arquivos, ou um
+ * comprovante solto que o usuário enviou.
+ */
+interface LinhaArquivo {
+  chave: string;
+  ehNota: boolean;
+  titulo: string;
+  subtitulo: string;
+  quando: string;
+  pdf?: DocumentoMEI;
+  xml?: DocumentoMEI;
+  avulso?: DocumentoMEI;
+  tamanho: number;
 }
 
 interface UserProfile {
@@ -152,7 +185,20 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
             storagePath: data.storagePath || "",
             isSimulated: data.isSimulated || false,
             url: data.url || data.downloadUrl || "",
-            criadoEm: data.criadoEm || data.uploadedAt || new Date().toISOString()
+            criadoEm: data.criadoEm || data.uploadedAt || new Date().toISOString(),
+            /**
+             * ⚠️ CAMPO NOVO PRECISA SER COPIADO AQUI TAMBÉM.
+             *
+             * Esta função monta o objeto campo a campo, então tudo que o
+             * servidor grava e não for listado aqui simplesmente não existe
+             * para a tela. É por estes quatro campos que a lista consegue
+             * juntar o PDF e o XML da mesma nota e mostrar o nome do cliente.
+             */
+            grupo: data.grupo || "",
+            titular: data.titular || "",
+            numeroNota: data.numeroNota || "",
+            valorNota: Number(data.valorNota || 0),
+            formato: data.formato || "",
           });
         });
 
@@ -552,9 +598,96 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
   const documentosFiltrados = documentos.filter(docItem => {
     const combinaAno = docItem.ano === selectedYear;
     const combinaMes = selectedMonth ? docItem.mes === selectedMonth : true;
-    const combinaFiltroTexto = searchTerm ? docItem.nome.toLowerCase().includes(searchTerm.toLowerCase()) : true;
+    // A busca também olha o nome do cliente da nota — que passou a ser o que
+    // aparece na lista, e portanto o que o usuário vai digitar.
+    const alvo = `${docItem.nome} ${docItem.titular || ""} ${docItem.numeroNota || ""}`.toLowerCase();
+    const combinaFiltroTexto = searchTerm ? alvo.includes(searchTerm.toLowerCase()) : true;
     return combinaAno && combinaMes && combinaFiltroTexto;
   });
+
+  /**
+   * AGRUPA O PDF E O XML DA MESMA NOTA NUMA LINHA SÓ.
+   *
+   * O usuário pediu assim: "seria melhor o nome do titular e do lado pdf e xml,
+   * assim saberei qual a nota correta antes mesmo de abrir o documento".
+   *
+   * Documentos sem `grupo` — comprovantes enviados à mão, e notas arquivadas
+   * antes desta mudança — continuam aparecendo como uma linha cada, com o nome
+   * do arquivo. Nada some.
+   */
+  const linhasDaPasta: LinhaArquivo[] = (() => {
+    const porGrupo = new Map<string, LinhaArquivo>();
+    const linhas: LinhaArquivo[] = [];
+
+    for (const docItem of documentosFiltrados) {
+      if (!docItem.grupo) {
+        linhas.push({
+          chave: docItem.id,
+          ehNota: false,
+          titulo: docItem.nome,
+          subtitulo: "",
+          quando: docItem.uploadedAt,
+          avulso: docItem,
+          tamanho: docItem.tamanho || 0,
+        });
+        continue;
+      }
+
+      let linha = porGrupo.get(docItem.grupo);
+      if (!linha) {
+        linha = {
+          chave: docItem.grupo,
+          ehNota: true,
+          titulo: docItem.titular || docItem.nome,
+          subtitulo: docItem.numeroNota ? `Nota fiscal nº ${docItem.numeroNota}` : "Nota fiscal",
+          quando: docItem.uploadedAt,
+          tamanho: 0,
+        };
+        porGrupo.set(docItem.grupo, linha);
+        linhas.push(linha);
+      }
+      const ehPdf = docItem.formato === "pdf" || (docItem.tipo || "").includes("pdf");
+      if (ehPdf) linha.pdf = docItem;
+      else linha.xml = docItem;
+      linha.tamanho += docItem.tamanho || 0;
+    }
+
+    return linhas;
+  })();
+
+  /**
+   * Baixa o XML como ARQUIVO, e não como página.
+   *
+   * Abrir o XML numa aba faz o navegador mostrar um monte de texto cru, que não
+   * serve para nada e assusta. O XML só tem um uso — ser entregue ao contador —
+   * então ele só oferece download.
+   */
+  const baixarXml = async (docItem: DocumentoMEI) => {
+    const nomeArquivo = docItem.nome.endsWith(".xml") ? docItem.nome : `${docItem.nome}.xml`;
+    if (isNativePlatform()) {
+      try {
+        await downloadRemoteFileCrossPlatform(docItem.downloadUrl, nomeArquivo, "application/xml");
+        setSuccessMsg(`"${nomeArquivo}" baixado para a pasta Downloads do seu celular.`);
+      } catch {
+        setErrorMsg("Não foi possível baixar o XML. Verifique sua conexão e tente novamente.");
+      }
+      return;
+    }
+    try {
+      const resposta = await fetch(docItem.downloadUrl);
+      if (!resposta.ok) throw new Error("falhou");
+      const blob = await resposta.blob();
+      const endereco = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = endereco;
+      link.download = nomeArquivo;
+      link.click();
+      URL.revokeObjectURL(endereco);
+      setSuccessMsg(`"${nomeArquivo}" baixado.`);
+    } catch {
+      setErrorMsg("Não foi possível baixar o XML.");
+    }
+  };
 
   // Conta documentos por mês no ano selecionado para exibir no grid das pastas
   const contarDocsPorMes = (mesNome: string) => {
@@ -859,63 +992,116 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
                   {/* Lista de Comprovantes com Filtro de Mês */}
                   <div className="space-y-2.5">
                     <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">
-                      <span>Comprovantes desta pasta ({documentosFiltrados.length})</span>
+                      <span>Comprovantes desta pasta ({linhasDaPasta.length})</span>
                       <span>Opções</span>
                     </div>
 
-                    {documentosFiltrados.length === 0 ? (
+                    {linhasDaPasta.length === 0 ? (
                       <div className="text-center py-6 border border-dashed border-slate-100 rounded-2xl bg-slate-50/20">
                         <FileText className="w-8 h-8 text-slate-300 mx-auto" />
                         <p className="text-xs text-slate-400 mt-1.5 font-semibold">Nenhum documento guardado neste mês.</p>
                       </div>
                     ) : (
                       <div className="space-y-2">
-                        {documentosFiltrados.map((docItem) => (
-                          <div 
-                            key={docItem.id}
+                        {linhasDaPasta.map((linha) => (
+                          <div
+                            key={linha.chave}
                             className="bg-slate-50/55 border border-slate-100 hover:border-slate-200 hover:bg-slate-50 p-3 rounded-2xl flex items-center justify-between gap-3 text-xs transition-colors"
                           >
                             <div className="flex items-center gap-3 min-w-0">
-                              <div className="w-9 h-9 bg-white border border-slate-100 rounded-xl flex items-center justify-center shrink-0 shadow-3xs">
-                                <FileText className="w-4.5 h-4.5 text-slate-500" />
+                              <div className={`w-9 h-9 border rounded-xl flex items-center justify-center shrink-0 shadow-3xs ${
+                                linha.ehNota ? "bg-indigo-50 border-indigo-100" : "bg-white border-slate-100"
+                              }`}>
+                                <FileText className={`w-4.5 h-4.5 ${linha.ehNota ? "text-indigo-600" : "text-slate-500"}`} />
                               </div>
                               <div className="text-left min-w-0">
-                                <p className="font-bold text-slate-800 truncate" title={docItem.nome}>
-                                  {docItem.nome}
+                                <p className="font-bold text-slate-800 truncate" title={linha.titulo}>
+                                  {linha.titulo}
                                 </p>
-                                <p className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
+                                <p className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5 flex-wrap">
+                                  {linha.subtitulo && (
+                                    <span className="font-bold text-indigo-500">{linha.subtitulo}</span>
+                                  )}
                                   <Clock className="w-3 h-3 text-slate-350" />
-                                  {new Date(docItem.uploadedAt).toLocaleDateString("pt-BR")}
+                                  {new Date(linha.quando).toLocaleDateString("pt-BR")}
                                   <span className="text-[9px] font-mono font-bold bg-slate-100 px-1 rounded text-slate-500 ml-1">
-                                    {formatBytes(docItem.tamanho)}
+                                    {formatBytes(linha.tamanho)}
                                   </span>
                                 </p>
                               </div>
                             </div>
-                            
-                            {/* Ações do Comprovante */}
-                            <div className="flex items-center gap-1.5">
-                              {/* Botão de download de aba nova */}
-                              <button 
-                                onClick={() => window.open(docItem.downloadUrl, "_blank")}
-                                className="px-2.5 py-1.5 bg-indigo-50 border border-indigo-150/80 hover:bg-indigo-100 hover:text-indigo-750 text-indigo-650 rounded-lg flex items-center gap-1 shadow-3xs transition-all cursor-pointer font-bold text-[10px] shrink-0"
-                                title="Visualizar / Baixar Comprovante"
-                              >
-                                <Download className="w-3 h-3 shrink-0" />
-                                <span>Visualizar</span>
-                              </button>
-                              
-                              {/* Botão de Impressão Especial (no APK, baixa o arquivo direto) */}
-                              <button 
-                                onClick={() => handlePrintDocument(docItem)}
-                                className="w-8 h-8 bg-white border border-slate-200/80 hover:bg-emerald-50 hover:text-emerald-600 rounded-lg flex items-center justify-center shadow-xs text-slate-500 transition-all cursor-pointer"
-                                title={isNativePlatform() ? "Baixar Comprovante Fiscal" : "Imprimir Comprovante Fiscal"}
-                              >
-                                <Printer className="w-3.5 h-3.5" />
-                              </button>
+
+                            {/*
+                              AÇÕES.
+
+                              Numa nota fiscal são dois arquivos e dois botões
+                              nomeados — PDF e XML — em vez de duas linhas com
+                              nome de código. O XML só baixa: abrir XML numa aba
+                              só mostra texto cru. Um comprovante enviado à mão
+                              continua com os botões de sempre.
+                            */}
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {linha.ehNota ? (
+                                <>
+                                  {linha.pdf && (
+                                    <button
+                                      onClick={() => window.open(linha.pdf!.downloadUrl, "_blank")}
+                                      className="px-2.5 py-1.5 bg-indigo-50 border border-indigo-150/80 hover:bg-indigo-100 hover:text-indigo-750 text-indigo-650 rounded-lg flex items-center gap-1 shadow-3xs transition-all cursor-pointer font-bold text-[10px]"
+                                      title="Abrir a nota fiscal em PDF"
+                                    >
+                                      <FileText className="w-3 h-3 shrink-0" />
+                                      <span>PDF</span>
+                                    </button>
+                                  )}
+                                  {linha.xml && (
+                                    <button
+                                      onClick={() => baixarXml(linha.xml!)}
+                                      className="px-2.5 py-1.5 bg-white border border-slate-200/80 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 rounded-lg flex items-center gap-1 shadow-3xs transition-all cursor-pointer font-bold text-[10px]"
+                                      title="Baixar o XML — é este o documento fiscal que o contador precisa"
+                                    >
+                                      <Download className="w-3 h-3 shrink-0" />
+                                      <span>XML</span>
+                                    </button>
+                                  )}
+                                  {linha.pdf && (
+                                    <button
+                                      onClick={() => handlePrintDocument(linha.pdf!)}
+                                      className="w-8 h-8 bg-white border border-slate-200/80 hover:bg-emerald-50 hover:text-emerald-600 rounded-lg flex items-center justify-center shadow-xs text-slate-500 transition-all cursor-pointer"
+                                      title={isNativePlatform() ? "Baixar a nota" : "Imprimir a nota"}
+                                    >
+                                      <Printer className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={() => window.open(linha.avulso!.downloadUrl, "_blank")}
+                                    className="px-2.5 py-1.5 bg-indigo-50 border border-indigo-150/80 hover:bg-indigo-100 hover:text-indigo-750 text-indigo-650 rounded-lg flex items-center gap-1 shadow-3xs transition-all cursor-pointer font-bold text-[10px]"
+                                    title="Visualizar / Baixar Comprovante"
+                                  >
+                                    <Download className="w-3 h-3 shrink-0" />
+                                    <span>Visualizar</span>
+                                  </button>
+                                  <button
+                                    onClick={() => handlePrintDocument(linha.avulso!)}
+                                    className="w-8 h-8 bg-white border border-slate-200/80 hover:bg-emerald-50 hover:text-emerald-600 rounded-lg flex items-center justify-center shadow-xs text-slate-500 transition-all cursor-pointer"
+                                    title={isNativePlatform() ? "Baixar Comprovante Fiscal" : "Imprimir Comprovante Fiscal"}
+                                  >
+                                    <Printer className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
+                              )}
 
                               <button
-                                onClick={() => deletarDocumento(docItem)}
+                                onClick={async () => {
+                                  // Apagar a nota apaga os dois arquivos: deixar
+                                  // só o XML para trás criaria uma linha órfã
+                                  // que o usuário não entenderia.
+                                  for (const alvo of [linha.pdf, linha.xml, linha.avulso]) {
+                                    if (alvo) await deletarDocumento(alvo);
+                                  }
+                                }}
                                 className="w-8 h-8 bg-white border border-slate-200/80 hover:bg-red-50 hover:text-red-600 rounded-lg flex items-center justify-center shadow-xs text-slate-400 hover:border-red-150 transition-all cursor-pointer"
                                 title="Remover"
                               >
