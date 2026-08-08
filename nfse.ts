@@ -435,6 +435,106 @@ function desempacotar(b64: string): string {
 }
 
 // ============================================================================
+// LEITURA DO XML DA NOTA — a fonte da verdade
+// ============================================================================
+//
+// A DANFSe tem que ser montada a partir do XML que o Portal devolveu, e não dos
+// campos que a gente lembrou de guardar num documento à parte. Duas razões:
+//
+//  1. O NÚMERO DA NOTA NÃO É O NOSSO. Nós escolhemos o número da DPS (a
+//     declaração). O Portal responde com o número da NFS-e, que é a sequência
+//     dele por CNPJ e pode ser completamente diferente — a primeira nota do
+//     MEI Flow saiu com DPS nº 1 e NFS-e nº 3. Imprimir o número errado faz o
+//     cliente procurar uma nota que não existe.
+//  2. Qualquer campo que a gente esqueça de copiar aparece vazio na folha, como
+//     aconteceu com a descrição do serviço.
+//
+// Ler do XML resolve os dois de uma vez, e continua funcionando para notas
+// emitidas antes de qualquer campo novo existir.
+
+/** Tira o conteúdo de uma tag, ignorando prefixo de namespace. */
+function tag(xml: string, nome: string): string {
+  const m = xml.match(new RegExp(`<(?:\\w+:)?${nome}(?:\\s[^>]*)?>([\\s\\S]*?)</(?:\\w+:)?${nome}>`));
+  return m ? m[1].trim() : "";
+}
+
+/** Primeiro valor encontrado entre vários nomes possíveis. */
+function tagQualquer(xml: string, nomes: string[]): string {
+  for (const n of nomes) {
+    const v = tag(xml, n);
+    if (v) return v;
+  }
+  return "";
+}
+
+/**
+ * Extrai da NFS-e tudo que a folha impressa precisa.
+ *
+ * Feito com busca por nome de tag, e não com um leitor de XML completo, porque
+ * o layout varia de versão para versão e um leitor rígido quebraria a folha
+ * inteira por causa de um campo novo. Aqui, campo que não existe volta vazio e
+ * o resto continua saindo.
+ */
+export function lerDadosDaNota(xmlNota: string) {
+  const x = String(xmlNota || "");
+
+  // O bloco do prestador aparece como <emit> na NFS-e e como <prest> na DPS.
+  const blocoPrest = tagQualquer(x, ["emit", "prest"]);
+  const blocoToma = tag(x, "toma");
+  const blocoServ = tag(x, "serv");
+  const blocoValores = tag(x, "valores");
+  const blocoCServ = tag(blocoServ, "cServ");
+  const blocoInfoCompl = tag(blocoServ, "infoCompl");
+
+  return {
+    // O número que vale para o cliente é o da NFS-e.
+    numeroNfse: tagQualquer(x, ["nNFSe", "nNFSE"]),
+    numeroDps: tag(x, "nDPS"),
+    serie: tag(x, "serie"),
+    chave: tagQualquer(x, ["chaveAcesso", "ChaveAcesso"]),
+    emitidaEm: tagQualquer(x, ["dhProc", "dhEmi"]),
+    competencia: tag(x, "dCompet"),
+    ambiente: tag(x, "tpAmb") === "1" ? "producao" : "homologacao",
+
+    prestador: {
+      nome: tag(blocoPrest, "xNome"),
+      cnpj: tagQualquer(blocoPrest, ["CNPJ", "CPF"]),
+      inscricaoMunicipal: tag(blocoPrest, "IM"),
+      fone: tag(blocoPrest, "fone"),
+      email: tag(blocoPrest, "email"),
+      logradouro: tag(blocoPrest, "xLgr"),
+      numero: tag(blocoPrest, "nro"),
+      bairro: tag(blocoPrest, "xBairro"),
+      cep: tag(blocoPrest, "CEP"),
+      municipio: tag(blocoPrest, "cMun"),
+    },
+
+    // Sem bloco <toma>, o Portal imprime "tomador não identificado".
+    tomador: blocoToma
+      ? {
+          nome: tag(blocoToma, "xNome"),
+          documento: tagQualquer(blocoToma, ["CNPJ", "CPF"]),
+          email: tag(blocoToma, "email"),
+        }
+      : null,
+
+    servico: {
+      descricao: tag(blocoCServ, "xDescServ"),
+      codigoTributacao: tag(blocoCServ, "cTribNac"),
+      codigoNbs: tag(blocoCServ, "cNBS"),
+      localPrestacao: tag(tag(blocoServ, "locPrest"), "cLocPrestacao"),
+      informacoesComplementares: tag(blocoInfoCompl, "xInfComp"),
+    },
+
+    valores: {
+      servico: Number(tag(tag(blocoValores, "vServPrest"), "vServ") || 0),
+      liquido: Number(tagQualquer(blocoValores, ["vLiq", "vLiqNFSe"]) || 0),
+      issRetido: tag(tag(tag(blocoValores, "trib"), "tribMun"), "tpRetISSQN") === "2",
+    },
+  };
+}
+
+// ============================================================================
 // ARQUIVO DIGITAL — a nota é documento de guarda obrigatória
 // ============================================================================
 
@@ -739,6 +839,15 @@ async function emitirNota(
   const xmlNota = desempacotar(data?.nfseXmlGZipB64 || data?.NfseXmlGZipB64 || "");
 
   /**
+   * ⚠️ NÚMERO DA NOTA ≠ NÚMERO DA DPS.
+   *
+   * `numero` acima é o da DPS, que nós escolhemos. O número que o cliente vê e
+   * cita é o da NFS-e, que o Portal atribui na sequência dele por CNPJ. Na
+   * primeira nota do MEI Flow deu DPS 1 e NFS-e 3.
+   */
+  const numeroNfse = Number(lerDadosDaNota(xmlNota).numeroNfse || 0) || 0;
+
+  /**
    * ARQUIVAMENTO AUTOMÁTICO — a partir daqui nada pode derrubar a emissão.
    *
    * A nota já existe no Portal. Se o arquivamento falhar, o pior cenário é o
@@ -778,7 +887,7 @@ async function emitirNota(
   }
 
   return {
-    chave, numero, serie, idDps, xml: xmlNota,
+    chave, numero, numeroNfse, serie, idDps, xml: xmlNota,
     danfseB64,
     servicoApelido: servico.apelido || "",
     servicoCodigo: so(servico.codigo),
@@ -1200,6 +1309,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         lancamentoId: lancamentoId ? String(lancamentoId) : "",
         chave: r.chave,
         numero: r.numero,
+        numeroNfse: r.numeroNfse || 0,
         serie: r.serie,
         idDps: r.idDps,
         clienteNome: clienteNome || "",
@@ -1238,7 +1348,9 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         .map((d: any) => {
           const n = d.data();
           return {
-            chave: n.chave, numero: n.numero, serie: n.serie,
+            chave: n.chave, numero: n.numero,
+            numeroNfse: n.numeroNfse || 0,
+            serie: n.serie,
             clienteNome: n.clienteNome, clienteDocumento: n.clienteDocumento || "",
             valor: n.valor,
             descricaoServico: n.descricaoServico || "",
@@ -1317,6 +1429,54 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         });
       }
       res.json({ success: true, pdfBase64: pdf.toString("base64") });
+    } catch (err: any) {
+      const { status, mensagem } = explicar(err);
+      res.status(status).json({ success: false, mensagem });
+    }
+  });
+
+  /**
+   * Dados da nota lidos do XML — é com isto que a folha impressa é montada.
+   *
+   * Preferimos o XML guardado; se por algum motivo não tivermos, buscamos no
+   * Portal. Assim a folha sai correta até para notas emitidas antes de qualquer
+   * campo novo existir no banco.
+   */
+  app.get("/api/nfse/:chave/dados", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const chave = String(req.params.chave);
+
+      const snap = await db.collection("nfse_emitidas").doc(chave).get();
+      const registro = snap.exists && snap.data().userId === uid ? snap.data() : null;
+      let xmlNota = registro?.xml || "";
+
+      if (!xmlNota) {
+        const { agente } = await certificadoDoUsuario(db, uid);
+        const { data } = await axios.get(`${baseUrl()}/nfse/${chave}`, {
+          httpsAgent: agente,
+          headers: { Accept: "application/json" },
+          timeout: 30000,
+        });
+        xmlNota = desempacotar(data?.nfseXmlGZipB64 || data?.NfseXmlGZipB64 || "");
+      }
+      if (!xmlNota) throw new Error("XML_INDISPONIVEL");
+
+      const dados = lerDadosDaNota(xmlNota);
+      res.json({
+        success: true,
+        dados,
+        // O registro serve de reserva para o que o XML não trouxer.
+        registro: registro
+          ? {
+              clienteNome: registro.clienteNome || "",
+              clienteDocumento: registro.clienteDocumento || "",
+              valor: Number(registro.valor || 0),
+              observacao: registro.observacao || "",
+              ambiente: registro.ambiente || "",
+            }
+          : null,
+      });
     } catch (err: any) {
       const { status, mensagem } = explicar(err);
       res.status(status).json({ success: false, mensagem });
