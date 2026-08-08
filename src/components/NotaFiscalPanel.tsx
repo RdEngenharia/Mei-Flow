@@ -6,7 +6,9 @@ import {
   Search, Plus, Star, Printer, Download, Copy, Receipt,
 } from "lucide-react";
 import { auth } from "../firebase";
-import { getApiUrl, saveHtmlElementAsPdf } from "../utils/nativeFile";
+import { getApiUrl, savePdfCrossPlatform } from "../utils/nativeFile";
+import { desenharDanfse, nomeArquivoDanfse } from "../utils/danfsePdf";
+import { carregarLogoBase64 } from "../utils/logoImagem";
 import {
   buscarServicos, formatarCodigoServico, descricaoDoCodigo, ServicoNacional,
 } from "../data/servicosNfse";
@@ -485,15 +487,62 @@ export default function NotaFiscalPanel({
         return;
       }
 
-      if (!folhaNotaRef.current) {
-        triggerToast?.("⚠ Abra a nota primeiro para gerar o PDF.");
+      /**
+       * ⚠️ NÃO VOLTE A USAR html2canvas AQUI.
+       *
+       * Esta parte fotografava a folha da tela. O usuário recebeu um PDF com
+       * texto miúdo, fonte serifada, sem bordas, amontoado no canto — porque o
+       * html2canvas clona a página num quadro à parte e corre com o
+       * carregamento da folha de estilo. Quando perde a corrida, fotografa HTML
+       * cru, e não avisa. A logo também nunca saía: ela vem do Storage e a
+       * resposta não traz o cabeçalho que permitiria desenhá-la.
+       *
+       * Agora a DANFSe é DESENHADA com jsPDF, pelo MESMO módulo que o servidor
+       * usa para arquivar. Impresso aqui ou guardado lá, o papel é idêntico.
+       */
+      const dados = dadosNota || (await (async () => {
+        const rr = await fetch(getApiUrl(`/api/nfse/${nota.chave}/dados`), { headers: await comToken() });
+        const dd = await rr.json().catch(() => ({}));
+        return dd?.dados || null;
+      })());
+
+      if (!dados) {
+        triggerToast?.("⚠ Não consegui ler o XML da nota para montar o PDF.");
         return;
       }
-      await saveHtmlElementAsPdf(
-        folhaNotaRef.current,
-        `DANFSe_${nota.numero}_${nota.serie}.pdf`,
-        { umaPagina: true }
-      );
+
+      let qr = qrCode;
+      if (!qr) {
+        try {
+          const { default: QRCode } = await import("qrcode");
+          qr = await QRCode.toDataURL(dados.linkVerificacao || dados.chave || nota.chave, {
+            margin: 0, width: 240, errorCorrectionLevel: "M",
+          });
+        } catch { qr = ""; }
+      }
+
+      const cli = clientes?.find((c: any) => {
+        const doc1 = String(c?.documento || c?.cpfCnpj || "").replace(/\D/g, "");
+        const doc2 = String(dados?.tomador?.documento || "").replace(/\D/g, "");
+        return doc1 && doc2 && doc1 === doc2;
+      });
+
+      const { jsPDF } = await import("jspdf");
+      const pdf = new jsPDF({ unit: "mm", format: "a4" });
+      desenharDanfse(pdf, dados, {
+        nomeExibicao: meiName,
+        municipio: municipioPrestador,
+        tomadorEndereco: cli ? {
+          logradouro: cli.endereco || cli.logradouro, numero: cli.numero,
+          bairro: cli.bairro, cidade: cli.cidade, uf: cli.uf, cep: cli.cep,
+        } : undefined,
+        tomadorTelefone: cli?.telefone,
+        tomadorEmail: cli?.email,
+        logoBase64: await carregarLogoBase64(companyLogo),
+        qrBase64: qr,
+      });
+
+      await savePdfCrossPlatform(pdf, nomeArquivoDanfse(dados));
       triggerToast?.("✓ PDF da nota gerado.");
     } catch (e: any) {
       triggerToast?.(`⚠ ${e.message || "Não consegui gerar o PDF."}`);

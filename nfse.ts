@@ -58,6 +58,8 @@ import crypto from "crypto";
 import forge from "node-forge";
 import { SignedXml } from "xml-crypto";
 import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
+import { desenharDanfse, type DadosDanfse, type ExtrasDanfse } from "./src/utils/danfsePdf.js";
+import { carregarLogoBase64 } from "./src/utils/logoImagem.js";
 
 const env = (k: string) => (process.env[k] || "").trim();
 
@@ -658,6 +660,86 @@ async function arquivarNaPasta(
 }
 
 /**
+ * Monta a DANFSe em PDF aqui no servidor.
+ *
+ * É o mesmo desenho que a tela usa — o arquivo danfsePdf.ts é compartilhado.
+ * Fazer no servidor é o que permite guardar o PDF no Arquivo Digital junto do
+ * XML, sem depender de o usuário abrir a nota no navegador.
+ *
+ * Nunca lança: nota emitida não pode falhar por causa do PDF.
+ */
+async function montarDanfsePdf(
+  db: any,
+  uid: string,
+  dados: DadosDanfse,
+  municipio?: string
+): Promise<Buffer | null> {
+  try {
+    const { jsPDF } = await import("jspdf");
+    const QRCode = (await import("qrcode")).default;
+
+    const extras: ExtrasDanfse = { municipio };
+
+    // Logo e nome de exibição vêm do perfil do MEI.
+    try {
+      const perfil = await db.collection("users").doc(uid).get();
+      if (perfil.exists) {
+        const u = perfil.data();
+        extras.nomeExibicao = u.meiName || u.nomeComercial || u.razaoSocial || undefined;
+        /**
+         * ⚠️ A LOGO CHEGA COMO URL, NÃO COMO BASE64.
+         *
+         * A versão anterior desta linha só aceitava logo começando com
+         * "data:image". Parecia razoável — era assim que o MEI Flow guardava.
+         * Só que a logo passou a ir para o Firebase Storage (o Firestore tem
+         * teto de ~1 MiB por documento e a imagem estourava esse limite,
+         * travando qualquer edição de perfil), e desde então `companyLogo` é
+         * uma URL. Resultado: a condição nunca era verdadeira e TODA nota saía
+         * sem logo, exatamente como o usuário relatou.
+         *
+         * `carregarLogoBase64` aceita as duas formas e nunca lança.
+         */
+        extras.logoBase64 = await carregarLogoBase64(u.companyLogo || u.logoUrl);
+      }
+    } catch { /* segue sem logo */ }
+
+    // Endereço e telefone do tomador saem do cadastro de clientes: o Portal
+    // não recebe esses campos na DPS hoje.
+    const docTomador = so(dados.tomador?.documento);
+    if (docTomador) {
+      try {
+        const cli = await db.collection("customers")
+          .where("userId", "==", uid).where("cpfCnpj", "==", docTomador).limit(1).get();
+        const achado = cli.empty
+          ? (await db.collection("customers").where("userId", "==", uid).get()).docs
+              .find((c: any) => so(c.data().cpfCnpj) === docTomador)
+          : cli.docs[0];
+        if (achado) {
+          const c = achado.data();
+          extras.tomadorEndereco = c.endereco || undefined;
+          extras.tomadorTelefone = c.telefone || undefined;
+          extras.tomadorEmail = c.email || undefined;
+        }
+      } catch { /* sem cadastro, a folha diz "não informado" */ }
+    }
+
+    if (dados.chave) {
+      extras.qrBase64 = await QRCode.toDataURL(
+        `https://www.nfse.gov.br/consultapublica?chaveAcesso=${dados.chave}`,
+        { margin: 0, width: 300, errorCorrectionLevel: "M" }
+      );
+    }
+
+    const doc = new jsPDF({ unit: "mm", format: "a4" });
+    desenharDanfse(doc, dados, extras);
+    return Buffer.from(doc.output("arraybuffer"));
+  } catch (err: any) {
+    console.error("[NFS-e] Não consegui montar o PDF da nota:", err.message);
+    return null;
+  }
+}
+
+/**
  * Tenta baixar a DANFSe pronta do Portal.
  *
  * ⚠️ Este endereço NÃO está no manual oficial dos contribuintes — o manual
@@ -924,17 +1006,27 @@ async function emitirNota(
       });
     }
 
-    const pdf = ehProducao() ? await baixarDanfseOficial(cert, chave) : null;
-    if (pdf) {
-      danfseB64 = pdf.toString("base64");
-      await arquivarNaPasta(db, adminStorage, firebaseConfig, {
-        userId: uid,
-        conteudo: pdf,
-        nomeArquivo: `${rotulo}.pdf`,
-        contentType: "application/pdf",
-        quando,
-        referenciaId: `nfse_pdf_${chave || idDps}`,
-      });
+    /**
+     * O PDF vai para a pasta junto do XML.
+     *
+     * Preferimos a DANFSe oficial do Portal quando ela existe; senão, montamos
+     * a nossa. Nos dois casos o usuário abre a pasta do mês e vê a nota, em vez
+     * de encontrar só um XML que o navegador mostra como texto cru.
+     */
+    if (ehProducao()) {
+      const pdf = (await baixarDanfseOficial(cert, chave))
+        || (await montarDanfsePdf(db, uid, lerDadosDaNota(xmlNota), cfg.municipio));
+      if (pdf) {
+        danfseB64 = pdf.toString("base64");
+        await arquivarNaPasta(db, adminStorage, firebaseConfig, {
+          userId: uid,
+          conteudo: pdf,
+          nomeArquivo: `${rotulo}.pdf`,
+          contentType: "application/pdf",
+          quando,
+          referenciaId: `nfse_pdf_${chave || idDps}`,
+        });
+      }
     }
   } catch (err: any) {
     console.error("[NFS-e] Nota emitida, mas o arquivamento falhou:", err.message);
@@ -1554,10 +1646,15 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
       const snap = await db.collection("nfse_emitidas").where("userId", "==", uid).get();
 
       let arquivadas = 0;
+      let pdfs = 0;
       let ignoradasTeste = 0;
       let semXml = 0;
       let removidasTeste = 0;
       const problemas: string[] = [];
+
+      // O município entra na folha impressa; lido uma vez só, fora do laço.
+      const cfgSnap = await db.collection("nfse_config").doc(uid).get();
+      const municipioCfg = cfgSnap.exists ? cfgSnap.data()?.municipio : undefined;
 
       for (const doc of snap.docs) {
         const n = doc.data();
@@ -1573,21 +1670,23 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
          */
         if (ehTeste) {
           ignoradasTeste++;
-          const lixo = await db
-            .collection("documentos")
-            .where("userId", "==", uid)
-            .where("referenciaId", "==", `nfse_xml_${chave}`)
-            .get();
-          for (const alvo of lixo.docs) {
-            try {
-              const meta = alvo.data();
-              if (meta.storagePath) {
-                const bucket = firebaseConfig?.storageBucket || "mei-flow-692d9.firebasestorage.app";
-                await adminStorage.bucket(bucket).file(meta.storagePath).delete().catch(() => {});
-              }
-              await alvo.ref.delete();
-              removidasTeste++;
-            } catch { /* se não sair agora, sai na próxima */ }
+          for (const ref of [`nfse_xml_${chave}`, `nfse_pdf_${chave}`]) {
+            const lixo = await db
+              .collection("documentos")
+              .where("userId", "==", uid)
+              .where("referenciaId", "==", ref)
+              .get();
+            for (const alvo of lixo.docs) {
+              try {
+                const meta = alvo.data();
+                if (meta.storagePath) {
+                  const bucket = firebaseConfig?.storageBucket || "mei-flow-692d9.firebasestorage.app";
+                  await adminStorage.bucket(bucket).file(meta.storagePath).delete().catch(() => {});
+                }
+                await alvo.ref.delete();
+                removidasTeste++;
+              } catch { /* se não sair agora, sai na próxima */ }
+            }
           }
           continue;
         }
@@ -1608,12 +1707,38 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
             referenciaId: `nfse_xml_${chave}`,
           });
           arquivadas++;
+
+          /**
+           * O PDF também, e não só o XML.
+           *
+           * O XML é o documento fiscal — é ele que a Receita reconhece e é ele
+           * que o MEI é obrigado a guardar por cinco anos. Mas ninguém manda um
+           * XML para o cliente. O usuário pediu os dois no Arquivo Digital, e
+           * as notas emitidas antes desta mudança ficaram só com o XML: este
+           * laço completa o que falta.
+           *
+           * `arquivarNaPasta` é idempotente pelo referenciaId, então rodar de
+           * novo não duplica nada.
+           */
+          const pdf = await montarDanfsePdf(db, uid, lerDadosDaNota(n.xml), municipioCfg);
+          if (pdf) {
+            await arquivarNaPasta(db, adminStorage, firebaseConfig, {
+              userId: uid,
+              conteudo: pdf,
+              nomeArquivo: `${rotulo}.pdf`,
+              contentType: "application/pdf",
+              quando: isNaN(quando.getTime()) ? new Date() : quando,
+              referenciaId: `nfse_pdf_${chave}`,
+            });
+            pdfs++;
+          }
         } catch (err: any) {
           problemas.push(`${rotulo}: ${err.message}`);
         }
       }
 
       const partes = [`${arquivadas} nota(s) real(is) guardada(s)`];
+      if (pdfs) partes.push(`${pdfs} PDF(s) gerado(s)`);
       if (removidasTeste) partes.push(`${removidasTeste} arquivo(s) de teste removido(s)`);
       if (ignoradasTeste && !removidasTeste) partes.push(`${ignoradasTeste} nota(s) de teste ignorada(s)`);
       if (semXml) partes.push(`${semXml} sem XML`);
@@ -1622,6 +1747,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         success: true,
         total: snap.size,
         arquivadas,
+        pdfs,
         ignoradasTeste,
         removidasTeste,
         semXml,

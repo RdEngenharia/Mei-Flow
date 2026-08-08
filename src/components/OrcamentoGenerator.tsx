@@ -8,7 +8,9 @@ import {
 import { db, saveOrcamentoToFirebase, fetchOrcamentosFromFirebase,
          deleteOrcamentoFromFirebase, normalizarOrcamento } from "../firebase";
 import { collection, getDocs } from "firebase/firestore";
-import { saveHtmlElementAsPdf, isNativePlatform } from "../utils/nativeFile";
+import { savePdfCrossPlatform, isNativePlatform } from "../utils/nativeFile";
+import { desenharOrcamento, nomeArquivoOrcamento } from "../utils/orcamentoPdf";
+import { carregarLogoBase64 } from "../utils/logoImagem";
 import { CatalogItem, Cliente, Orcamento, ItemOrcamento, SituacaoOrcamento } from "../types";
 
 /**
@@ -147,6 +149,23 @@ export default function OrcamentoGenerator({
   const [activePreviewQuote, setActivePreviewQuote] = useState<Orcamento | null>(null);
   const printableRef = useRef<HTMLDivElement>(null);
   const [isSavingQuotePdf, setIsSavingQuotePdf] = useState(false);
+
+  /**
+   * LOGO PRONTA PARA DESENHAR.
+   *
+   * `companyLogo` chega como URL do Firebase Storage (a imagem em si não cabe
+   * no documento do Firestore, que tem teto de ~1 MiB). URL serve para a tag
+   * <img> mas NÃO serve para o jsPDF, que precisa dos bytes. Buscamos uma vez
+   * e guardamos como data URI — é isso que faz a logo finalmente aparecer no
+   * PDF do orçamento.
+   */
+  const [logoPronta, setLogoPronta] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let vivo = true;
+    if (planType !== "premium" || !companyLogo) { setLogoPronta(undefined); return; }
+    carregarLogoBase64(companyLogo).then((b64) => { if (vivo) setLogoPronta(b64); });
+    return () => { vivo = false; };
+  }, [companyLogo, planType]);
 
   const subtotal = somaItens(itens);
   const descontoNum = Math.max(0, Number(desconto) || 0);
@@ -390,24 +409,72 @@ export default function OrcamentoGenerator({
   // --------------------------------------------------------------------------
 
   /**
-   * BAIXAR PDF — o mesmo caminho na web e no aplicativo.
+   * ⚠️ ESTAS DUAS LINHAS PRECISAM FICAR ANTES DE `baixarPdf`.
    *
-   * Antes, na web, isto chamava a impressão do navegador. Mesmo com a folha de
-   * estilo certa, o Chrome ainda enfia o cabeçalho dele ("data, MEI Flow, URL")
-   * e depende de o usuário desmarcar opções no diálogo de impressão. Gerando o
-   * PDF nós mesmos, o resultado é o mesmo em qualquer lugar: uma folha, sem
-   * cabeçalho de navegador, sem página em branco.
+   * Já perdemos uma tela inteira para isso noutro painel: um `const` usado por
+   * uma função declarada acima dele quebra com "Cannot access before
+   * initialization" assim que alguém mexe na ordem. Declarar antes custa nada e
+   * tira o risco de vez.
+   */
+  const itensDaFolha = activePreviewQuote?.itens?.length
+    ? activePreviewQuote.itens
+    : normalizarOrcamento(activePreviewQuote || {}).itens || [];
+  const subtotalFolha = somaItens(itensDaFolha);
+
+  /**
+   * BAIXAR PDF — desenhado, não fotografado.
+   *
+   * ⚠️ NÃO VOLTE A USAR html2canvas AQUI.
+   *
+   * A versão anterior chamava `saveHtmlElementAsPdf`, que fotografa o elemento
+   * da tela. O usuário recebeu o resultado assim: texto miúdo, fonte serifada,
+   * sem bordas, amontoado num canto da folha. A prova ficou no próprio arquivo
+   * — a imagem embutida tinha 3808 px de largura para uma folha que na tela tem
+   * 672 px. O html2canvas clona a página num quadro à parte e precisa recarregar
+   * a folha de estilo; quando a captura acontece antes de o CSS chegar, ele
+   * fotografa HTML cru. É uma corrida: funciona às vezes, falha outras. E a logo
+   * nunca aparecia, porque a imagem vem do Storage e a resposta não traz o
+   * cabeçalho que permitiria ao html2canvas desenhá-la.
+   *
+   * Agora o PDF é DESENHADO com jsPDF, pelo mesmo módulo em qualquer ambiente.
+   * Sai sempre igual, em uma folha, com a logo, e o texto é selecionável.
    *
    * O botão Imprimir continua existindo para quem quiser mandar direto para a
    * impressora — e para esse caso o index.css deixa a folha apresentável.
    */
   const baixarPdf = async () => {
-    if (!printableRef.current || isSavingQuotePdf) return;
+    if (!activePreviewQuote || isSavingQuotePdf) return;
     setIsSavingQuotePdf(true);
     try {
-      const quem = (activePreviewQuote?.clienteNome || "cliente").replace(/[^\wÀ-ÿ ]/g, "");
-      const nome = `orcamento_${activePreviewQuote?.numero || ""}_${quem}.pdf`.replace(/\s+/g, "_");
-      await saveHtmlElementAsPdf(printableRef.current, nome, { umaPagina: true });
+      const { jsPDF } = await import("jspdf");
+      const doc = new jsPDF({ unit: "mm", format: "a4" });
+
+      const dados = {
+        numero: activePreviewQuote.numero,
+        createdAt: activePreviewQuote.createdAt,
+        validade: activePreviewQuote.validade,
+        clienteNome: activePreviewQuote.clienteNome,
+        clienteDocumento: activePreviewQuote.clienteDocumento,
+        clienteEmail: activePreviewQuote.clienteEmail,
+        clienteTelefone: activePreviewQuote.clienteTelefone,
+        itens: itensDaFolha,
+        observacoes: activePreviewQuote.observacoes,
+        desconto: Number(activePreviewQuote.desconto) || 0,
+        total: Number(activePreviewQuote.total) || subtotalFolha,
+      };
+
+      desenharOrcamento(doc, dados, {
+        meiName,
+        cnpjPrestador,
+        inscricaoMunicipal,
+        telefonePrestador,
+        // Se a logo ainda não terminou de baixar, buscamos agora em vez de
+        // entregar um PDF sem ela.
+        logoBase64: logoPronta || (planType === "premium" ? await carregarLogoBase64(companyLogo) : undefined),
+        premium: planType === "premium",
+      });
+
+      await savePdfCrossPlatform(doc, nomeArquivoOrcamento(dados));
       triggerToast(isNativePlatform() ? "✓ PDF salvo em Downloads." : "✓ PDF gerado.");
     } catch (err) {
       console.error("Erro ao gerar PDF do orçamento:", err);
@@ -416,11 +483,6 @@ export default function OrcamentoGenerator({
       setIsSavingQuotePdf(false);
     }
   };
-
-  const itensDaFolha = activePreviewQuote?.itens?.length
-    ? activePreviewQuote.itens
-    : normalizarOrcamento(activePreviewQuote || {}).itens || [];
-  const subtotalFolha = somaItens(itensDaFolha);
 
   return (
     <div className="space-y-8 animate-fade-in text-left font-sans">
@@ -1102,9 +1164,15 @@ export default function OrcamentoGenerator({
               {/* cabeçalho */}
               <div className="flex justify-between items-start gap-6 border-b border-slate-300/80 pb-4">
                 <div className="space-y-1.5 max-w-sm text-left">
-                  {planType === "premium" && companyLogo ? (
+                  {/*
+                    Preferimos a logo já convertida (`logoPronta`). Ela é a
+                    mesma imagem, só que embutida — o que garante que a
+                    impressão do navegador também a desenhe, em vez de deixar
+                    um buraco branco esperando a rede.
+                  */}
+                  {planType === "premium" && (logoPronta || companyLogo) ? (
                     <div className="mb-1.5 shrink-0 max-w-[180px] max-h-12 overflow-hidden rounded-lg">
-                      <img src={companyLogo} alt="Logo" referrerPolicy="no-referrer" className="h-9 object-contain block border-0" />
+                      <img src={logoPronta || companyLogo} alt="Logo" referrerPolicy="no-referrer" className="h-9 object-contain block border-0" />
                     </div>
                   ) : null}
                   <h2 className="text-lg font-bold text-slate-900 tracking-tight leading-tight uppercase">{meiName}</h2>
