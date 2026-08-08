@@ -435,6 +435,129 @@ function desempacotar(b64: string): string {
 }
 
 // ============================================================================
+// ARQUIVO DIGITAL — a nota é documento de guarda obrigatória
+// ============================================================================
+
+/**
+ * ⚠️ NOMES DOS MESES: PRECISAM SER IDÊNTICOS AOS DE ArquivoDigitalMei.tsx.
+ *
+ * A tela do Arquivo Digital filtra por comparação literal de texto
+ * (`doc.mes === mesSelecionado`). Qualquer diferença — inclusive o cedilha de
+ * "Março" — faz o documento ser salvo no banco e NÃO aparecer na pasta. O mesmo
+ * cuidado existe no efi.ts, pelo mesmo motivo.
+ */
+const MESES = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
+
+/**
+ * Guarda um arquivo da nota no Arquivo Digital do MEI, na pasta do mês da
+ * emissão.
+ *
+ * O XML é o documento fiscal de verdade e é de guarda obrigatória — deixá-lo só
+ * numa coleção do banco é meio caminho. A DANFSe em PDF entra junto quando o
+ * Portal fornece.
+ *
+ * Idempotente pela `referenciaId`: emitir de novo, ou um webhook repetido, não
+ * cria segunda cópia.
+ */
+async function arquivarNaPasta(
+  db: any,
+  adminStorage: any,
+  firebaseConfig: any,
+  opts: {
+    userId: string;
+    conteudo: Buffer;
+    nomeArquivo: string;
+    contentType: string;
+    quando: Date;
+    referenciaId: string;
+  }
+) {
+  if (!db || !adminStorage) return null;
+
+  const jaExiste = await db
+    .collection("documentos")
+    .where("userId", "==", opts.userId)
+    .where("referenciaId", "==", opts.referenciaId)
+    .limit(1)
+    .get();
+  if (!jaExiste.empty) return jaExiste.docs[0].data();
+
+  const ano = opts.quando.getFullYear();
+  const mes = MESES[opts.quando.getMonth()];
+  const docId = `doc_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  const limpo = opts.nomeArquivo.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+  const storagePath = `usuarios/${opts.userId}/${ano}/${mes}/${limpo}`;
+  const downloadUrl = `/api/documentos/download?path=${encodeURIComponent(storagePath)}`;
+
+  const bucketName = firebaseConfig?.storageBucket || "mei-flow-692d9.firebasestorage.app";
+  await adminStorage.bucket(bucketName).file(storagePath).save(opts.conteudo, {
+    metadata: { contentType: opts.contentType },
+  });
+
+  const agora = new Date().toISOString();
+  const meta = {
+    id: docId,
+    nome: opts.nomeArquivo,
+    url: downloadUrl,
+    downloadUrl,
+    ano: Number(ano),  // NUMBER — a query do front usa where("ano","==",Number(...))
+    mes,               // STRING por extenso
+    criadoEm: agora,
+    uploadedAt: agora,
+    tamanho: opts.conteudo.length,
+    tipo: opts.contentType,
+    userId: opts.userId,
+    storagePath,
+    isSimulated: false,
+    origem: "nfse",
+    referenciaId: opts.referenciaId,
+    automatico: true,
+  };
+  await db.collection("documentos").doc(docId).set(meta);
+  console.log(`[NFS-e] Arquivado em ${mes}/${ano}: ${opts.nomeArquivo}`);
+  return meta;
+}
+
+/**
+ * Tenta baixar a DANFSe pronta do Portal.
+ *
+ * ⚠️ Este endereço NÃO está no manual oficial dos contribuintes — o manual
+ * documenta só o XML (`GET /nfse/{chave}`). O caminho da DANFSe aparece em
+ * relatos e em serviços intermediários, então tratamos como opcional: se
+ * responder um PDF, ótimo; se não, o próprio MEI Flow monta a DANFSe a partir
+ * do XML, que é o que realmente importa guardar.
+ *
+ * Nunca lança: falha aqui não pode derrubar uma emissão que já deu certo.
+ */
+async function baixarDanfseOficial(cert: Certificado, chave: string): Promise<Buffer | null> {
+  if (!chave) return null;
+  const caminhos = [`${baseUrl()}/danfse/${chave}`, `${baseUrl()}/nfse/${chave}/danfse`];
+  for (const url of caminhos) {
+    try {
+      const r = await axios.get(url, {
+        httpsAgent: cert.agente,
+        responseType: "arraybuffer",
+        headers: { Accept: "application/pdf" },
+        timeout: 30000,
+        validateStatus: () => true,
+      } as any);
+      const buf = Buffer.from(r.data || []);
+      // %PDF- é a assinatura de um PDF. Sem ela, o que voltou foi um JSON de
+      // erro disfarçado de sucesso.
+      if (r.status === 200 && buf.length > 1000 && buf.subarray(0, 5).toString() === "%PDF-") {
+        return buf;
+      }
+    } catch {
+      // Endereço inexistente, timeout, certificado recusado — segue para o próximo.
+    }
+  }
+  return null;
+}
+
+// ============================================================================
 // NUMERAÇÃO — cada nota precisa de um número único e sequencial
 // ============================================================================
 
@@ -489,6 +612,7 @@ function explicar(err: any): { status: number; mensagem: string; detalhe?: any }
     SEM_CHAVE_CRIPTO: [503, "O servidor está sem a chave de segurança NFSE_CRYPTO_KEY, então não pode guardar certificados."],
     COFRE_CORROMPIDO: [503, "O certificado guardado não pôde ser lido — provavelmente a chave de segurança do servidor mudou. Envie o certificado novamente."],
     SEM_CONFIG: [400, "Antes de emitir, preencha seus dados fiscais na tela de Nota Fiscal."],
+    XML_INDISPONIVEL: [404, "Não encontrei o XML desta nota, nem aqui nem no Portal."],
     SEM_SERVICO: [400, "Cadastre o serviço que você presta na tela de Nota Fiscal — é uma vez só."],
     VALOR_INVALIDO: [400, "O valor da nota precisa ser maior que zero."],
   };
@@ -532,6 +656,8 @@ function explicar(err: any): { status: number; mensagem: string; detalhe?: any }
  */
 async function emitirNota(
   db: any,
+  adminStorage: any,
+  firebaseConfig: any,
   uid: string,
   dados: {
     clienteNome?: string;
@@ -611,10 +737,52 @@ async function emitirNota(
 
   const chave = data?.chaveAcesso || data?.ChaveAcesso || "";
   const xmlNota = desempacotar(data?.nfseXmlGZipB64 || data?.NfseXmlGZipB64 || "");
+
+  /**
+   * ARQUIVAMENTO AUTOMÁTICO — a partir daqui nada pode derrubar a emissão.
+   *
+   * A nota já existe no Portal. Se o arquivamento falhar, o pior cenário é o
+   * documento não aparecer na pasta do mês — e não uma nota emitida que o
+   * usuário acha que não saiu. Por isso tudo daqui para baixo é try/catch.
+   */
+  let danfseB64 = "";
+  try {
+    const quando = new Date();
+    const rotulo = `NFSe_${numero}_${serie}`;
+
+    if (xmlNota) {
+      await arquivarNaPasta(db, adminStorage, firebaseConfig, {
+        userId: uid,
+        conteudo: Buffer.from(xmlNota, "utf8"),
+        nomeArquivo: `${rotulo}.xml`,
+        contentType: "application/xml",
+        quando,
+        referenciaId: `nfse_xml_${chave || idDps}`,
+      });
+    }
+
+    const pdf = await baixarDanfseOficial(cert, chave);
+    if (pdf) {
+      danfseB64 = pdf.toString("base64");
+      await arquivarNaPasta(db, adminStorage, firebaseConfig, {
+        userId: uid,
+        conteudo: pdf,
+        nomeArquivo: `${rotulo}.pdf`,
+        contentType: "application/pdf",
+        quando,
+        referenciaId: `nfse_pdf_${chave || idDps}`,
+      });
+    }
+  } catch (err: any) {
+    console.error("[NFS-e] Nota emitida, mas o arquivamento falhou:", err.message);
+  }
+
   return {
     chave, numero, serie, idDps, xml: xmlNota,
+    danfseB64,
     servicoApelido: servico.apelido || "",
     servicoCodigo: so(servico.codigo),
+    descricaoServico: dados.descricao || servico.descricao || cfg.descricaoPadrao || "",
   };
 }
 
@@ -649,7 +817,7 @@ export async function emitirNfseDaCobranca(
   const cfgSnap = await db.collection("nfse_config").doc(cobranca.userId).get();
   if (cfgSnap.exists && cfgSnap.data().ativo === false) return { desativado: true };
 
-  const { chave, numero, serie, idDps, xml: xmlNota } = await emitirNota(db, cobranca.userId, {
+  const { chave, numero, serie, idDps, xml: xmlNota } = await emitirNota(db, adminStorage, firebaseConfig, cobranca.userId, {
     clienteNome: cobranca.clienteNome,
     clienteDocumento: cobranca.clienteDocumento,
     valor: Number(cobranca.valor || 0),
@@ -1017,7 +1185,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         }
       }
 
-      const r = await emitirNota(db, uid, {
+      const r = await emitirNota(db, adminStorage, firebaseConfig, uid, {
         clienteNome,
         clienteDocumento,
         valor: Number(valor || 0),
@@ -1038,6 +1206,9 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         clienteDocumento: clienteDocumento || "",
         valor: Number(valor || 0),
         observacao: String(observacao || "").slice(0, 2000),
+        descricaoServico: r.descricaoServico || "",
+        servicoCodigo: r.servicoCodigo || "",
+        servicoApelido: r.servicoApelido || "",
         xml: r.xml ? r.xml.slice(0, 900000) : "",
         ambiente: ehProducao() ? "producao" : "homologacao",
         emitidaEm: new Date().toISOString(),
@@ -1068,13 +1239,84 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
           const n = d.data();
           return {
             chave: n.chave, numero: n.numero, serie: n.serie,
-            clienteNome: n.clienteNome, valor: n.valor,
+            clienteNome: n.clienteNome, clienteDocumento: n.clienteDocumento || "",
+            valor: n.valor,
+            descricaoServico: n.descricaoServico || "",
+            servicoCodigo: n.servicoCodigo || "",
+            observacao: n.observacao || "",
             emitidaEm: n.emitidaEm, ambiente: n.ambiente,
-            cobrancaId: n.cobrancaId,
+            cobrancaId: n.cobrancaId || "", lancamentoId: n.lancamentoId || "",
+            temXml: !!n.xml,
           };
         })
         .sort((a: any, b: any) => String(b.emitidaEm).localeCompare(String(a.emitidaEm)));
       res.json({ success: true, ambiente: ambienteAtual, total: notas.length, notas });
+    } catch (err: any) {
+      const { status, mensagem } = explicar(err);
+      res.status(status).json({ success: false, mensagem });
+    }
+  });
+
+  /**
+   * XML da nota — o documento fiscal de verdade, de guarda obrigatória.
+   *
+   * Serve o que está guardado; só vai ao Portal se por algum motivo não tivermos
+   * a cópia. Devolve como arquivo, para o navegador oferecer o download.
+   */
+  app.get("/api/nfse/:chave/xml", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const chave = String(req.params.chave);
+
+      const snap = await db.collection("nfse_emitidas").doc(chave).get();
+      let xmlNota = snap.exists && snap.data().userId === uid ? snap.data().xml : "";
+
+      if (!xmlNota) {
+        const { agente } = await certificadoDoUsuario(db, uid);
+        const { data } = await axios.get(`${baseUrl()}/nfse/${chave}`, {
+          httpsAgent: agente,
+          headers: { Accept: "application/json" },
+          timeout: 30000,
+        });
+        xmlNota = desempacotar(data?.nfseXmlGZipB64 || data?.NfseXmlGZipB64 || "");
+      }
+      if (!xmlNota) throw new Error("XML_INDISPONIVEL");
+
+      res.setHeader("Content-Type", "application/xml; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="NFSe_${chave}.xml"`);
+      res.send(xmlNota);
+    } catch (err: any) {
+      const { status, mensagem } = explicar(err);
+      res.status(status).json({ success: false, mensagem });
+    }
+  });
+
+  /**
+   * DANFSe pronta do Portal, quando existir.
+   *
+   * Devolve JSON com o PDF em base64 em vez dos bytes crus, para a tela poder
+   * decidir: se vier, mostra o PDF oficial; se não vier, monta a DANFSe aqui a
+   * partir dos dados da nota. Nunca é erro não ter — é o caso normal.
+   */
+  app.get("/api/nfse/:chave/danfse", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const chave = String(req.params.chave);
+
+      const snap = await db.collection("nfse_emitidas").doc(chave).get();
+      if (!snap.exists || snap.data().userId !== uid) {
+        return res.status(404).json({ success: false, mensagem: "Nota não encontrada." });
+      }
+
+      const cert = await certificadoDoUsuario(db, uid);
+      const pdf = await baixarDanfseOficial(cert, chave);
+      if (!pdf) {
+        return res.json({
+          success: false,
+          mensagem: "O Portal não forneceu a DANFSe pronta. O MEI Flow monta a sua.",
+        });
+      }
+      res.json({ success: true, pdfBase64: pdf.toString("base64") });
     } catch (err: any) {
       const { status, mensagem } = explicar(err);
       res.status(status).json({ success: false, mensagem });

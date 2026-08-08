@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   FileText, X, Loader2, AlertTriangle, CheckCircle2, ShieldCheck, Upload,
   Trash2, ChevronRight, Lock, RefreshCw, CalendarClock, ExternalLink,
-  Search, Plus, Star,
+  Search, Plus, Star, Printer, Download, Copy, Receipt,
 } from "lucide-react";
 import { auth } from "../firebase";
-import { getApiUrl } from "../utils/nativeFile";
+import { getApiUrl, saveHtmlElementAsPdf } from "../utils/nativeFile";
 import {
   buscarServicos, formatarCodigoServico, descricaoDoCodigo, ServicoNacional,
 } from "../data/servicosNfse";
@@ -29,8 +30,29 @@ import {
  *    um pode chamar a rota direto.
  */
 
+/** Uma nota já emitida, como a rota /api/nfse devolve. */
+type NotaEmitida = {
+  chave: string;
+  numero: number;
+  serie: string;
+  clienteNome?: string;
+  clienteDocumento?: string;
+  valor: number;
+  descricaoServico?: string;
+  servicoCodigo?: string;
+  observacao?: string;
+  emitidaEm: string;
+  ambiente?: string;
+};
+
 interface Props {
   triggerToast?: (msg: string) => void;
+  /** Dados do emissor, usados na DANFSe que o MEI Flow monta. */
+  meiName?: string;
+  cnpjPrestador?: string;
+  inscricaoMunicipal?: string;
+  telefonePrestador?: string;
+  municipioPrestador?: string;
   /** Abre a gaveta a partir de fora — usado pelo botão "Emitir Nota Fiscal" do topo. */
   abrirExterno?: boolean;
   /** Avisa quem abriu de fora que a gaveta fechou, para ele poder abrir de novo depois. */
@@ -80,7 +102,10 @@ const cnpjBR = (v?: string) => {
   return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
 };
 
-export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado, semCartao }: Props) {
+export default function NotaFiscalPanel({
+  triggerToast, abrirExterno, onFechado, semCartao,
+  meiName, cnpjPrestador, inscricaoMunicipal, telefonePrestador, municipioPrestador,
+}: Props) {
   const [aberto, setAberto] = useState(false);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -104,6 +129,13 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
   const [descricaoPadrao, setDescricaoPadrao] = useState("");
   const [emitirAoPagar, setEmitirAoPagar] = useState(true);
   const [salvando, setSalvando] = useState(false);
+
+  // Notas emitidas
+  const [notas, setNotas] = useState<NotaEmitida[]>([]);
+  const [carregandoNotas, setCarregandoNotas] = useState(false);
+  const [notaAberta, setNotaAberta] = useState<NotaEmitida | null>(null);
+  const [gerandoPdf, setGerandoPdf] = useState(false);
+  const folhaNotaRef = useRef<HTMLDivElement>(null);
 
   // Busca de serviço
   const [buscandoServico, setBuscandoServico] = useState(false);
@@ -171,8 +203,8 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
   }, []);
 
   useEffect(() => {
-    if (aberto) carregar();
-  }, [aberto, carregar]);
+    if (aberto) { carregar(); carregarNotas(); }
+  }, [aberto, carregar, carregarNotas]);
 
   // O botão do topo levanta a bandeira; aqui a gaveta responde.
   useEffect(() => {
@@ -282,6 +314,90 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
     setServicos(servicos.map((s) => ({ ...s, padrao: s.codigo === codigo })));
   }
 
+  const carregarNotas = useCallback(async () => {
+    setCarregandoNotas(true);
+    try {
+      const r = await fetch(getApiUrl("/api/nfse"), { headers: await comToken() });
+      const d = await r.json();
+      if (r.ok && Array.isArray(d.notas)) setNotas(d.notas);
+    } catch {
+      // Lista de notas não é crítica; a gaveta segue funcionando sem ela.
+    } finally {
+      setCarregandoNotas(false);
+    }
+  }, []);
+
+  /** Baixa o XML — o documento fiscal de verdade, que o MEI é obrigado a guardar. */
+  async function baixarXml(nota: NotaEmitida) {
+    try {
+      const r = await fetch(getApiUrl(`/api/nfse/${nota.chave}/xml`), { headers: await comToken() });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.mensagem || "Não consegui baixar o XML.");
+      }
+      const texto = await r.text();
+      const url = URL.createObjectURL(new Blob([texto], { type: "application/xml" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `NFSe_${nota.numero}_${nota.serie}.xml`;
+      a.click();
+      URL.revokeObjectURL(url);
+      triggerToast?.("✓ XML baixado.");
+    } catch (e: any) {
+      triggerToast?.(`⚠ ${e.message}`);
+    }
+  }
+
+  /**
+   * Gera o PDF da DANFSe.
+   *
+   * Tenta a DANFSe oficial do Portal primeiro. Se ele não fornecer — que é o
+   * caso normal, porque esse endereço não está no manual dos contribuintes — o
+   * MEI Flow imprime a folha que ele mesmo monta a partir dos dados da nota.
+   * Nos dois casos o cliente consegue conferir pela chave de acesso.
+   */
+  async function baixarDanfse(nota: NotaEmitida) {
+    if (gerandoPdf) return;
+    setGerandoPdf(true);
+    try {
+      const r = await fetch(getApiUrl(`/api/nfse/${nota.chave}/danfse`), { headers: await comToken() });
+      const d = await r.json().catch(() => ({}));
+
+      if (r.ok && d.success && d.pdfBase64) {
+        const bytes = Uint8Array.from(atob(d.pdfBase64), (c) => c.charCodeAt(0));
+        const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `DANFSe_${nota.numero}_${nota.serie}.pdf`;
+        a.click();
+        URL.revokeObjectURL(url);
+        triggerToast?.("✓ DANFSe oficial do Portal baixada.");
+        return;
+      }
+
+      if (!folhaNotaRef.current) {
+        triggerToast?.("⚠ Abra a nota primeiro para gerar o PDF.");
+        return;
+      }
+      await saveHtmlElementAsPdf(
+        folhaNotaRef.current,
+        `DANFSe_${nota.numero}_${nota.serie}.pdf`,
+        { umaPagina: true }
+      );
+      triggerToast?.("✓ PDF da nota gerado.");
+    } catch (e: any) {
+      triggerToast?.(`⚠ ${e.message || "Não consegui gerar o PDF."}`);
+    } finally {
+      setGerandoPdf(false);
+    }
+  }
+
+  function copiarChave(chave: string) {
+    navigator.clipboard?.writeText(chave)
+      .then(() => triggerToast?.("✓ Chave de acesso copiada. O cliente confere no site do governo."))
+      .catch(() => triggerToast?.("⚠ Não consegui copiar."));
+  }
+
   async function salvarConfig(e: React.FormEvent) {
     e.preventDefault();
     setSalvando(true);
@@ -298,6 +414,7 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
       const d = await r.json();
       if (!r.ok) throw new Error(d.mensagem || "Não consegui salvar.");
       triggerToast?.("Dados fiscais salvos.");
+      carregarNotas();
     } catch (e: any) {
       setErro(e.message);
     } finally {
@@ -804,6 +921,85 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
                 </button>
               </form>
 
+              {/* ------------------------------------------- notas emitidas */}
+              <div className="bg-white border border-slate-200/60 rounded-3xl p-5 text-left space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-extrabold text-slate-800 flex items-center gap-1.5">
+                    <Receipt className="w-4 h-4 text-indigo-500" /> Notas emitidas
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={carregarNotas}
+                    disabled={carregandoNotas}
+                    className="w-8 h-8 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-lg flex items-center justify-center cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${carregandoNotas ? "animate-spin" : ""}`} />
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  O XML de cada nota é guardado automaticamente no seu Arquivo Digital, na pasta do mês da
+                  emissão — ele é o documento fiscal de verdade e a lei obriga a guardar.
+                </p>
+
+                {carregandoNotas && notas.length === 0 ? (
+                  <div className="flex justify-center py-6 text-slate-400">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  </div>
+                ) : notas.length === 0 ? (
+                  <p className="text-[11px] text-slate-400 italic py-2">
+                    Nenhuma nota emitida {emProducao ? "em produção" : "em homologação"} ainda.
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-72 overflow-y-auto">
+                    {notas.map((n) => (
+                      <div key={n.chave || n.numero} className="bg-slate-50 border border-slate-200/60 rounded-2xl p-3.5 space-y-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-xs font-extrabold text-slate-800 truncate">
+                              Nº {n.numero}
+                              <span className="text-slate-300 font-normal"> · {n.clienteNome || "Sem tomador"}</span>
+                            </p>
+                            <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+                              {dataBR(String(n.emitidaEm || "").slice(0, 10))}
+                              {n.descricaoServico ? ` · ${n.descricaoServico.slice(0, 40)}` : ""}
+                            </p>
+                          </div>
+                          <span className="shrink-0 text-xs font-extrabold text-slate-900 font-mono">
+                            {Number(n.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-slate-200/70">
+                          <button
+                            type="button"
+                            onClick={() => setNotaAberta(n)}
+                            className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-[10px] font-bold cursor-pointer"
+                          >
+                            Ver / Imprimir
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => baixarXml(n)}
+                            className="px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold cursor-pointer flex items-center gap-1"
+                          >
+                            <Download className="w-3 h-3" /> XML
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => copiarChave(n.chave)}
+                            className="px-2 py-1 bg-white border border-slate-200 hover:bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold cursor-pointer flex items-center gap-1"
+                            title="Copiar a chave de acesso"
+                          >
+                            <Copy className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* Rota de fuga: enquanto a emissão automática não estiver 100%, o
                   caminho manual continua a um clique de distância. */}
               <div className="bg-white border border-slate-200/60 rounded-3xl p-5 text-left">
@@ -828,6 +1024,152 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
           </div>
         </div>
       )}
+
+      {/* ==================================== DANFSe — a folha da nota ======= */}
+      {notaAberta && createPortal((
+        <div id="print-overlay" className="fixed inset-0 z-[70] bg-slate-900/80 backdrop-blur-sm flex justify-center items-start p-4 sm:p-8 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col my-4">
+
+            <div className="pt-safe px-6 pb-4 bg-slate-100 border-b border-slate-200 flex items-center justify-between print:hidden">
+              <h3 className="font-bold text-slate-800 text-sm">
+                Nota nº {notaAberta.numero}
+                {(notaAberta.ambiente || "").startsWith("homolog") && (
+                  <span className="ml-2 text-[9px] font-extrabold uppercase tracking-widest text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                    Teste
+                  </span>
+                )}
+              </h3>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => baixarDanfse(notaAberta)}
+                  disabled={gerandoPdf}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all flex items-center gap-2 cursor-pointer disabled:opacity-60"
+                >
+                  {gerandoPdf
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /><span>Gerando...</span></>
+                    : <><Download className="w-4 h-4" /><span>Baixar PDF</span></>}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-3 py-2 bg-white hover:bg-slate-200 text-slate-600 border border-slate-200 text-xs font-bold rounded-xl cursor-pointer"
+                  title="Mandar direto para a impressora"
+                >
+                  <Printer className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setNotaAberta(null)}
+                  className="bg-white hover:bg-slate-200 text-slate-600 border border-slate-200 p-2 rounded-xl cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/*
+              A DANFSe que o MEI Flow monta.
+              É documento AUXILIAR: o que vale legalmente é o XML. A função dela
+              é ser lida por gente, e trazer a chave de acesso para o cliente
+              conferir a autenticidade no site do governo.
+            */}
+            <div ref={folhaNotaRef} data-folha="danfse" className="p-6 md:p-8 space-y-4 bg-white font-sans text-slate-800">
+
+              <div className="flex justify-between items-start gap-6 border-b-2 border-slate-800 pb-3">
+                <div>
+                  <p className="text-[9px] font-extrabold uppercase tracking-[0.2em] text-slate-400">Documento Auxiliar da</p>
+                  <h2 className="text-base font-extrabold text-slate-900 leading-tight">
+                    Nota Fiscal de Serviço eletrônica
+                  </h2>
+                  <p className="text-[10px] text-slate-500 font-medium mt-0.5">NFS-e — Padrão Nacional</p>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-[9px] font-extrabold uppercase tracking-widest text-slate-400">Número</p>
+                  <p className="text-xl font-bold text-slate-900 leading-none font-mono">{notaAberta.numero}</p>
+                  <p className="text-[10px] text-slate-500 font-mono mt-1">Série {notaAberta.serie}</p>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
+                <p className="text-[8px] font-extrabold uppercase tracking-widest text-slate-400">Chave de acesso</p>
+                <p className="text-[10px] font-mono text-slate-800 break-all leading-snug mt-0.5">{notaAberta.chave || "—"}</p>
+                <p className="text-[8px] text-slate-400 mt-1">
+                  Confira a autenticidade em nfse.gov.br, na consulta pública, usando esta chave.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="border border-slate-200 rounded-lg p-3">
+                  <p className="text-[8px] font-extrabold uppercase tracking-widest text-slate-400 mb-1">Prestador</p>
+                  <p className="text-[11px] font-bold text-slate-900 leading-snug">{meiName || cert?.titular || "—"}</p>
+                  <div className="text-[9px] text-slate-500 font-mono mt-1 space-y-0.5">
+                    <p>CNPJ: {cnpjPrestador || cnpjBR(cert?.cnpj)}</p>
+                    {inscricaoMunicipal && <p>Insc. Mun.: {inscricaoMunicipal}</p>}
+                    {telefonePrestador && <p>Fone: {telefonePrestador}</p>}
+                    {municipioPrestador && <p>Município: {municipioPrestador}</p>}
+                  </div>
+                  <p className="text-[9px] text-slate-500 mt-1.5 italic">Simples Nacional — MEI</p>
+                </div>
+
+                <div className="border border-slate-200 rounded-lg p-3">
+                  <p className="text-[8px] font-extrabold uppercase tracking-widest text-slate-400 mb-1">Tomador</p>
+                  <p className="text-[11px] font-bold text-slate-900 leading-snug">
+                    {notaAberta.clienteNome || "Tomador não identificado"}
+                  </p>
+                  {notaAberta.clienteDocumento && (
+                    <p className="text-[9px] text-slate-500 font-mono mt-1">
+                      CPF/CNPJ: {notaAberta.clienteDocumento}
+                    </p>
+                  )}
+                  <p className="text-[9px] text-slate-400 mt-1.5">
+                    Emitida em {dataBR(String(notaAberta.emitidaEm || "").slice(0, 10))}
+                  </p>
+                </div>
+              </div>
+
+              <div className="border border-slate-200 rounded-lg p-3">
+                <p className="text-[8px] font-extrabold uppercase tracking-widest text-slate-400 mb-1">Serviço prestado</p>
+                <p className="text-[11px] text-slate-800 leading-relaxed">
+                  {notaAberta.descricaoServico || "—"}
+                </p>
+                {notaAberta.servicoCodigo && (
+                  <p className="text-[9px] text-slate-400 font-mono mt-1">
+                    Código de tributação nacional: {String(notaAberta.servicoCodigo).replace(/(\d{2})(\d{2})(\d{2})/, "$1.$2.$3")}
+                  </p>
+                )}
+              </div>
+
+              {notaAberta.observacao && (
+                <div className="border border-slate-200 rounded-lg p-3">
+                  <p className="text-[8px] font-extrabold uppercase tracking-widest text-slate-400 mb-1">Informações complementares</p>
+                  <p className="text-[10px] text-slate-700 leading-relaxed whitespace-pre-line">{notaAberta.observacao}</p>
+                </div>
+              )}
+
+              <div className="bg-slate-900 text-white rounded-xl p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-[9px] font-extrabold uppercase tracking-widest text-slate-400">Tributação municipal</p>
+                  <p className="text-[10px] text-slate-200 mt-0.5">ISSQN não retido · Optante MEI</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[9px] font-extrabold uppercase tracking-widest text-slate-400">Valor total</p>
+                  <p className="text-2xl font-bold font-mono tracking-tight leading-tight">
+                    {Number(notaAberta.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-[8px] text-slate-400 text-center leading-relaxed pt-1">
+                Este é um documento auxiliar, sem valor fiscal por si. O documento fiscal é o arquivo XML da
+                NFS-e, guardado no Arquivo Digital.
+                {(notaAberta.ambiente || "").startsWith("homolog") &&
+                  " ATENÇÃO: nota emitida em ambiente de teste — não vale para a Receita."}
+              </p>
+            </div>
+
+          </div>
+        </div>
+      ), document.body)}
     </div>
   );
 }

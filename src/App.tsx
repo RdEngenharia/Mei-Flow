@@ -2104,7 +2104,13 @@ ${meiName}`;
 
             {/* SEÇÃO INTEGRADA: NOTA FISCAL (certificado A1 + dados fiscais) */}
             <div className="mt-8">
-              <NotaFiscalPanel triggerToast={triggerToast} />
+              <NotaFiscalPanel
+                triggerToast={triggerToast}
+                meiName={meiName}
+                cnpjPrestador={cnpjPrestador || ""}
+                inscricaoMunicipal={inscricaoMunicipal || ""}
+                telefonePrestador={telefonePrestador || ""}
+              />
             </div>
 
             {/* SEÇÃO INTEGRADA: ARQUIVO DIGITAL DO MEI */}
@@ -2706,6 +2712,10 @@ ${meiName}`;
       <NotaFiscalPanel
         semCartao
         triggerToast={triggerToast}
+        meiName={meiName}
+        cnpjPrestador={cnpjPrestador || ""}
+        inscricaoMunicipal={inscricaoMunicipal || ""}
+        telefonePrestador={telefonePrestador || ""}
         abrirExterno={abrirNotaFiscal}
         onFechado={() => { setAbrirNotaFiscal(false); setServicosNfse(null); }}
       />
