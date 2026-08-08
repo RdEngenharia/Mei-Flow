@@ -771,6 +771,28 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         return res.status(400).json({ success: false, mensagem: "Informe o código nacional do serviço que você presta." });
       }
 
+      /**
+       * ⚠️ A SÉRIE TEM FAIXA POR TIPO DE EMISSOR.
+       *
+       * O Portal divide as séries: 1 a 49999 para sistema próprio (é o nosso
+       * caso), 80000 a 99999 para a versão antiga da integração, e a faixa do
+       * meio, 50000 a 79999, é reservada ao emissor do próprio governo — web e
+       * aplicativo. Quem já emitia no Portal tem nota com série tipo 70000 e
+       * copia esse número para cá, o que devolve a rejeição E0010.
+       *
+       * Barramos aqui para o usuário não descobrir isso só na hora de emitir.
+       */
+      const serieNum = Number(so(serie) || 0);
+      if (serieNum >= 50000 && serieNum <= 79999) {
+        return res.status(400).json({
+          success: false,
+          mensagem: `A série ${so(serie)} é reservada ao emissor do próprio governo — o Portal recusa notas com ela vindas de outro sistema. Use uma série sua, entre 1 e 49999 (por exemplo 00001). A numeração dessa série nova começa do 1.`,
+        });
+      }
+      if (serieNum > 99999) {
+        return res.status(400).json({ success: false, mensagem: "A série vai no máximo até 99999." });
+      }
+
       const config = {
         userId: uid,
         cnpj: cnpjLimpo,

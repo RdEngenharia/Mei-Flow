@@ -509,7 +509,7 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
                     <input
                       value={serie}
                       onChange={(e) => setSerie(e.target.value)}
-                      placeholder="Ex.: 70000"
+                      placeholder="Ex.: 00001"
                       inputMode="numeric"
                       maxLength={5}
                       className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
@@ -528,9 +528,9 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
                 </div>
 
                 <p className="text-[11px] text-slate-500 leading-relaxed bg-amber-50 border border-amber-200 rounded-xl p-3">
-                  Se você já emitiu notas direto no Portal, a numeração precisa continuar de onde parou.
-                  Olhe a última nota que você emitiu e coloque aqui o número seguinte — senão o Portal
-                  recusa por número repetido.
+                  A série do MEI Flow tem que ser <strong>sua</strong>, entre 1 e 49999 — algo como 00001.
+                  Não copie a série da nota que você emitiu no site do governo (as de 50000 a 79999 são
+                  reservadas a ele, e o Portal recusa). Como a série é nova, a numeração dela começa no 1.
                 </p>
 
                 <div>
