@@ -287,13 +287,27 @@ function montarDps(d: {
   descricao: string;
   valor: number;
   codigoServico: string;
+  codigoNbs?: string;
   competencia: string;
 }): string {
   const docTomador = so(d.tomador.doc);
-  const tagTomador =
-    docTomador.length === 14
-      ? `<CNPJ>${docTomador}</CNPJ>`
-      : `<CPF>${docTomador.padStart(11, "0")}</CPF>`;
+
+  /**
+   * ⚠️ TOMADOR SEM DOCUMENTO = BLOCO INTEIRO FORA DA NOTA.
+   *
+   * Antes, quando o cliente não tinha CPF nem CNPJ, este código mandava
+   * `<CPF>00000000000</CPF>`. O Portal recusa: ou o tomador é identificado de
+   * verdade, ou ele não existe na nota. A nota que o Jonatan já emite sai com
+   * "TOMADOR DA OPERAÇÃO NÃO IDENTIFICADO", que é exatamente este caso.
+   */
+  const identificado = docTomador.length === 11 || docTomador.length === 14;
+  const blocoTomador = !identificado
+    ? ""
+    : `<toma>` +
+        (docTomador.length === 14 ? `<CNPJ>${docTomador}</CNPJ>` : `<CPF>${docTomador}</CPF>`) +
+        `<xNome>${xml(semAcento(d.tomador.nome)).slice(0, 300)}</xNome>` +
+        (d.tomador.email ? `<email>${xml(d.tomador.email)}</email>` : "") +
+      `</toma>`;
 
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +
@@ -310,20 +324,25 @@ function montarDps(d: {
     `<prest>` +
       `<CNPJ>${so(d.cnpjPrestador)}</CNPJ>` +
       `<regTrib>` +
-        // 1 = MEI. É o que dispensa o MEI do destaque de ISS na nota.
-        `<opSimpNac>1</opSimpNac>` +
+        /**
+         * ⚠️ 2 = OPTANTE MEI. NÃO TROQUE POR 1.
+         *
+         * A tabela é: 1 = Não optante do Simples Nacional, 2 = Optante MEI,
+         * 3 = Optante ME/EPP. Este campo já esteve como 1 aqui, por engano meu,
+         * o que declararia o Jonatan como empresa fora do Simples. Com 1 o
+         * Portal ainda exige alíquota de ISS — que MEI não destaca — e recusa
+         * a nota com a rejeição E0617.
+         */
+        `<opSimpNac>2</opSimpNac>` +
         `<regEspTrib>0</regEspTrib>` +
       `</regTrib>` +
     `</prest>` +
-    `<toma>` +
-      tagTomador +
-      `<xNome>${xml(semAcento(d.tomador.nome)).slice(0, 300)}</xNome>` +
-      (d.tomador.email ? `<email>${xml(d.tomador.email)}</email>` : "") +
-    `</toma>` +
+    blocoTomador +
     `<serv>` +
       `<locPrest><cLocPrestacao>${so(d.codMunicipio)}</cLocPrestacao></locPrest>` +
       `<cServ>` +
         `<cTribNac>${so(d.codigoServico)}</cTribNac>` +
+        (d.codigoNbs ? `<cNBS>${so(d.codigoNbs)}</cNBS>` : "") +
         `<xDescServ>${xml(semAcento(d.descricao)).slice(0, 2000)}</xDescServ>` +
       `</cServ>` +
     `</serv>` +
@@ -418,6 +437,7 @@ function explicar(err: any): { status: number; mensagem: string; detalhe?: any }
     SEM_CHAVE_CRIPTO: [503, "O servidor está sem a chave de segurança NFSE_CRYPTO_KEY, então não pode guardar certificados."],
     COFRE_CORROMPIDO: [503, "O certificado guardado não pôde ser lido — provavelmente a chave de segurança do servidor mudou. Envie o certificado novamente."],
     SEM_CONFIG: [400, "Antes de emitir, preencha os dados fiscais: CNPJ, código do município e código do serviço."],
+    VALOR_INVALIDO: [400, "O valor da nota precisa ser maior que zero."],
   };
   if (mapa[err.message]) return { status: mapa[err.message][0], mensagem: mapa[err.message][1] };
 
@@ -445,6 +465,66 @@ function explicar(err: any): { status: number; mensagem: string; detalhe?: any }
 // ============================================================================
 
 /**
+ * O CORAÇÃO DA EMISSÃO — usado tanto pelo boleto pago quanto pelo botão NFS-e
+ * de um lançamento do Livro Caixa.
+ *
+ * Recebe só os dados do serviço prestado; quem chama é que sabe de onde eles
+ * vieram. Devolve a chave, o número e o XML da nota.
+ */
+async function emitirNota(
+  db: any,
+  uid: string,
+  dados: { clienteNome?: string; clienteDocumento?: string; valor: number; descricao?: string }
+): Promise<any> {
+  const cfgSnap = await db.collection("nfse_config").doc(uid).get();
+  const cfg = cfgSnap.exists ? cfgSnap.data() : null;
+  if (!cfg?.cnpj || !cfg?.codMunicipio || !cfg?.codigoServico) throw new Error("SEM_CONFIG");
+
+  const valor = Number(dados.valor || 0);
+  if (!(valor > 0)) throw new Error("VALOR_INVALIDO");
+
+  const serie = cfg.serie || "00001";
+  const numero = await proximoNumero(db, uid, serie);
+  const idDps = montarIdDps(cfg.codMunicipio, cfg.cnpj, serie, numero);
+
+  const hoje = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+  const xmlDps = montarDps({
+    idDps,
+    serie,
+    numero,
+    codMunicipio: cfg.codMunicipio,
+    cnpjPrestador: cfg.cnpj,
+    regimeSimples: "1",
+    tomador: {
+      doc: dados.clienteDocumento || "",
+      nome: dados.clienteNome || "Consumidor",
+    },
+    descricao: dados.descricao || cfg.descricaoPadrao || "Prestacao de servicos",
+    valor,
+    codigoServico: cfg.codigoServico,
+    codigoNbs: cfg.codigoNbs || "",
+    competencia: hoje,
+  });
+
+  const cert = await certificadoDoUsuario(db, uid);
+  const assinado = assinarDps(xmlDps, idDps, cert);
+
+  const { data } = await axios.post(
+    `${baseUrl()}/nfse`,
+    { dpsXmlGZipB64: empacotar(assinado) },
+    {
+      httpsAgent: cert.agente,
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      timeout: 45000,
+    }
+  );
+
+  const chave = data?.chaveAcesso || data?.ChaveAcesso || "";
+  const xmlNota = desempacotar(data?.nfseXmlGZipB64 || data?.NfseXmlGZipB64 || "");
+  return { chave, numero, serie, idDps, xml: xmlNota };
+}
+
+/**
  * Emite a nota de uma cobrança já paga. É idempotente: se a cobrança já tem
  * nota, devolve a existente em vez de emitir outra. Nota duplicada dá muito
  * trabalho para cancelar.
@@ -464,48 +544,14 @@ export async function emitirNfseDaCobranca(
   }
 
   const cfgSnap = await db.collection("nfse_config").doc(cobranca.userId).get();
-  const cfg = cfgSnap.exists ? cfgSnap.data() : null;
-  if (!cfg?.cnpj || !cfg?.codMunicipio || !cfg?.codigoServico) throw new Error("SEM_CONFIG");
-  if (cfg.ativo === false) return { desativado: true };
+  if (cfgSnap.exists && cfgSnap.data().ativo === false) return { desativado: true };
 
-  const serie = cfg.serie || "00001";
-  const numero = await proximoNumero(db, cobranca.userId, serie);
-  const idDps = montarIdDps(cfg.codMunicipio, cfg.cnpj, serie, numero);
-
-  const hoje = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
-  const xmlDps = montarDps({
-    idDps,
-    serie,
-    numero,
-    codMunicipio: cfg.codMunicipio,
-    cnpjPrestador: cfg.cnpj,
-    regimeSimples: "1",
-    tomador: {
-      doc: cobranca.clienteDocumento || "",
-      nome: cobranca.clienteNome || "Consumidor",
-    },
-    descricao: cobranca.descricao || cfg.descricaoPadrao || "Prestacao de servicos",
+  const { chave, numero, serie, idDps, xml: xmlNota } = await emitirNota(db, cobranca.userId, {
+    clienteNome: cobranca.clienteNome,
+    clienteDocumento: cobranca.clienteDocumento,
     valor: Number(cobranca.valor || 0),
-    codigoServico: cfg.codigoServico,
-    competencia: hoje,
+    descricao: cobranca.descricao,
   });
-
-  const cert = await certificadoDoUsuario(db, cobranca.userId);
-  const assinado = assinarDps(xmlDps, idDps, cert);
-  const agente = cert.agente;
-
-  const { data } = await axios.post(
-    `${baseUrl()}/nfse`,
-    { dpsXmlGZipB64: empacotar(assinado) },
-    {
-      httpsAgent: agente,
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      timeout: 45000,
-    }
-  );
-
-  const chave = data?.chaveAcesso || data?.ChaveAcesso || "";
-  const xmlNota = desempacotar(data?.nfseXmlGZipB64 || data?.NfseXmlGZipB64 || "");
 
   await snap.ref.set(
     {
@@ -664,7 +710,16 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
     try {
       const uid = await exigirUsuario(req);
       const snap = await db.collection("nfse_config").doc(uid).get();
-      res.json({ success: true, config: snap.exists ? snap.data() : null });
+      const cfg = snap.exists ? snap.data() : null;
+
+      // Mostrar na tela qual será o número da próxima nota evita o erro mais
+      // chato do Portal: número de DPS repetido.
+      let proximo = 1;
+      if (cfg?.serie) {
+        const c = await db.collection("nfse_contadores").doc(`${uid}_${cfg.serie}`).get();
+        proximo = (c.exists ? Number(c.data().ultimo || 0) : 0) + 1;
+      }
+      res.json({ success: true, config: cfg, proximoNumero: proximo });
     } catch (err: any) {
       const { status, mensagem } = explicar(err);
       res.status(status).json({ success: false, mensagem });
@@ -674,7 +729,8 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
   app.put("/api/nfse/config", async (req: any, res: any) => {
     try {
       const uid = await exigirUsuario(req);
-      const { cnpj, codMunicipio, codigoServico, serie, descricaoPadrao, ativo, emitirAoPagar } = req.body;
+      const { cnpj, codMunicipio, codigoServico, codigoNbs, serie, proximoNumero: primeiroNumero,
+              descricaoPadrao, ativo, emitirAoPagar } = req.body;
 
       const cnpjLimpo = so(cnpj);
       if (cnpjLimpo.length !== 14) {
@@ -695,6 +751,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         cnpj: cnpjLimpo,
         codMunicipio: so(codMunicipio),
         codigoServico: so(codigoServico),
+        codigoNbs: so(codigoNbs),
         serie: so(serie) || "00001",
         descricaoPadrao: String(descricaoPadrao || "").slice(0, 300),
         ativo: ativo !== false,
@@ -702,6 +759,29 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         atualizadoEm: new Date().toISOString(),
       };
       await db.collection("nfse_config").doc(uid).set(config, { merge: true });
+
+      /**
+       * ⚠️ CONTINUAR A NUMERAÇÃO DE ONDE O PORTAL PAROU.
+       *
+       * Quem já emitia direto no Portal Nacional tem notas com número 1, 2, 3...
+       * Se o MEI Flow recomeçasse do 1, o Portal recusaria por número repetido.
+       * Por isso a tela pergunta qual será a PRÓXIMA nota, e aqui o contador é
+       * acertado — só para cima, nunca para trás, para não reabrir um número
+       * que já saiu.
+       */
+      const desejado = Number(primeiroNumero || 0);
+      if (desejado > 1) {
+        const ref = db.collection("nfse_contadores").doc(`${uid}_${config.serie}`);
+        await db.runTransaction(async (t: any) => {
+          const snap = await t.get(ref);
+          const atual = snap.exists ? Number(snap.data().ultimo || 0) : 0;
+          if (desejado - 1 > atual) {
+            t.set(ref, { userId: uid, serie: config.serie, ultimo: desejado - 1,
+                         atualizadoEm: new Date().toISOString() }, { merge: true });
+          }
+        });
+      }
+
       res.json({ success: true, config });
     } catch (err: any) {
       const { status, mensagem } = explicar(err);
@@ -727,6 +807,74 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
       res.json({ success: true, ...r });
     } catch (err: any) {
       console.error("[NFS-e Emitir]", err.response?.data || err.message);
+      const { status, mensagem, detalhe } = explicar(err);
+      res.status(status).json({ success: false, mensagem, detalhe });
+    }
+  });
+
+  /**
+   * Emissão a partir de um lançamento do Livro Caixa — o botão NFS-e da tabela.
+   *
+   * Nem toda venda nasceu de boleto: quem vende no Pix, no dinheiro ou lança a
+   * mão também precisa de nota. Por isso esta rota recebe os dados direto, sem
+   * exigir cobrança nenhuma.
+   *
+   * O `lancamentoId` serve de trava contra nota repetida: clicar duas vezes no
+   * botão devolve a mesma nota em vez de emitir outra. Cancelar NFS-e é
+   * burocracia, então é melhor não deixar nascer duplicada.
+   */
+  app.post("/api/nfse/avulsa", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const { lancamentoId, clienteNome, clienteDocumento, valor, descricao } = req.body || {};
+
+      if (lancamentoId) {
+        const jaTem = await db
+          .collection("nfse_emitidas")
+          .where("userId", "==", uid)
+          .where("lancamentoId", "==", String(lancamentoId))
+          .limit(1)
+          .get();
+        if (!jaTem.empty) {
+          const n = jaTem.docs[0].data();
+          return res.json({
+            success: true,
+            jaEmitida: true,
+            chave: n.chave,
+            numero: n.numero,
+            serie: n.serie,
+            mensagem: `Este lançamento já tem a nota ${n.numero}.`,
+          });
+        }
+      }
+
+      const r = await emitirNota(db, uid, {
+        clienteNome,
+        clienteDocumento,
+        valor: Number(valor || 0),
+        descricao,
+      });
+
+      await db.collection("nfse_emitidas").doc(r.chave || r.idDps).set({
+        id: r.chave || r.idDps,
+        userId: uid,
+        lancamentoId: lancamentoId ? String(lancamentoId) : "",
+        chave: r.chave,
+        numero: r.numero,
+        serie: r.serie,
+        idDps: r.idDps,
+        clienteNome: clienteNome || "",
+        clienteDocumento: clienteDocumento || "",
+        valor: Number(valor || 0),
+        xml: r.xml ? r.xml.slice(0, 900000) : "",
+        ambiente: ehProducao() ? "producao" : "homologacao",
+        emitidaEm: new Date().toISOString(),
+      });
+
+      console.log(`[NFS-e] Nota avulsa ${r.numero}/${r.serie} emitida por ${uid}. Chave: ${r.chave}`);
+      res.json({ success: true, ...r, mensagem: `Nota ${r.numero} emitida com sucesso.` });
+    } catch (err: any) {
+      console.error("[NFS-e Avulsa]", JSON.stringify(err.response?.data || err.message));
       const { status, mensagem, detalhe } = explicar(err);
       res.status(status).json({ success: false, mensagem, detalhe });
     }

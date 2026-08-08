@@ -86,6 +86,9 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
   const [cnpj, setCnpj] = useState("");
   const [codMunicipio, setCodMunicipio] = useState("");
   const [codigoServico, setCodigoServico] = useState("");
+  const [codigoNbs, setCodigoNbs] = useState("");
+  const [serie, setSerie] = useState("");
+  const [proximoNumero, setProximoNumero] = useState("");
   const [descricaoPadrao, setDescricaoPadrao] = useState("");
   const [emitirAoPagar, setEmitirAoPagar] = useState(true);
   const [salvando, setSalvando] = useState(false);
@@ -109,6 +112,9 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
         setCnpj(c.cnpj || "");
         setCodMunicipio(c.codMunicipio || "");
         setCodigoServico(c.codigoServico || "");
+        setCodigoNbs(c.codigoNbs || "");
+        setSerie(c.serie || "");
+        setProximoNumero(String(dcfg.proximoNumero || 1));
         setDescricaoPadrao(c.descricaoPadrao || "");
         setEmitirAoPagar(c.emitirAoPagar !== false);
       } else if (dc.cnpj) {
@@ -207,7 +213,10 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
       const r = await fetch(getApiUrl("/api/nfse/config"), {
         method: "PUT",
         headers: await comToken(),
-        body: JSON.stringify({ cnpj, codMunicipio, codigoServico, descricaoPadrao, emitirAoPagar }),
+        body: JSON.stringify({
+          cnpj, codMunicipio, codigoServico, codigoNbs, serie,
+          proximoNumero: Number(proximoNumero || 1), descricaoPadrao, emitirAoPagar,
+        }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.mensagem || "Não consegui salvar.");
@@ -481,6 +490,46 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
                     onChange={(e) => setCodigoServico(e.target.value)}
                     placeholder="Ex.: 070101"
                     inputMode="numeric"
+                    className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Série da DPS</label>
+                    <input
+                      value={serie}
+                      onChange={(e) => setSerie(e.target.value)}
+                      placeholder="70000"
+                      inputMode="numeric"
+                      maxLength={5}
+                      className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Número da próxima nota</label>
+                    <input
+                      value={proximoNumero}
+                      onChange={(e) => setProximoNumero(e.target.value.replace(/\D/g, ""))}
+                      placeholder="3"
+                      inputMode="numeric"
+                      className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
+                    />
+                  </div>
+                </div>
+
+                <p className="text-[11px] text-slate-500 leading-relaxed bg-amber-50 border border-amber-200 rounded-xl p-3">
+                  Se você já emitiu notas direto no Portal, a numeração precisa continuar de onde parou.
+                  Olhe a última nota que você emitiu e coloque aqui o número seguinte — senão o Portal
+                  recusa por número repetido.
+                </p>
+
+                <div>
+                  <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Código NBS (opcional)</label>
+                  <input
+                    value={codigoNbs}
+                    onChange={(e) => setCodigoNbs(e.target.value)}
+                    placeholder="Ex.: 1.0205.00.00"
                     className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
                   />
                 </div>

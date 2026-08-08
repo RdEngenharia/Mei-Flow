@@ -59,7 +59,7 @@ import ArquivoDigitalMei from "./components/ArquivoDigitalMei";
 import CobrancasPanel from "./components/CobrancasPanel";
 import NotaFiscalPanel from "./components/NotaFiscalPanel";
 import { jsPDF } from "jspdf";
-import { savePdfCrossPlatform, isNativePlatform } from "./utils/nativeFile";
+import { savePdfCrossPlatform, isNativePlatform, getApiUrl } from "./utils/nativeFile";
 import autoTable from "jspdf-autotable";
 
 // IMPORTAÇÕES DO FIREBASE AUTH & FIRESTORE PARA SEGURANÇA MULTI-USUÁRIO
@@ -95,6 +95,9 @@ export default function App() {
   // Bandeira que o botao "Emitir Nota Fiscal (NFS-e)" do topo levanta para abrir
   // a gaveta do NotaFiscalPanel, que fica bem mais abaixo na pagina.
   const [abrirNotaFiscal, setAbrirNotaFiscal] = useState(false);
+  // Qual lancamento esta com a nota sendo emitida agora (para o botao virar
+  // ampulheta so naquela linha, e nao na tabela inteira).
+  const [emitindoNota, setEmitindoNota] = useState<string | null>(null);
 
   // State e Credenciais de Autenticação MEI
   const [userId, setUserId] = useState("user_49281");
@@ -888,6 +891,53 @@ export default function App() {
   };
 
   // Gerar e Iniciar o Processo de NFS-e via Emissor Nacional do Governo
+  /**
+   * Emite a NFS-e de um lancamento do Livro Caixa, de verdade, pelo servidor.
+   *
+   * O servidor monta a DPS, assina com o certificado A1 guardado no cofre e
+   * manda para o Portal Nacional. Se faltar certificado ou dados fiscais, ele
+   * responde dizendo o que falta — e ai sim abrimos a gaveta de configuracao,
+   * que e o unico caso em que faz sentido abrir.
+   */
+  const emitirNotaDoLancamento = async (tx: Transacao) => {
+    if (emitindoNota) return;
+    setEmitindoNota(tx.id);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error("Faca login novamente.");
+
+      const r = await fetch(getApiUrl("/api/nfse/avulsa"), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lancamentoId: tx.id,
+          clienteNome: tx.clienteNome || "",
+          clienteDocumento: tx.clienteDocumento || "",
+          valor: tx.valor,
+          descricao: tx.descricao || "",
+        }),
+      });
+      const d = await r.json();
+
+      if (!r.ok) {
+        // 428 = sem certificado; 400 com SEM_CONFIG = faltam dados fiscais.
+        // Nos dois casos a saida e a mesma tela, entao abrimos ela.
+        if (r.status === 428 || /certificado|dados fiscais|codigo do munic/i.test(d.mensagem || "")) {
+          triggerToast(`⚠ ${d.mensagem}`);
+          setAbrirNotaFiscal(true);
+          return;
+        }
+        throw new Error(d.mensagem || "O Portal Nacional recusou a nota.");
+      }
+
+      triggerToast(d.jaEmitida ? `ℹ ${d.mensagem}` : `✓ Nota ${d.numero} emitida com sucesso!`);
+    } catch (e: any) {
+      triggerToast(`⚠ ${e.message}`);
+    } finally {
+      setEmitindoNota(null);
+    }
+  };
+
   // CAMINHO MANUAL ANTIGO — hoje sem nenhum botao chamando.
   //
   // Copiava o CNPJ, abria o Emissor Nacional e mostrava um modal com os dados da
@@ -2437,9 +2487,7 @@ ${meiName}`;
                                       if (isCpfEmissor) {
                                         triggerToast("⚠ Emissão de NFS-e indisponível para Pessoa Física (CPF). Altere seu perfil para CNPJ para habilitar.");
                                       } else {
-                                        // Antes isto abria o site do governo. Agora abre a gaveta de
-                                        // Nota Fiscal — de onde o portal continua acessivel em um clique.
-                                        setAbrirNotaFiscal(true);
+                                        emitirNotaDoLancamento(tx);
                                       }
                                     }}
                                     className={`px-2 py-1 border rounded-lg transition-all text-[11px] font-bold flex items-center gap-1 ${
@@ -2447,9 +2495,10 @@ ${meiName}`;
                                         ? "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-60"
                                         : "bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-600 hover:text-white hover:border-transparent cursor-pointer"
                                     }`}
-                                    title={isCpfEmissor ? "NFS-e indisponível para CPF" : "Gerar Nota NFS-e"}
+                                    disabled={emitindoNota === tx.id}
+                                    title={isCpfEmissor ? "NFS-e indisponível para CPF" : "Emitir Nota Fiscal de Serviço"}
                                   >
-                                    <span>NFS-e</span> {isCpfEmissor ? "🚫" : ""}
+                                    <span>{emitindoNota === tx.id ? "Emitindo..." : "NFS-e"}</span> {isCpfEmissor ? "🚫" : ""}
                                   </button>
                                 )}
 
