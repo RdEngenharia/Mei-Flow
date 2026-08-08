@@ -772,8 +772,13 @@ export function lerDadosDaNota(xmlNota: string) {
  *        literais, corpos de fonte e sombreado, e passou a valer com a
  *        suspensão da API oficial em 03/08/2026. As medidas foram extraídas de
  *        uma DANFSe emitida pelo próprio Portal.
+ *   v7 — réguas horizontais. A folha saía com linhas cruzando o QR Code, que
+ *        na do Portal fica numa área limpa: eu traçava régua depois de cada
+ *        linha da grade, e o oficial só traça no fim de cada BLOCO. Medindo as
+ *        duas folhas pixel a pixel, as quinze réguas agora caem nas mesmas
+ *        alturas, com desvio máximo de 0,4 mm.
  */
-const VERSAO_FOLHA = 6;
+const VERSAO_FOLHA = 7;
 
 const MESES = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",

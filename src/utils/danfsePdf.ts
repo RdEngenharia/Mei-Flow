@@ -32,6 +32,8 @@
  *    norma. Se precisar mexer, confira antes contra o Anexo I.
  */
 
+import { LOGO_NFSE_BASE64, temLogoNfse } from "./logoNfse";
+
 export type DadosDanfse = {
   numeroNfse?: string | number;
   numeroDps?: string | number;
@@ -181,8 +183,16 @@ const COL = [mm(11.9), mm(156.5), mm(301.0), mm(445.6)];
 /** Moldura externa e limite direito do conteúdo. */
 const BORDA = mm(6);
 const DIR = 210 - mm(11.9);
-/** Altura da linha da grade: 19,1 pontos. */
+/**
+ * Altura das linhas, medida na folha oficial.
+ *
+ * O bloco de identificação tem linhas mais altas que o resto — os rótulos ali
+ * são de 7 pontos, e não de 6. Medindo as réguas do documento do Portal:
+ * 14,1 → 44,2 mm em quatro linhas dá 7,53 mm; já 44,2 → 71,3 mm, também em
+ * quatro, dá 6,78 mm. São dois valores mesmo, não é imprecisão de medição.
+ */
 const LINHA = mm(19.1);
+const LINHA_ID = mm(21.3);
 
 const CINZA = 236;   // sombreado claro do modelo
 
@@ -262,8 +272,19 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
     return fim - COL[c] - 2;
   };
 
-  /** Desenha uma linha da grade e avança o cursor vertical. */
-  const linha = (celulas: Celula[], opcoes: { titulo?: boolean; fundo?: boolean; altura?: number } = {}) => {
+  /**
+   * Desenha uma linha da grade e avança o cursor vertical.
+   *
+   * ⚠️ A RÉGUA HORIZONTAL SÓ SAI NO FIM DO BLOCO — `fimBloco: true`.
+   *
+   * A primeira versão traçava uma linha depois de CADA linha da grade, e o
+   * usuário viu o resultado na hora: as réguas passavam por cima do QR Code,
+   * que na folha do Portal fica numa área limpa. Medindo a folha oficial pixel
+   * a pixel, ela tem régua cheia em só quinze alturas — todas em fronteira de
+   * bloco (fim do cabeçalho, fim do prestador, fim do tomador...). Dentro do
+   * bloco os campos se separam só pelo espaço.
+   */
+  const linha = (celulas: Celula[], opcoes: { titulo?: boolean; fundo?: boolean; altura?: number; fimBloco?: boolean } = {}) => {
     const alt = opcoes.altura ?? LINHA;
 
     if (opcoes.fundo) {
@@ -285,8 +306,10 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
     }
 
     y += alt;
-    linhaFina();
-    doc.line(BORDA, y, 210 - BORDA, y);
+    if (opcoes.fimBloco) {
+      linhaFina();
+      doc.line(BORDA, y, 210 - BORDA, y);
+    }
   };
 
   // =================================================================== topo
@@ -294,21 +317,35 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
    * CABEÇALHO — marca NFS-e à esquerda, identificação do documento ao centro,
    * dados do ambiente à direita.
    *
-   * A marca oficial é uma imagem que não temos direito de embutir, então ela é
-   * desenhada com o próprio nome, como ela se apresenta: "NFS" escuro e "e"
-   * verde, com a legenda de duas linhas ao lado.
+   * A norma manda usar a logomarca oficial da NFS-e, que ela mesma publica. Se
+   * a imagem estiver disponível em logoNfse.ts, é ela que vai. Enquanto não
+   * estiver, desenhamos uma aproximação com texto — parecida o bastante para o
+   * documento não sair sem cabeçalho, e substituída assim que o arquivo chegar.
+   *
+   * ⚠️ Esta NÃO é a logo do MEI. O cabeçalho do DANFSe é padronizado
+   *    nacionalmente e não tem campo para a marca do emissor.
    */
-  const altTopo = mm(38);
-  doc.setFont(FONTE, "bold").setFontSize(19);
-  doc.setTextColor(20, 78, 60);
-  doc.text("NFS", BORDA + 2, y + mm(26));
-  const larguraNfs = doc.getTextWidth("NFS");
-  doc.setTextColor(124, 174, 62);
-  doc.text("e", BORDA + 2 + larguraNfs + 0.8, y + mm(26));
-  doc.setFont(FONTE, "normal").setFontSize(6);
-  doc.setTextColor(70, 70, 70);
-  doc.text("Nota Fiscal de", BORDA + 2 + larguraNfs + 4.6, y + mm(21));
-  doc.text("Serviço eletrônica", BORDA + 2 + larguraNfs + 4.6, y + mm(28));
+  // 12 mm: é onde cai a régua sob o cabeçalho na folha oficial.
+  const altTopo = mm(34);
+  let logoDesenhada = false;
+  if (temLogoNfse()) {
+    try {
+      doc.addImage(LOGO_NFSE_BASE64, "PNG", BORDA + 2, y + mm(9), 38, 12, undefined, "FAST");
+      logoDesenhada = true;
+    } catch { /* imagem inválida cai no desenho de reserva */ }
+  }
+  if (!logoDesenhada) {
+    doc.setFont(FONTE, "bold").setFontSize(19);
+    doc.setTextColor(20, 78, 60);
+    doc.text("NFS", BORDA + 2, y + mm(26));
+    const larguraNfs = doc.getTextWidth("NFS");
+    doc.setTextColor(124, 174, 62);
+    doc.text("e", BORDA + 2 + larguraNfs + 0.8, y + mm(26));
+    doc.setFont(FONTE, "normal").setFontSize(6);
+    doc.setTextColor(70, 70, 70);
+    doc.text("Nota Fiscal de", BORDA + 2 + larguraNfs + 4.6, y + mm(21));
+    doc.text("Serviço eletrônica", BORDA + 2 + larguraNfs + 4.6, y + mm(28));
+  }
 
   doc.setFont(FONTE, "bold").setFontSize(9);
   doc.setTextColor(0, 0, 0);
@@ -341,7 +378,7 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
 
   // ======================================================= chave de acesso
   const yQr = y;
-  linha([{ c: 0, span: 3, rotulo: "CHAVE DE ACESSO DA NFS-e", negrito: true, valor: ou(soDigitos(d.chave)) }]);
+  linha([{ c: 0, span: 3, rotulo: "CHAVE DE ACESSO DA NFS-e", negrito: true, valor: ou(soDigitos(d.chave)) }], { altura: LINHA_ID });
 
   if (extras.qrBase64) {
     /**
@@ -357,17 +394,17 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
     { c: 0, rotulo: "NÚMERO DA NFS-e", negrito: true, valor: ou(d.numeroNfse) },
     { c: 1, rotulo: "COMPETÊNCIA DA NFS-e", negrito: true, valor: ou(dataBR(d.competencia)) },
     { c: 2, rotulo: "DATA E HORA DA EMISSÃO DA NFS-e", negrito: true, valor: ou(dataHoraBR(d.emitidaEm)) },
-  ]);
+  ], { altura: LINHA_ID });
   linha([
     { c: 0, rotulo: "NÚMERO DA DPS", negrito: true, valor: ou(d.numeroDps) },
     { c: 1, rotulo: "SÉRIE DA DPS", negrito: true, valor: ou(Number(soDigitos(d.serie)) || d.serie) },
     { c: 2, rotulo: "DATA E HORA DA EMISSÃO DA DPS", negrito: true, valor: ou(dataHoraBR(d.emitidaEmDps || d.emitidaEm)) },
-  ]);
+  ], { altura: LINHA_ID });
   linha([
     { c: 0, rotulo: "EMITENTE DA NFS-e", negrito: true, valor: ou(d.emitente || "Prestador") },
     { c: 1, rotulo: "SITUAÇÃO DA NFS-e", negrito: true, valor: ou(d.situacao || (d.regime?.opSimpNac === "2" ? "NFS-e MEI" : "NFS-e")) },
     { c: 2, rotulo: "FINALIDADE", negrito: true, valor: ou(d.finalidade) },
-  ]);
+  ], { altura: LINHA_ID, fimBloco: true });
 
   // Legenda do QR, três linhas de 6 pontos, como no modelo.
   doc.setFont(FONTE, "normal").setFontSize(6);
@@ -409,7 +446,7 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
   linha([
     { c: 0, rotulo: "Simples Nacional na Data de Competência", valor: textoSimplesNacional(d.regime?.opSimpNac) },
     { c: 1, span: 3, rotulo: "Regime de Apuração Tributária pelo SN", valor: ou(p.regimeApuracao) },
-  ]);
+  ], { fimBloco: true });
 
   // ================================================ tomador / adquirente
   const e = extras.tomadorEndereco || {};
@@ -435,7 +472,7 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
   linha([
     { c: 0, span: 2, rotulo: "Endereço", valor: ou(endToma) },
     { c: 2, span: 2, rotulo: "E-mail", valor: ou(t?.email || extras.tomadorEmail) },
-  ]);
+  ], { fimBloco: true });
 
   /**
    * Destinatário e Intermediário são blocos obrigatórios do modelo. Quando não
@@ -444,7 +481,7 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
    * Anexo I.
    */
   const linhaCentral = (texto: string) => {
-    const alt = mm(12);
+    const alt = mm(8.5);
     doc.setFont(FONTE, "normal").setFontSize(7);
     doc.setTextColor(0, 0, 0);
     doc.text(texto, 210 / 2, y + mm(8.5), { align: "center" });
@@ -469,10 +506,8 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
   {
     conteudo(ou(s.descricaoOficial || extras.textoServicoOficial), COL[0], y + mm(9), DIR - COL[0]);
     y += mm(14);
-    linhaFina();
-    doc.line(BORDA, y, 210 - BORDA, y);
   }
-  linha([{ c: 0, span: 4, rotulo: "Descrição do Serviço", valor: ou(s.descricao) }]);
+  linha([{ c: 0, span: 4, rotulo: "Descrição do Serviço", valor: ou(s.descricao) }], { fimBloco: true });
 
   // ============================================ tributação municipal (ISSQN)
   linha([
@@ -487,7 +522,7 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
     { c: 1, rotulo: "Alíquota Aplicada", valor: v.aliquota ? `${v.aliquota}%` : "-" },
     { c: 2, rotulo: "Retenção do ISSQN", valor: v.issRetido ? "Retido" : "Não Retido" },
     { c: 3, rotulo: "ISSQN Apurado", valor: v.valorIss ? brl(v.valorIss) : "-" },
-  ]);
+  ], { fimBloco: true });
 
   // ==================================================== tributação federal
   linha([
@@ -500,7 +535,7 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
     { c: 0, rotulo: "PIS - Débito Apuração Própria", valor: "-" },
     { c: 1, rotulo: "COFINS - Débito Apuração Própria", valor: "-" },
     { c: 2, span: 2, rotulo: "Descrição Contrib. Sociais - Retidas", valor: "-" },
-  ]);
+  ], { fimBloco: true });
 
   // ================================================== tributação IBS/CBS
   /**
@@ -532,7 +567,7 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
     { c: 1, rotulo: "Alíquota - CBS", valor: "-" },
     { c: 2, rotulo: "Alíquota Efetiva - CBS", valor: "-" },
     { c: 3, rotulo: "Valor Total Apurado - CBS", valor: "-" },
-  ]);
+  ], { fimBloco: true });
 
   // ================================================= valor total da NFS-e
   linha([
@@ -547,7 +582,7 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
     { c: 1, rotulo: "VALOR LÍQUIDO DA NFS-e", negrito: true, valor: brl(v.liquido ?? v.servico) },
     { c: 2, rotulo: "Total do IBS/CBS", valor: brl(v.totalIbsCbs || 0) },
     { c: 3, rotulo: "VALOR LÍQUIDO DA NFS-e + IBS/CBS", negrito: true, valor: brl(v.liquidoComIbsCbs || 0) },
-  ], { fundo: true });
+  ], { fundo: true, fimBloco: true });
 
   // ========================================== informações complementares
   linha([{ c: 0, rotulo: "INFORMAÇÕES COMPLEMENTARES", negrito: true }], { titulo: true, altura: mm(13) });
@@ -575,12 +610,15 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
    * abaixo do conteúdo — por isso a posição é fixa e não acompanha o cursor.
    */
   const yCanhoto = 297 - mm(46);
-  const fimCanhoto = yCanhoto + mm(30);
+  const meioCanhoto = yCanhoto + mm(20);
+  const fimCanhoto = yCanhoto + mm(41);
   linhaFina();
   doc.line(BORDA, yCanhoto, 210 - BORDA, yCanhoto);
+  // O oficial divide o canhoto em duas faixas: a dos rótulos e a de assinar.
+  doc.line(BORDA, meioCanhoto, 210 - BORDA, meioCanhoto);
   doc.line(BORDA, fimCanhoto, 210 - BORDA, fimCanhoto);
-  doc.line(COL[1] - 2, yCanhoto, COL[1] - 2, fimCanhoto);
-  doc.line(COL[2] - 2, yCanhoto, COL[2] - 2, fimCanhoto);
+  doc.line(COL[1] - 2, yCanhoto, COL[1] - 2, meioCanhoto);
+  doc.line(COL[2] - 2, yCanhoto, COL[2] - 2, meioCanhoto);
   rotuloCampo("DATA CIENTIFICAÇÃO:", COL[0], yCanhoto + mm(7.5));
   rotuloCampo("IDENTIFICAÇÃO E ASSINATURA", COL[1], yCanhoto + mm(7.5));
   rotuloCampo("N° NFS-e / CHAVE NFS-e", COL[2], yCanhoto + mm(7.5));
