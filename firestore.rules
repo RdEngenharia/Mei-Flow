@@ -103,5 +103,48 @@ service cloud.firestore {
       allow list: if request.auth != null && resource.data.userId == request.auth.uid;
       allow update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
     }
+
+    // -----------------------------------------------------------------
+    // 5. AREA EXCLUSIVA DO SERVIDOR (NENHUM APLICATIVO PODE LER OU ESCREVER)
+    // -----------------------------------------------------------------
+    // Estas colecoes so sao tocadas pelo Admin SDK, que roda no servidor e
+    // passa por cima destas regras. Negar aqui nao quebra nada e evita que um
+    // "allow" generico criado no futuro exponha o conteudo por acidente.
+    //
+    // nfse_certificados guarda o certificado digital A1 de cada usuario, ainda
+    // que cifrado. E o documento mais sensivel do sistema inteiro: com ele se
+    // assina nota fiscal no nome de outra pessoa. Nunca abra esta regra.
+
+    match /nfse_certificados/{doc} {
+      allow read, write: if false;
+    }
+
+    match /nfse_config/{doc} {
+      allow read, write: if false;
+    }
+
+    match /nfse_contadores/{doc} {
+      allow read, write: if false;
+    }
+
+    match /nfse_emitidas/{doc} {
+      allow read, write: if false;
+    }
+
+    match /cobrancas/{doc} {
+      allow read, write: if false;
+    }
+
+    match /creditos/{doc} {
+      allow read, write: if false;
+    }
+
+    match /creditos_movimentos/{doc} {
+      allow read, write: if false;
+    }
+
+    match /conexoes/{doc} {
+      allow read, write: if false;
+    }
   }
 }
