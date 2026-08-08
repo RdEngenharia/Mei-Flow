@@ -101,7 +101,10 @@ export default function App() {
   // Serviços pré-configurados do usuário. Se ele tem mais de um, perguntamos
   // qual antes de emitir; com um só, emite direto sem atrapalhar.
   const [servicosNfse, setServicosNfse] = useState<any[] | null>(null);
-  const [escolherServicoPara, setEscolherServicoPara] = useState<Transacao | null>(null);
+  // Nota em conferencia: o lancamento, o servico escolhido e a observacao.
+  const [notaEmAndamento, setNotaEmAndamento] = useState<
+    { tx: Transacao; servicoId: string; observacao: string } | null
+  >(null);
 
   // State e Credenciais de Autenticação MEI
   const [userId, setUserId] = useState("user_49281");
@@ -212,6 +215,8 @@ export default function App() {
   const [cliCidade, setCliCidade] = useState("");
   const [cliUf, setCliUf] = useState("");
   const [buscandoCepCliente, setBuscandoCepCliente] = useState(false);
+  // Observacao que entra na nota fiscal deste cliente, todo mes.
+  const [cliObsNfse, setCliObsNfse] = useState("");
   const [selectedReceipt, setSelectedReceipt] = useState<Transacao | null>(null);
 
   // -------------------------------------------------------------------------
@@ -896,23 +901,22 @@ export default function App() {
 
   // Gerar e Iniciar o Processo de NFS-e via Emissor Nacional do Governo
   /**
-   * Emite a NFS-e de um lancamento do Livro Caixa, de verdade, pelo servidor.
+   * ABRE A CONFERENCIA ANTES DE EMITIR.
    *
-   * O servidor monta a DPS, assina com o certificado A1 guardado no cofre e
-   * manda para o Portal Nacional. Se faltar certificado ou dados fiscais, ele
-   * responde dizendo o que falta — e ai sim abrimos a gaveta de configuracao,
-   * que e o unico caso em que faz sentido abrir.
+   * Nota fiscal nao tem Ctrl+Z: cancelar e burocracia. Por isso o clique no
+   * NFS-e nao emite direto — ele abre uma janela para conferir o servico e a
+   * observacao. A observacao vem preenchida com a que esta salva no cliente,
+   * entao no caso comum e so confirmar.
    */
-  const emitirNotaDoLancamento = async (tx: Transacao, servicoId?: string) => {
+  const abrirEmissaoNota = async (tx: Transacao) => {
     if (emitindoNota) return;
     setEmitindoNota(tx.id);
     try {
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error("Faca login novamente.");
 
-      // Primeira emissao da sessao: descobrimos quantos servicos ele cadastrou.
       let lista = servicosNfse;
-      if (!servicoId && lista === null) {
+      if (lista === null) {
         const rc = await fetch(getApiUrl("/api/nfse/config"), {
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -921,12 +925,39 @@ export default function App() {
         setServicosNfse(lista);
       }
 
-      // Dois ou mais servicos: ele escolhe pelo nome que ele mesmo deu.
-      if (!servicoId && lista && lista.length > 1) {
-        setEscolherServicoPara(tx);
-        setEmitindoNota(null);
+      // Sem certificado ou sem servico, nao ha o que conferir: manda configurar.
+      if (!lista.length) {
+        triggerToast("⚠ Cadastre o serviço que você presta na tela de Nota Fiscal.");
+        setAbrirNotaFiscal(true);
         return;
       }
+
+      const cliente = clientes.find((c) => c.id === tx.clienteId);
+      const habitual = lista.find((s: any) => s.padrao) || lista[0];
+
+      setNotaEmAndamento({
+        tx,
+        servicoId: String(habitual?.codigo || ""),
+        observacao: String(cliente?.observacaoNfse || ""),
+      });
+    } catch (e: any) {
+      triggerToast(`⚠ ${e.message}`);
+    } finally {
+      setEmitindoNota(null);
+    }
+  };
+
+  /**
+   * Emite de verdade. O servidor monta a DPS, assina com o certificado A1 do
+   * cofre e manda para o Portal Nacional.
+   */
+  const confirmarEmissaoNota = async () => {
+    if (!notaEmAndamento || emitindoNota) return;
+    const { tx, servicoId, observacao } = notaEmAndamento;
+    setEmitindoNota(tx.id);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error("Faca login novamente.");
 
       const r = await fetch(getApiUrl("/api/nfse/avulsa"), {
         method: "POST",
@@ -937,7 +968,8 @@ export default function App() {
           clienteDocumento: tx.clienteDocumento || "",
           valor: tx.valor,
           descricao: tx.descricao || "",
-          servicoId: servicoId || "",
+          servicoId,
+          observacao,
         }),
       });
       const d = await r.json();
@@ -947,13 +979,14 @@ export default function App() {
         // Nos dois casos a saida e a mesma tela, entao abrimos ela.
         if (r.status === 428 || /certificado|dados fiscais|codigo do munic/i.test(d.mensagem || "")) {
           triggerToast(`⚠ ${d.mensagem}`);
+          setNotaEmAndamento(null);
           setAbrirNotaFiscal(true);
           return;
         }
         throw new Error(d.mensagem || "O Portal Nacional recusou a nota.");
       }
 
-      setEscolherServicoPara(null);
+      setNotaEmAndamento(null);
       triggerToast(d.jaEmitida ? `ℹ ${d.mensagem}` : `✓ Nota ${d.numero} emitida com sucesso!`);
     } catch (e: any) {
       triggerToast(`⚠ ${e.message}`);
@@ -1488,6 +1521,7 @@ ${meiName}`;
         cep: cliCep.replace(/\D/g, ""), logradouro: cliRua, numero: cliNum,
         bairro: cliBairro, cidade: cliCidade, uf: cliUf.toUpperCase()
       } : undefined,
+      observacaoNfse: cliObsNfse.trim(),
       createdAt: new Date().toISOString()
     };
 
@@ -1512,7 +1546,7 @@ ${meiName}`;
     setCliEmail("");
     setCliTel("");
     setCliCep(""); setCliRua(""); setCliNum("");
-    setCliBairro(""); setCliCidade(""); setCliUf("");
+    setCliBairro(""); setCliCidade(""); setCliUf(""); setCliObsNfse("");
     setShowClienteModal(false);
   };
 
@@ -2511,7 +2545,7 @@ ${meiName}`;
                                       if (isCpfEmissor) {
                                         triggerToast("⚠ Emissão de NFS-e indisponível para Pessoa Física (CPF). Altere seu perfil para CNPJ para habilitar.");
                                       } else {
-                                        emitirNotaDoLancamento(tx);
+                                        abrirEmissaoNota(tx);
                                       }
                                     }}
                                     className={`px-2 py-1 border rounded-lg transition-all text-[11px] font-bold flex items-center gap-1 ${
@@ -2676,41 +2710,88 @@ ${meiName}`;
         onFechado={() => { setAbrirNotaFiscal(false); setServicosNfse(null); }}
       />
 
-      {/* Escolha do servico, so aparece para quem cadastrou mais de um */}
-      {escolherServicoPara && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[60] flex items-center justify-center p-5">
-          <div className="bg-white rounded-3xl w-full max-w-md p-6 space-y-4 shadow-xl">
+      {/* Conferencia antes de emitir a nota */}
+      {notaEmAndamento && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[60] flex items-center justify-center p-5 overflow-y-auto">
+          <div className="bg-white rounded-3xl w-full max-w-md p-6 space-y-4 shadow-xl my-8">
             <div className="text-left">
-              <h3 className="font-bold text-lg text-slate-900">Qual serviço?</h3>
+              <h3 className="font-bold text-lg text-slate-900">Emitir nota fiscal</h3>
               <p className="text-xs text-slate-400 font-medium mt-0.5">
-                Nota de {escolherServicoPara.clienteNome || "cliente"} — {Number(escolherServicoPara.valor || 0)
+                {notaEmAndamento.tx.clienteNome || "Cliente não identificado"} — {Number(notaEmAndamento.tx.valor || 0)
                   .toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
               </p>
             </div>
 
-            <div className="space-y-2">
-              {(servicosNfse || []).map((s: any) => (
-                <button
-                  key={s.codigo}
-                  onClick={() => emitirNotaDoLancamento(escolherServicoPara, s.codigo)}
-                  className="w-full text-left bg-slate-50 border border-slate-200 hover:border-indigo-400 hover:bg-white rounded-2xl p-4 transition-colors cursor-pointer flex items-center justify-between gap-3"
-                >
-                  <span className="text-sm font-bold text-slate-800 truncate">{s.apelido || s.codigo}</span>
-                  {s.padrao && (
-                    <span className="shrink-0 text-[9px] font-extrabold uppercase tracking-widest text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
-                      Habitual
-                    </span>
-                  )}
-                </button>
-              ))}
+            {/* Servico: so aparece a escolha quando ele cadastrou mais de um */}
+            {(servicosNfse || []).length > 1 ? (
+              <div className="text-left">
+                <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Serviço</label>
+                <div className="mt-1.5 space-y-2">
+                  {(servicosNfse || []).map((s: any) => (
+                    <button
+                      key={s.codigo}
+                      type="button"
+                      onClick={() => setNotaEmAndamento({ ...notaEmAndamento, servicoId: String(s.codigo) })}
+                      className={`w-full text-left rounded-2xl p-3.5 border transition-colors cursor-pointer flex items-center justify-between gap-3 ${
+                        notaEmAndamento.servicoId === String(s.codigo)
+                          ? "bg-indigo-50 border-indigo-400"
+                          : "bg-slate-50 border-slate-200 hover:border-slate-300"
+                      }`}
+                    >
+                      <span className="text-sm font-bold text-slate-800 truncate">{s.apelido || s.codigo}</span>
+                      {notaEmAndamento.servicoId === String(s.codigo) && (
+                        <span className="shrink-0 text-[9px] font-extrabold uppercase tracking-widest text-indigo-600">
+                          Escolhido
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="text-left text-[11px] text-slate-400 font-medium">
+                Serviço: {(servicosNfse || [])[0]?.apelido || "—"}
+              </p>
+            )}
+
+            {/* Observacao desta nota */}
+            <div className="text-left">
+              <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                Observações desta nota
+              </label>
+              <textarea
+                rows={4}
+                autoFocus
+                value={notaEmAndamento.observacao}
+                onChange={(e) => setNotaEmAndamento({ ...notaEmAndamento, observacao: e.target.value })}
+                placeholder="Ex.: UC 3001234567 — compensacao de 420 kWh referente a julho/2026"
+                maxLength={2000}
+                className="mt-1.5 w-full border border-slate-200 rounded-2xl py-3 px-4 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-y"
+              />
+              <p className="text-[10px] text-slate-400 mt-1.5 leading-relaxed">
+                Vem preenchido com a observação salva no cadastro do cliente. Ajuste o que muda neste mês —
+                a alteração vale só para esta nota.
+              </p>
             </div>
 
-            <button
-              onClick={() => setEscolherServicoPara(null)}
-              className="w-full py-3 text-slate-500 hover:text-slate-700 font-bold text-xs cursor-pointer"
-            >
-              Cancelar
-            </button>
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setNotaEmAndamento(null)}
+                disabled={!!emitindoNota}
+                className="flex-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold py-3 rounded-2xl text-xs cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmarEmissaoNota}
+                disabled={!!emitindoNota}
+                className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-3 rounded-2xl text-xs shadow-sm cursor-pointer uppercase tracking-wide disabled:opacity-60"
+              >
+                {emitindoNota ? "Emitindo..." : "Emitir nota"}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -3100,6 +3181,23 @@ ${meiName}`;
                     className="border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                 </div>
+              </div>
+
+              {/* Observacao que vai na nota fiscal deste cliente */}
+              <div className="pt-3 border-t border-slate-100 space-y-2">
+                <p className="text-[11px] text-slate-500 font-medium leading-relaxed">
+                  <strong className="text-slate-700">Observações da nota fiscal</strong> — o que se repete
+                  em toda nota deste cliente. Aparece no campo "Informações Complementares" e você ainda
+                  pode ajustar na hora de emitir.
+                </p>
+                <textarea
+                  rows={3}
+                  placeholder="Ex.: UC 3001234567 — Usina Fazenda Boa Vista"
+                  value={cliObsNfse}
+                  onChange={(e) => setCliObsNfse(e.target.value)}
+                  maxLength={2000}
+                  className="w-full border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y"
+                />
               </div>
 
                {/* Footer Modal */}

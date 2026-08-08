@@ -288,6 +288,8 @@ function montarDps(d: {
   valor: number;
   codigoServico: string;
   codigoNbs?: string;
+  /** Vai no campo "Informações Complementares" da nota. */
+  observacao?: string;
   competencia: string;
 }): string {
   const docTomador = so(d.tomador.doc);
@@ -355,6 +357,16 @@ function montarDps(d: {
         `<xDescServ>${xml(semAcento(d.descricao)).slice(0, 2000)}</xDescServ>` +
         (d.codigoNbs ? `<cNBS>${so(d.codigoNbs)}</cNBS>` : "") +
       `</cServ>` +
+      /**
+       * ⚠️ infoCompl É O ÚLTIMO FILHO DE serv. Não suba ele.
+       *
+       * A sequência é locPrest, cServ, comExt, obra, atvEvento, infoCompl. Como
+       * não mandamos os do meio, ele fica logo depois do cServ — mas sempre
+       * DEPOIS. É o campo que sai como "Informações Complementares" na nota.
+       */
+      (d.observacao
+        ? `<infoCompl><xInfComp>${xml(semAcento(d.observacao)).slice(0, 2000)}</xInfComp></infoCompl>`
+        : "") +
     `</serv>` +
     `<valores>` +
       `<vServPrest><vServ>${d.valor.toFixed(2)}</vServ></vServPrest>` +
@@ -507,6 +519,8 @@ async function emitirNota(
     descricao?: string;
     /** Código do serviço pré-configurado que o usuário escolheu na hora. */
     servicoId?: string;
+    /** Informações complementares desta nota, já ajustadas pelo usuário. */
+    observacao?: string;
   }
 ): Promise<any> {
   const cfgSnap = await db.collection("nfse_config").doc(uid).get();
@@ -557,6 +571,7 @@ async function emitirNota(
     valor,
     codigoServico: servico.codigo,
     codigoNbs: servico.nbs || "",
+    observacao: dados.observacao || "",
     competencia: hoje,
   });
 
@@ -943,7 +958,8 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
   app.post("/api/nfse/avulsa", async (req: any, res: any) => {
     try {
       const uid = await exigirUsuario(req);
-      const { lancamentoId, clienteNome, clienteDocumento, valor, descricao, servicoId } = req.body || {};
+      const { lancamentoId, clienteNome, clienteDocumento, valor, descricao, servicoId,
+              observacao } = req.body || {};
 
       if (lancamentoId) {
         const jaTem = await db
@@ -971,6 +987,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         valor: Number(valor || 0),
         descricao,
         servicoId,
+        observacao,
       });
 
       await db.collection("nfse_emitidas").doc(r.chave || r.idDps).set({
@@ -984,6 +1001,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         clienteNome: clienteNome || "",
         clienteDocumento: clienteDocumento || "",
         valor: Number(valor || 0),
+        observacao: String(observacao || "").slice(0, 2000),
         xml: r.xml ? r.xml.slice(0, 900000) : "",
         ambiente: ehProducao() ? "producao" : "homologacao",
         emitidaEm: new Date().toISOString(),

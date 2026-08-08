@@ -273,6 +273,7 @@ export async function fetchClientesFromFirebase(meiUid: string): Promise<Cliente
         email: data.email || '',
         telefone: data.telefone || '',
         endereco: data.endereco || undefined,
+        observacaoNfse: data.observacaoNfse || '',
         createdAt: data.createdAt ? (typeof data.createdAt.toDate === 'function' ? data.createdAt.toDate().toISOString() : data.createdAt) : new Date().toISOString()
       } as Cliente;
     });
@@ -367,6 +368,8 @@ export async function saveClienteToFirebase(meiUid: string, cliente: Cliente): P
       telefone: cliente.telefone || '',
       // Endereço do pagador: o boleto registrado exige em produção.
       endereco: cliente.endereco || null,
+      // Observação padrão que entra na nota fiscal deste cliente.
+      observacaoNfse: cliente.observacaoNfse || '',
       createdAt: cliente.createdAt ? new Date(cliente.createdAt) : new Date()
     });
   } catch (error) {

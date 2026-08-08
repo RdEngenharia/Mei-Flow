@@ -14,6 +14,13 @@ export interface Cliente {
     cep?: string; logradouro?: string; numero?: string;
     bairro?: string; cidade?: string; uf?: string; complemento?: string;
   };
+  /**
+   * Texto que vai no campo "Informações Complementares" da NFS-e deste cliente.
+   * Serve para o que se repete todo mês e é próprio dele — número da unidade
+   * consumidora, nome da usina, contrato. Na hora de emitir ele vem preenchido
+   * e pode ser ajustado.
+   */
+  observacaoNfse?: string;
   createdAt: string;
 }
 
