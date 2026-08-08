@@ -4,6 +4,7 @@ import {
   Sparkles, Plus, Trash2, Loader2, Search, Package, Wrench, FileText, Calendar,
   User, CheckCircle2, Printer, X, Phone, Bookmark, ArrowRight, ArrowLeft,
   TrendingUp, Clock, XCircle, ShoppingCart, Cloud, CloudOff, Download,
+  MessageCircle, Copy, CheckCheck, BellRing,
 } from "lucide-react";
 import { db, saveOrcamentoToFirebase, fetchOrcamentosFromFirebase,
          deleteOrcamentoFromFirebase, normalizarOrcamento } from "../firebase";
@@ -11,6 +12,9 @@ import { collection, getDocs } from "firebase/firestore";
 import { savePdfCrossPlatform, isNativePlatform } from "../utils/nativeFile";
 import { desenharOrcamento, nomeArquivoOrcamento } from "../utils/orcamentoPdf";
 import { carregarLogoBase64 } from "../utils/logoImagem";
+import {
+  tarefasDeHoje, proximoContato, rotuloDoPrazo, registrarContato, linkWhatsApp,
+} from "../utils/reguaContato";
 import { CatalogItem, Cliente, Orcamento, ItemOrcamento, SituacaoOrcamento } from "../types";
 
 /**
@@ -371,6 +375,51 @@ export default function OrcamentoGenerator({
     }
   };
 
+  /**
+   * RÉGUA DE ACOMPANHAMENTO — registrar que falei com o cliente.
+   *
+   * Só isso: registra e agenda o próximo. Nada é enviado sozinho — quem manda a
+   * mensagem é o usuário, pelo WhatsApp dele, com o texto que ele leu antes.
+   */
+  const marcarContatoFeito = async (orc: Orcamento, etapa: number) => {
+    const atualizado = registrarContato(
+      { ...orc, atualizadoEm: new Date().toISOString() },
+      etapa
+    ) as Orcamento;
+    const lista = historico.map((o) => (o.id === orc.id ? atualizado : o));
+    setHistorico(lista);
+    espelharLocal(lista);
+    try {
+      await saveOrcamentoToFirebase(userId, atualizado);
+    } catch {
+      triggerToast("⚠ Contato registrado aqui, mas não subiu para a nuvem.");
+    }
+    triggerToast(
+      etapa >= 3
+        ? "✓ Último contato registrado. A bola está com o cliente."
+        : `✓ Contato ${etapa} registrado. O próximo já está agendado.`
+    );
+  };
+
+  /** Encerra o acompanhamento antes da hora, sem mexer na etapa do funil. */
+  const encerrarAcompanhamento = async (orc: Orcamento) => {
+    const atualizado = { ...orc, acompanhamentoEncerrado: true, atualizadoEm: new Date().toISOString() };
+    const lista = historico.map((o) => (o.id === orc.id ? atualizado : o));
+    setHistorico(lista);
+    espelharLocal(lista);
+    try { await saveOrcamentoToFirebase(userId, atualizado); } catch { /* já está na tela */ }
+    triggerToast("✓ Não vou mais lembrar deste orçamento.");
+  };
+
+  const copiarMensagem = async (texto: string) => {
+    try {
+      await navigator.clipboard.writeText(texto);
+      triggerToast("✓ Mensagem copiada.");
+    } catch {
+      triggerToast("⚠ Não consegui copiar. Selecione o texto e copie à mão.");
+    }
+  };
+
   const converter = async (orc: Orcamento) => {
     if (!onConverterEmVenda || convertendo) return;
     if (orc.vendaId) { triggerToast("ℹ Este orçamento já virou venda."); return; }
@@ -400,6 +449,15 @@ export default function OrcamentoGenerator({
     try { await deleteOrcamentoFromFirebase(userId, orc.id); } catch { /* já saiu da tela */ }
     triggerToast("✓ Orçamento excluído.");
   };
+
+  /**
+   * A LISTA DO DIA.
+   *
+   * Recalculada a cada render, a partir do próprio histórico — não há estado
+   * paralelo para ficar desatualizado. Se o usuário marcar um contato, o item
+   * some da lista na hora, porque a régua reconta.
+   */
+  const paraFazerHoje = tarefasDeHoje(historico);
 
   const porEtapa = (chave: SituacaoOrcamento) =>
     historico.filter((o) => (o.situacao || "enviado") === chave);
@@ -831,6 +889,117 @@ export default function OrcamentoGenerator({
         /* ================================================== FUNIL ============ */
         <div className="space-y-6">
 
+          {/*
+            ============================================================
+            PARA FAZER HOJE — a régua dos três contatos
+            ============================================================
+
+            Proposta enviada e não respondida quase nunca é um "não"; costuma
+            ser um "esqueci". Este painel transforma isso em tarefa do dia.
+
+            ⚠️ NADA É ENVIADO SOZINHO, e isso é escolha, não limitação. Uma
+               régua automática vira spam no dia em que der defeito, e quem
+               paga é a reputação do MEI com o cliente dele. Aqui o sistema
+               diz com quem falar e entrega o texto pronto; quem aperta o
+               botão é uma pessoa.
+
+            ⚠️ E não há nada para configurar. Ferramenta de acompanhamento que
+               precisa ser ligada antes de servir nunca chega a ser usada.
+               Quando não há ninguém para contatar, este painel some.
+          */}
+          {paraFazerHoje.length > 0 && (
+            <div className="bg-amber-50/60 border border-amber-200 rounded-2xl overflow-hidden">
+              <div className="px-4 py-3 bg-amber-100/60 border-b border-amber-200 flex items-center gap-2">
+                <BellRing className="w-4 h-4 text-amber-600" />
+                <h3 className="text-xs font-extrabold text-amber-900 uppercase tracking-wider">
+                  Para fazer hoje
+                </h3>
+                <span className="text-[10px] font-extrabold text-amber-700 bg-white/70 border border-amber-200 px-1.5 py-0.5 rounded">
+                  {paraFazerHoje.length}
+                </span>
+                <span className="hidden sm:block text-[10px] text-amber-700/80 font-medium ml-1">
+                  propostas esperando um retorno seu
+                </span>
+              </div>
+
+              <div className="divide-y divide-amber-200/60">
+                {paraFazerHoje.map(({ orcamento: orc, contato }) => {
+                  const link = linkWhatsApp(orc.clienteTelefone, contato.mensagem);
+                  return (
+                    <div key={orc.id} className="p-4 space-y-2.5 text-left">
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-slate-800">
+                            {orc.clienteNome}
+                            {orc.numero ? <span className="text-slate-400 font-normal"> · nº {orc.numero}</span> : null}
+                          </p>
+                          <p className="text-[10px] text-slate-500 font-medium mt-0.5">
+                            {contato.titulo} · proposta enviada há {contato.diasDesdeOEnvio} dia(s) · {brl(Number(orc.total) || 0)}
+                          </p>
+                        </div>
+                        <span className={`shrink-0 text-[9px] font-extrabold uppercase tracking-wider px-2 py-1 rounded-md border ${
+                          contato.diasDeAtraso > 0
+                            ? "bg-red-50 text-red-700 border-red-200"
+                            : "bg-white text-amber-700 border-amber-200"
+                        }`}>
+                          {rotuloDoPrazo(contato)}
+                        </span>
+                      </div>
+
+                      {/* A mensagem inteira, à vista. Ninguém manda um texto que não leu. */}
+                      <p className="text-[11px] text-slate-600 leading-relaxed bg-white border border-amber-200/70 rounded-xl p-3">
+                        {contato.mensagem}
+                      </p>
+                      <p className="text-[10px] text-slate-400 italic">{contato.porque}</p>
+
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {link ? (
+                          <a
+                            href={link}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[10px] font-extrabold uppercase tracking-wide flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" /> Abrir no WhatsApp
+                          </a>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 italic">
+                            Sem telefone no cadastro — copie a mensagem.
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => copiarMensagem(contato.mensagem)}
+                          className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 rounded-xl text-[10px] font-bold flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Copy className="w-3.5 h-3.5" /> Copiar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => marcarContatoFeito(orc, contato.etapa)}
+                          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-[10px] font-extrabold uppercase tracking-wide flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <CheckCheck className="w-3.5 h-3.5" /> Já falei
+                        </button>
+
+                        <div className="flex-1" />
+
+                        <button
+                          type="button"
+                          onClick={() => encerrarAcompanhamento(orc)}
+                          className="text-[10px] text-slate-400 hover:text-slate-700 font-bold cursor-pointer"
+                          title="Para de lembrar deste orçamento, sem mexer na etapa do funil"
+                        >
+                          Não lembrar mais
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Placar das etapas */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {ETAPAS.map((et) => {
@@ -932,6 +1101,32 @@ export default function OrcamentoGenerator({
                               <span className={`font-bold ${vencido && et.chave !== "aceito" ? "text-red-600" : "text-slate-400"}`}>
                                 {vencido ? "Venceu" : "Vale até"} {dataBR(orc.validade)}
                               </span>
+
+                              {/*
+                                Selo da régua: um pedaço de texto, sem botão.
+                                Quem age é o painel "Para fazer hoje" lá em
+                                cima; aqui o cartão só conta em que pé está,
+                                para o funil continuar legível de relance.
+                              */}
+                              {(() => {
+                                const c = proximoContato(orc);
+                                if (!c) {
+                                  return orc.acompanhamentoEncerrado ? (
+                                    <span className="inline-flex items-center gap-1 bg-slate-50 text-slate-400 border border-slate-200 px-1.5 py-0.5 rounded font-bold">
+                                      <Clock className="w-2.5 h-2.5" /> Acompanhamento encerrado
+                                    </span>
+                                  ) : null;
+                                }
+                                return (
+                                  <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-extrabold uppercase tracking-wide border ${
+                                    c.diasDeAtraso > 0 ? "bg-red-50 text-red-700 border-red-200"
+                                      : c.diasDeAtraso === 0 ? "bg-amber-50 text-amber-700 border-amber-200"
+                                      : "bg-slate-50 text-slate-500 border-slate-200"
+                                  }`}>
+                                    <BellRing className="w-2.5 h-2.5" /> {rotuloDoPrazo(c)}
+                                  </span>
+                                );
+                              })()}
                               {orc.vendaId && (
                                 <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded font-extrabold uppercase tracking-wide">
                                   <ShoppingCart className="w-2.5 h-2.5" /> Virou venda

@@ -684,7 +684,7 @@ export default function App() {
             console.error("[Logo] Storage recusou o envio, salvando a imagem no cadastro:", uploadErr);
             if (cabeNoFirestore(menor)) {
               resolvedLogoUrl = menor;
-              avisoLogo = "A logo foi salva, mas pelo caminho alternativo — vale conferir as regras do Firebase Storage.";
+              avisoLogo = "A logo foi salva, mas pelo caminho alternativo. Se acontecer sempre, me avise.";
             } else {
               // ⚠️ Só aqui a logo é realmente descartada, e o usuário FICA SABENDO.
               resolvedLogoUrl = companyLogo;
@@ -1528,8 +1528,8 @@ ${meiName}`;
           triggerToast("✓ Venda adicionada e sincronizada com sucesso!");
         })
         .catch(err => {
-          console.error("Erro Firebase:", err);
-          triggerToast("⚠ Erro ao salvar venda em nuvem.");
+          console.error("Erro ao salvar a venda na nuvem:", err);
+          triggerToast("⚠ Erro ao salvar a venda na nuvem.");
         });
     } else {
       setTransacoes(prev => [novaVenda, ...prev]);
@@ -1568,7 +1568,7 @@ ${meiName}`;
           triggerToast("✓ Despesa gravada com sucesso!");
         })
         .catch(err => {
-          console.error("Erro Firebase Despesa:", err);
+          console.error("Erro ao salvar a despesa na nuvem:", err);
           triggerToast("⚠ Erro ao salvar despesa.");
         });
     } else {
@@ -1629,7 +1629,7 @@ ${meiName}`;
           triggerToast(`✓ Cliente ${cliNome} cadastrado com sucesso!`);
         })
         .catch(err => {
-          console.error("Erro Firebase Cliente:", err);
+          console.error("Erro ao salvar o cliente na nuvem:", err);
           triggerToast("⚠ Erro ao cadastrar cliente.");
         });
     } else {
@@ -3835,7 +3835,7 @@ ${meiName}`;
                 >
                   <option value="Erro de Lançamento / Cálculo">Erro de Lançamento / Cálculos incorretos</option>
                   <option value="PDF / Recibo corrompido">Problema com PDF ou Recibos</option>
-                  <option value="Sincronia do Firebase / Login">Falha na Sincronização / Login</option>
+                  <option value="Sincronizacao / Login">Falha na Sincronização / Login</option>
                   <option value="Contingência na Emissão de NFS-e">Contingência / NFS-e não gerada</option>
                   <option value="Dúvida Geral / Configuração">Dúvidas Gerais de Configuração</option>
                 </select>

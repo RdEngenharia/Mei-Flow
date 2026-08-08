@@ -646,6 +646,24 @@ export function lerDadosDaNota(xmlNota: string) {
 
     servico: {
       descricao: tag(blocoCServ, "xDescServ"),
+      /**
+       * ⚠️ A DESCRIÇÃO OFICIAL DO SERVIÇO ESTAVA SENDO IGNORADA.
+       *
+       * `xDescServ` é o texto livre que o emissor escreve — no caso do usuário,
+       * um "Recebimento de FULANO" gerado automaticamente, que não diz o que foi
+       * prestado. O que descreve o serviço de fato são dois campos que o Portal
+       * devolve prontos e que ninguém estava lendo:
+       *
+       *   xTribNac — o item da lista de serviços da Lei Complementar 116
+       *              ("Serviços relacionados a cobranças em geral...");
+       *   xNBS     — a descrição do código NBS ("Serviços de intermediação na
+       *              comercialização de energia elétrica").
+       *
+       * Sem eles, a nota que chega ao cliente não explica o que ele comprou —
+       * e é justamente isso que uma nota de serviço precisa dizer.
+       */
+      descricaoOficial: tagQualquer(x, ["xTribNac"]),
+      descricaoNbs: tagQualquer(x, ["xNBS"]),
       codigoTributacao: tag(blocoCServ, "cTribNac"),
       codigoNbs: tag(blocoCServ, "cNBS"),
       localPrestacao: tag(tag(blocoServ, "locPrest"), "cLocPrestacao"),
@@ -725,8 +743,12 @@ export function lerDadosDaNota(xmlNota: string) {
  *        imprimia. O usuário preferiu a segunda ("é como se estivesse com dois
  *        servidores de notas fiscais"), então este desenho passou a ser ela e a
  *        outra foi apagada. Uma folha só, gerada num lugar só.
+ *   v4 — descrição do serviço. A folha imprimia só o texto livre do emissor,
+ *        que no sistema do usuário é um "Recebimento de FULANO" automático. As
+ *        descrições oficiais (xTribNac e xNBS) estavam no XML e não eram lidas
+ *        — a nota chegava ao cliente sem dizer o que ele havia comprado.
  */
-const VERSAO_FOLHA = 3;
+const VERSAO_FOLHA = 4;
 
 const MESES = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -935,7 +957,12 @@ async function montarDanfsePdf(
      */
     const uf = (dados.prestador as any)?.uf;
     const doXml = dados.municipio ? `${dados.municipio}${uf ? " / " + uf : ""}` : "";
-    const extras: ExtrasDanfse = { municipio: doXml || municipio };
+    const extras: ExtrasDanfse = {
+      municipio: doXml || municipio,
+      // Descrições oficiais do serviço, que vêm prontas no XML.
+      textoServicoOficial: (dados.servico as any)?.descricaoOficial || "",
+      textoNbs: (dados.servico as any)?.descricaoNbs || "",
+    };
 
     // Logo e nome de exibição vêm do perfil do MEI.
     try {

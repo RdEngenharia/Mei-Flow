@@ -56,6 +56,8 @@ export type DadosDanfse = {
   servico?: {
     descricao?: string; codigoTributacao?: string; codigoNbs?: string;
     localPrestacao?: string; informacoesComplementares?: string;
+    /** Item da lista de serviços (xTribNac) e descrição do NBS (xNBS). */
+    descricaoOficial?: string; descricaoNbs?: string;
   };
   valores?: {
     servico?: number; descontoIncondicionado?: number; descontoCondicionado?: number;
@@ -77,8 +79,10 @@ export type ExtrasDanfse = {
   logoBase64?: string;
   /** QR já pronto, em data:image/png;base64. */
   qrBase64?: string;
-  /** Texto oficial do item da lista de serviços. */
+  /** Texto oficial do item da lista de serviços (xTribNac). */
   textoServicoOficial?: string;
+  /** Descrição do código NBS (xNBS). */
+  textoNbs?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -453,12 +457,34 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
   y += alturaPartes + 4;
 
   // ------------------------------------------------------------ serviço
+  /**
+   * ⚠️ A DESCRIÇÃO DO SERVIÇO É O CORAÇÃO DESTA NOTA — E ELA SAIU FALTANDO.
+   *
+   * A folha imprimia só `xDescServ`, o texto livre do emissor. No sistema do
+   * usuário esse campo é preenchido automaticamente com "Recebimento de
+   * FULANO", que não diz absolutamente nada sobre o que foi prestado. O cliente
+   * recebia uma nota que não explicava o que ele tinha comprado.
+   *
+   * As descrições que importam vêm prontas do Portal e estavam sendo ignoradas:
+   * `xTribNac` (o item da lista de serviços da LC 116) e `xNBS` (a descrição do
+   * código NBS). Agora as três aparecem, cada uma no seu peso.
+   */
   doc.setFont("helvetica", "normal").setFontSize(9);
   const descricao = doc.splitTextToSize(String(d.servico?.descricao || "—"), L - 8);
-  doc.setFont("helvetica", "normal").setFontSize(6.2);
-  const oficial = extras.textoServicoOficial
-    ? doc.splitTextToSize(`Lista de serviços: ${extras.textoServicoOficial}`, L - 8).slice(0, 2) : [];
-  const altServico = 11 + descricao.length * 3.8 + 9.5 + (oficial.length ? oficial.length * 2.9 + 2 : 0);
+
+  const oficialTexto = extras.textoServicoOficial || d.servico?.descricaoOficial || "";
+  const nbsTexto = extras.textoNbs || d.servico?.descricaoNbs || "";
+
+  doc.setFont("helvetica", "normal").setFontSize(6.4);
+  const oficial = oficialTexto
+    ? doc.splitTextToSize(`Item ${codServico(d.servico?.codigoTributacao)} da lista de serviços: ${oficialTexto}`, L - 8).slice(0, 3)
+    : [];
+  const nbs = nbsTexto
+    ? doc.splitTextToSize(`NBS ${codNbs(d.servico?.codigoNbs)}: ${nbsTexto}`, L - 8).slice(0, 2)
+    : [];
+
+  const altExtras = (oficial.length + nbs.length) ? (oficial.length + nbs.length) * 3 + 3 : 0;
+  const altServico = 11 + descricao.length * 3.8 + 9.5 + altExtras;
 
   cartao(M, L, altServico, "Discriminação do serviço");
   doc.setFont("helvetica", "normal").setFontSize(9);
@@ -474,11 +500,12 @@ export function desenharDanfse(doc: any, d: DadosDanfse, extras: ExtrasDanfse = 
       rotulo(r, M + 4 + c3 * i, yServ);
       valorMono(v, M + 4 + c3 * i, yServ + 3.8);
     });
-  if (oficial.length) {
-    doc.setFont("helvetica", "normal").setFontSize(6.2);
-    cor(TINTA.claro);
-    doc.text(oficial, M + 4, yServ + 8.5);
-  }
+
+  let yExtra = yServ + 8.8;
+  doc.setFont("helvetica", "normal").setFontSize(6.4);
+  cor(TINTA.claro);
+  if (oficial.length) { doc.text(oficial, M + 4, yExtra); yExtra += oficial.length * 3; }
+  if (nbs.length) { doc.text(nbs, M + 4, yExtra); }
   y += altServico + 3.5;
 
   // --------------------------------------------------------- tributação

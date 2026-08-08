@@ -150,7 +150,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
     const uid = currentUser?.uid || null;
 
     if (!uid) {
-      console.log("[ArquivoDigitalMei] Usuário não autenticado no Firebase Auth. Query não será executada.");
+      console.log("[ArquivoDigitalMei] Usuário não autenticado. Consulta não será executada.");
       setDocumentos([]);
       setIsLoading(false);
       return;

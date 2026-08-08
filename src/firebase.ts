@@ -727,6 +727,20 @@ export function normalizarOrcamento(o: any): Orcamento {
     createdAt: String(o?.createdAt || new Date().toISOString()),
     atualizadoEm: o?.atualizadoEm || undefined,
     vendaId: o?.vendaId || undefined,
+
+    /**
+     * ⚠️ CAMPO NOVO PRECISA SER COPIADO AQUI TAMBÉM.
+     *
+     * Esta função monta o orçamento campo a campo. Tudo que for gravado e não
+     * estiver listado aqui simplesmente não existe para a tela — foi assim que
+     * o Arquivo Digital ficou sem o nome do cliente na primeira tentativa.
+     */
+    acompanhamento: Array.isArray(o?.acompanhamento)
+      ? o.acompanhamento
+          .map((c: any) => ({ etapa: Number(c?.etapa) || 0, quando: String(c?.quando || "") }))
+          .filter((c: any) => c.etapa >= 1 && c.etapa <= 3 && c.quando)
+      : [],
+    acompanhamentoEncerrado: !!o?.acompanhamentoEncerrado,
   };
 }
 

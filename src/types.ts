@@ -91,6 +91,17 @@ export interface Orcamento {
   /** Preenchido quando o orçamento aceito virou lançamento no Livro Caixa. */
   vendaId?: string;
 
+  /**
+   * RÉGUA DE ACOMPANHAMENTO — os contatos já feitos com o cliente.
+   *
+   * Proposta sem resposta quase nunca é um "não"; costuma ser um "esqueci".
+   * Estes dois campos guardam o que já foi feito para o sistema saber o que
+   * lembrar amanhã. Quem calcula tudo é src/utils/reguaContato.ts.
+   */
+  acompanhamento?: { etapa: number; quando: string }[];
+  /** Verdadeiro depois do terceiro contato — a régua tem fim, e para de cobrar. */
+  acompanhamentoEncerrado?: boolean;
+
   // --------------------------------------------------------------------------
   // LEGADO — orçamentos de um item só, salvos antes de `itens` existir.
   //

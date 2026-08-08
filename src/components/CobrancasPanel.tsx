@@ -241,7 +241,7 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 bg-emerald-100/60 text-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">
-                  Efí Bank
+                  Ativo
                 </span>
               )}
             </h4>
@@ -269,7 +269,7 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
                 <div className="text-left">
                   <h3 className="font-bold text-xl text-slate-900 tracking-tight">Cobranças</h3>
                   <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest mt-0.5">
-                    Boletos emitidos pela Efí
+                    Boletos emitidos
                   </p>
                 </div>
               </div>
@@ -278,7 +278,7 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
                   onClick={sincronizar}
                   disabled={sincronizando}
                   className="w-9 h-9 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-full flex items-center justify-center transition-colors cursor-pointer disabled:opacity-50"
-                  title="Conferir pagamentos na Efí"
+                  title="Conferir pagamentos"
                 >
                   <RefreshCw className={`w-4 h-4 ${carregando || sincronizando ? "animate-spin" : ""}`} />
                 </button>
@@ -542,7 +542,7 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
                     {emitindo ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>{modo === "carne" ? "Gerando carnê..." : "Gerando na Efí..."}</span>
+                        <span>{modo === "carne" ? "Gerando carnê..." : "Gerando boleto..."}</span>
                       </>
                     ) : (
                       <>
