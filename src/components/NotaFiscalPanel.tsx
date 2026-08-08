@@ -117,7 +117,10 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
         setProximoNumero(String(dcfg.proximoNumero || 1));
         setDescricaoPadrao(c.descricaoPadrao || "");
         setEmitirAoPagar(c.emitirAoPagar !== false);
-      } else if (dc.cnpj) {
+      } else {
+        setProximoNumero("1");
+      }
+      if (!c && dc.cnpj) {
         // Primeira vez: o CNPJ já veio dentro do certificado, não faz sentido
         // pedir de novo.
         setCnpj(dc.cnpj);
@@ -453,6 +456,12 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
               {/* ------------------------------------------------ dados fiscais */}
               <form onSubmit={salvarConfig} className="bg-white border border-slate-200/60 rounded-3xl p-5 space-y-3.5 text-left">
                 <h4 className="text-sm font-extrabold text-slate-800">Dados fiscais</h4>
+                {(!codMunicipio || !codigoServico) && (
+                  <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3 leading-relaxed">
+                    O texto cinza dentro dos campos é só exemplo — ainda não está preenchido.
+                    Digite os seus números por cima dele.
+                  </p>
+                )}
                 <p className="text-[11px] text-slate-500 leading-relaxed">
                   Preenche uma vez e vale para todas as notas. O código do município é o código do IBGE da sua
                   cidade, com 7 dígitos, e o código do serviço é o mesmo que você já escolhe hoje no Portal
@@ -465,7 +474,7 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
                     <input
                       value={cnpj}
                       onChange={(e) => setCnpj(e.target.value)}
-                      placeholder="00000000000000"
+                      placeholder="Ex.: 00000000000000"
                       inputMode="numeric"
                       className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
                     />
@@ -475,7 +484,7 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
                     <input
                       value={codMunicipio}
                       onChange={(e) => setCodMunicipio(e.target.value)}
-                      placeholder="3550308"
+                      placeholder="Ex.: 2925303"
                       inputMode="numeric"
                       maxLength={7}
                       className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
@@ -500,7 +509,7 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
                     <input
                       value={serie}
                       onChange={(e) => setSerie(e.target.value)}
-                      placeholder="70000"
+                      placeholder="Ex.: 70000"
                       inputMode="numeric"
                       maxLength={5}
                       className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
@@ -511,7 +520,7 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
                     <input
                       value={proximoNumero}
                       onChange={(e) => setProximoNumero(e.target.value.replace(/\D/g, ""))}
-                      placeholder="3"
+                      placeholder="Ex.: 1"
                       inputMode="numeric"
                       className="mt-1.5 w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
                     />
