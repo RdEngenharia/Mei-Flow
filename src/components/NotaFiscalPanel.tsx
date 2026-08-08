@@ -202,6 +202,30 @@ export default function NotaFiscalPanel({
     }
   }, []);
 
+  /**
+   * ⚠️ ESTA DECLARAÇÃO PRECISA FICAR ANTES DO useEffect QUE A USA.
+   *
+   * Ela estava depois, e a tela inteira ficava branca com
+   * "Cannot access 'X' before initialization". O motivo: a lista de
+   * dependências do useEffect — `[aberto, carregar, carregarNotas]` — é
+   * avaliada na hora em que o useEffect é chamado, não depois. Como
+   * `carregarNotas` é `const`, ler o nome antes da linha que o cria estoura.
+   *
+   * Vale para qualquer const usada numa lista de dependências: declare acima.
+   */
+  const carregarNotas = useCallback(async () => {
+    setCarregandoNotas(true);
+    try {
+      const r = await fetch(getApiUrl("/api/nfse"), { headers: await comToken() });
+      const d = await r.json();
+      if (r.ok && Array.isArray(d.notas)) setNotas(d.notas);
+    } catch {
+      // Lista de notas não é crítica; a gaveta segue funcionando sem ela.
+    } finally {
+      setCarregandoNotas(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (aberto) { carregar(); carregarNotas(); }
   }, [aberto, carregar, carregarNotas]);
@@ -313,19 +337,6 @@ export default function NotaFiscalPanel({
   function marcarHabitual(codigo: string) {
     setServicos(servicos.map((s) => ({ ...s, padrao: s.codigo === codigo })));
   }
-
-  const carregarNotas = useCallback(async () => {
-    setCarregandoNotas(true);
-    try {
-      const r = await fetch(getApiUrl("/api/nfse"), { headers: await comToken() });
-      const d = await r.json();
-      if (r.ok && Array.isArray(d.notas)) setNotas(d.notas);
-    } catch {
-      // Lista de notas não é crítica; a gaveta segue funcionando sem ela.
-    } finally {
-      setCarregandoNotas(false);
-    }
-  }, []);
 
   /** Baixa o XML — o documento fiscal de verdade, que o MEI é obrigado a guardar. */
   async function baixarXml(nota: NotaEmitida) {
