@@ -54,6 +54,7 @@
 import axios from "axios";
 import https from "https";
 import zlib from "zlib";
+import crypto from "crypto";
 import forge from "node-forge";
 import { SignedXml } from "xml-crypto";
 import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
@@ -80,21 +81,39 @@ function baseUrl(): string {
 // CERTIFICADO A1
 // ============================================================================
 
-type Certificado = { chavePem: string; certPem: string; agente: https.Agent; titular: string; validade: Date };
-let cacheCert: Certificado | null = null;
+type Certificado = {
+  chavePem: string;
+  certPem: string;
+  agente: https.Agent;
+  titular: string;
+  cnpj: string;
+  validade: Date;
+};
 
 /**
- * Abre o .p12/.pfx e extrai a chave privada e o certificado.
+ * ⚠️ CACHE POR USUÁRIO — NÃO TRANSFORME ISTO NUMA VARIÁVEL ÚNICA.
+ *
+ * Antes aqui havia um `let cacheCert` só. Funcionava enquanto existia um único
+ * MEI no sistema. Com dois, o segundo a emitir uma nota assinaria com o
+ * certificado do primeiro — nota fiscal saindo no CNPJ errado, e ninguém
+ * perceberia até a Receita perceber. A chave do mapa é o id do usuário.
+ */
+const cacheCerts = new Map<string, { cert: Certificado; expiraEm: number }>();
+const CACHE_MS = 10 * 60 * 1000;
+
+export function limparCacheCertificado(uid: string) {
+  cacheCerts.delete(uid);
+}
+
+/**
+ * Abre um .p12/.pfx e extrai a chave privada e o certificado.
  * O mesmo par serve para assinar o XML e para autenticar a conexão.
  */
-function abrirCertificado(): Certificado {
-  if (cacheCert) return cacheCert;
-
+function abrirP12(b64Bruto: string, senha: string): Certificado {
   // Colar o base64 num campo de texto costuma trazer quebras de linha e espaços
   // junto. O decodificador rejeita qualquer um deles, e o erro que ele devolve
   // ("senha errada") aponta para o lugar errado. Então limpamos antes.
-  const b64 = env("NFSE_CERT_P12_BASE64").replace(/\s+/g, "");
-  const senha = env("NFSE_CERT_SENHA");
+  const b64 = String(b64Bruto || "").replace(/\s+/g, "");
   if (!b64) throw new Error("SEM_CERTIFICADO");
 
   let chave: any = null;
@@ -113,25 +132,112 @@ function abrirCertificado(): Certificado {
   } catch (err: any) {
     // Senha errada e arquivo corrompido caem aqui — a mensagem do forge é
     // críptica, então traduzimos.
-    throw new Error("CERTIFICADO_INVALIDO");
+    throw new Error("SENHA_OU_ARQUIVO");
   }
-  if (!chave || !certificado) throw new Error("CERTIFICADO_INVALIDO");
+  if (!chave || !certificado) throw new Error("SENHA_OU_ARQUIVO");
 
+  return montarCertificado(
+    forge.pki.privateKeyToPem(chave),
+    forge.pki.certificateToPem(certificado)
+  );
+}
+
+/** Monta o par já em PEM: é o formato que fica guardado no cofre. */
+function montarCertificado(chavePem: string, certPem: string): Certificado {
+  const certificado = forge.pki.certificateFromPem(certPem);
   const validade = certificado.validity.notAfter;
   if (validade.getTime() < Date.now()) throw new Error("CERTIFICADO_VENCIDO");
 
-  const chavePem = forge.pki.privateKeyToPem(chave);
-  const certPem = forge.pki.certificateToPem(certificado);
+  // No A1 de pessoa jurídica o CNPJ vem colado no fim do CN ("EMPRESA:12345678000199").
+  const titular = String(certificado.subject.getField("CN")?.value || "");
+  const cnpj = (titular.match(/(\d{14})\s*$/) || [])[1] || "";
 
-  cacheCert = {
+  return {
     chavePem,
     certPem,
     // A conexão com o Portal exige apresentar o certificado (autenticação mútua).
     agente: new https.Agent({ key: chavePem, cert: certPem, keepAlive: true }),
-    titular: certificado.subject.getField("CN")?.value || "",
+    titular: titular.replace(/:?\d{14}\s*$/, "").trim(),
+    cnpj,
     validade,
   };
-  return cacheCert;
+}
+
+// ============================================================================
+// COFRE DO CERTIFICADO (AES-256-GCM)
+// ============================================================================
+//
+// O que fica guardado no Firestore é o par de chaves JÁ CIFRADO. A senha do
+// arquivo .pfx nunca é gravada: ela é usada uma vez, no momento do envio, para
+// abrir o arquivo, e depois descartada. A chave que desembaralha mora numa
+// variável de ambiente, fora do banco — quem levasse o banco levaria ruído.
+//
+// A coleção `nfse_certificados` PRECISA estar com regra de negação total no
+// Firestore. Nenhum aplicativo cliente pode lê-la; só o servidor, que entra
+// pelo Admin SDK e passa por cima das regras.
+
+function chaveCripto(): Buffer {
+  const hex = env("NFSE_CRYPTO_KEY") || env("CONEXOES_CRYPTO_KEY");
+  if (hex.length !== 64) throw new Error("SEM_CHAVE_CRIPTO");
+  return Buffer.from(hex, "hex");
+}
+
+function cifrar(texto: string): string {
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv("aes-256-gcm", chaveCripto(), iv);
+  const d = Buffer.concat([c.update(texto || "", "utf8"), c.final()]);
+  return `${iv.toString("base64")}.${c.getAuthTag().toString("base64")}.${d.toString("base64")}`;
+}
+
+function decifrar(pacote: string): string {
+  const [iv, tag, dados] = String(pacote || "").split(".");
+  if (!iv || !tag || !dados) throw new Error("COFRE_CORROMPIDO");
+  const d = crypto.createDecipheriv("aes-256-gcm", chaveCripto(), Buffer.from(iv, "base64"));
+  d.setAuthTag(Buffer.from(tag, "base64"));
+  return Buffer.concat([d.update(Buffer.from(dados, "base64")), d.final()]).toString("utf8");
+}
+
+/** Guarda o certificado do usuário no cofre. Devolve os dados visíveis dele. */
+async function guardarCertificado(db: any, uid: string, cert: Certificado) {
+  await db.collection("nfse_certificados").doc(uid).set({
+    userId: uid,
+    chavePemCifrada: cifrar(cert.chavePem),
+    certPemCifrado: cifrar(cert.certPem),
+    titular: cert.titular,
+    cnpj: cert.cnpj,
+    validoAte: cert.validade.toISOString(),
+    enviadoEm: new Date().toISOString(),
+  });
+  cacheCerts.set(uid, { cert, expiraEm: Date.now() + CACHE_MS });
+}
+
+/**
+ * Devolve o certificado do usuário. Procura em três lugares, nesta ordem:
+ * memória (rápido), cofre no Firestore (o caminho normal), e — só como rede de
+ * segurança durante a transição — a variável de ambiente antiga.
+ */
+async function certificadoDoUsuario(db: any, uid: string): Promise<Certificado> {
+  const emMemoria = cacheCerts.get(uid);
+  if (emMemoria && emMemoria.expiraEm > Date.now()) return emMemoria.cert;
+  cacheCerts.delete(uid);
+
+  if (db) {
+    const snap = await db.collection("nfse_certificados").doc(uid).get();
+    if (snap.exists) {
+      const d = snap.data();
+      const cert = montarCertificado(decifrar(d.chavePemCifrada), decifrar(d.certPemCifrado));
+      cacheCerts.set(uid, { cert, expiraEm: Date.now() + CACHE_MS });
+      return cert;
+    }
+  }
+
+  // Modo antigo: um certificado só, na variável de ambiente. Fica aqui até o
+  // certificado do dono do sistema subir pela tela; depois pode sair.
+  const b64 = env("NFSE_CERT_P12_BASE64");
+  if (!b64) throw new Error("SEM_CERTIFICADO");
+  const cert = abrirP12(b64, env("NFSE_CERT_SENHA"));
+  cacheCerts.set(uid, { cert, expiraEm: Date.now() + CACHE_MS });
+  return cert;
 }
 
 // ============================================================================
@@ -238,8 +344,8 @@ function montarDps(d: {
  *  • a canonicalização é a exclusiva — o Portal recusa a padrão;
  *  • o algoritmo é SHA-256; SHA-1 não é mais aceito.
  */
-function assinarDps(xmlDps: string, idDps: string): string {
-  const { chavePem, certPem } = abrirCertificado();
+function assinarDps(xmlDps: string, idDps: string, cert: Certificado): string {
+  const { chavePem, certPem } = cert;
 
   const sig = new SignedXml({
     privateKey: chavePem,
@@ -305,9 +411,12 @@ async function proximoNumero(db: any, uid: string, serie: string): Promise<numbe
 function explicar(err: any): { status: number; mensagem: string; detalhe?: any } {
   const mapa: Record<string, [number, string]> = {
     NAO_AUTENTICADO: [401, "Faça login para emitir nota."],
-    SEM_CERTIFICADO: [503, "Certificado digital não configurado no servidor (NFSE_CERT_P12_BASE64)."],
-    CERTIFICADO_INVALIDO: [503, "Não foi possível abrir o certificado. Confira se a senha (NFSE_CERT_SENHA) está correta e se o arquivo é um .pfx/.p12 válido."],
-    CERTIFICADO_VENCIDO: [503, "Seu certificado digital está vencido. Renove-o para continuar emitindo notas."],
+    SEM_CERTIFICADO: [428, "Envie seu certificado digital A1 antes de emitir notas."],
+    SENHA_OU_ARQUIVO: [400, "Não consegui abrir o certificado. Confira a senha — e confirme que o arquivo é o .pfx (ou .p12) do seu certificado A1."],
+    CERTIFICADO_INVALIDO: [400, "Não consegui abrir o certificado. Confira a senha e o arquivo."],
+    CERTIFICADO_VENCIDO: [400, "Este certificado digital está vencido. Renove-o para continuar emitindo notas."],
+    SEM_CHAVE_CRIPTO: [503, "O servidor está sem a chave de segurança NFSE_CRYPTO_KEY, então não pode guardar certificados."],
+    COFRE_CORROMPIDO: [503, "O certificado guardado não pôde ser lido — provavelmente a chave de segurança do servidor mudou. Envie o certificado novamente."],
     SEM_CONFIG: [400, "Antes de emitir, preencha os dados fiscais: CNPJ, código do município e código do serviço."],
   };
   if (mapa[err.message]) return { status: mapa[err.message][0], mensagem: mapa[err.message][1] };
@@ -381,8 +490,9 @@ export async function emitirNfseDaCobranca(
     competencia: hoje,
   });
 
-  const assinado = assinarDps(xmlDps, idDps);
-  const { agente } = abrirCertificado();
+  const cert = await certificadoDoUsuario(db, cobranca.userId);
+  const assinado = assinarDps(xmlDps, idDps, cert);
+  const agente = cert.agente;
 
   const { data } = await axios.post(
     `${baseUrl()}/nfse`,
@@ -436,59 +546,113 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
   const exigirUsuario = (req: any) => verificarLogin(req);
 
   /**
-   * Teste rápido, SEM login — para conferir pelo navegador se o certificado
-   * foi lido no servidor. Não devolve nome, CNPJ nem nada do certificado:
-   * só se carregou, até quando vale e em que ambiente está. Assim dá para
-   * diagnosticar sem precisar estar logado e sem expor dado nenhum.
+   * Saúde do servidor, SEM login — dá para abrir na barra do navegador.
+   * Não fala do certificado de ninguém: só diz se o servidor está pronto para
+   * receber certificados. Nenhum dado de usuário sai daqui.
    */
   app.get("/api/nfse/status", (_req: any, res: any) => {
-    try {
-      const c = abrirCertificado();
-      const dias = Math.floor((c.validade.getTime() - Date.now()) / 86400000);
-      res.json({
-        success: true,
-        certificado: "carregado",
-        validoAte: c.validade.toISOString().slice(0, 10),
-        diasRestantes: dias,
-        ambiente: ehProducao() ? "Produção" : "Homologação",
-        mensagem: dias < 30
-          ? `Certificado OK, mas vence em ${dias} dias.`
-          : "Certificado lido com sucesso. Pode emitir notas.",
-      });
-    } catch (err: any) {
-      const { status, mensagem } = explicar(err);
-      const bruto = env("NFSE_CERT_P12_BASE64").replace(/\s+/g, "");
-      // Pistas sem risco: nenhum pedaço útil do certificado nem da senha sai
-      // daqui. Só o suficiente para saber ONDE está o problema.
-      res.status(status).json({
-        success: false,
-        certificado: "falhou",
-        mensagem,
-        conferir: {
-          variavelCertificadoExiste: bruto.length > 0,
-          tamanhoDoTextoColado: bruto.length,
-          pareceUmCertificado: bruto.startsWith("MII"),
-          variavelSenhaExiste: env("NFSE_CERT_SENHA").length > 0,
-          ambiente: ehProducao() ? "Produção" : "Homologação",
-        },
-      });
-    }
+    let cofrePronto = false;
+    try { chaveCripto(); cofrePronto = true; } catch { /* segue sem cofre */ }
+
+    res.json({
+      success: cofrePronto,
+      cofre: cofrePronto ? "pronto" : "sem chave de segurança",
+      ambiente: ehProducao() ? "Produção" : "Homologação",
+      mensagem: cofrePronto
+        ? "Servidor pronto. Envie seu certificado pela tela Certificado Digital."
+        : "Falta configurar NFSE_CRYPTO_KEY no servidor (64 caracteres). Sem ela não é possível guardar certificados.",
+    });
   });
 
-  /** Diagnóstico completo do certificado — exige login. */
+  /** Situação do certificado DESTE usuário. */
   app.get("/api/nfse/certificado", async (req: any, res: any) => {
     try {
-      await exigirUsuario(req);
-      const c = abrirCertificado();
+      const uid = await exigirUsuario(req);
+      const c = await certificadoDoUsuario(db, uid);
       const diasRestantes = Math.floor((c.validade.getTime() - Date.now()) / 86400000);
       res.json({
         success: true,
+        configurado: true,
         titular: c.titular,
+        cnpj: c.cnpj,
         validoAte: c.validade.toISOString().slice(0, 10),
         diasRestantes,
         alerta: diasRestantes < 30 ? `Seu certificado vence em ${diasRestantes} dias.` : null,
         ambiente: ehProducao() ? "Produção" : "Homologação",
       });
+    } catch (err: any) {
+      // "Ainda não enviou" não é erro: é o estado normal de quem acabou de
+      // entrar. A tela precisa distinguir isso de uma falha de verdade.
+      if (err.message === "SEM_CERTIFICADO") {
+        return res.json({
+          success: true,
+          configurado: false,
+          ambiente: ehProducao() ? "Produção" : "Homologação",
+          mensagem: "Nenhum certificado enviado ainda.",
+        });
+      }
+      const { status, mensagem } = explicar(err);
+      res.status(status).json({ success: false, configurado: false, mensagem });
+    }
+  });
+
+  /**
+   * Envio do certificado A1. O arquivo chega em base64 junto da senha.
+   *
+   * A senha é usada uma única vez, aqui, para abrir o arquivo — e não é gravada
+   * em lugar nenhum. O que vai para o cofre é o par de chaves já cifrado.
+   */
+  app.post("/api/nfse/certificado", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const arquivo = String(req.body?.arquivoBase64 || "").replace(/^data:[^,]*,/, "");
+      const senha = String(req.body?.senha ?? "");
+      if (!arquivo) throw new Error("SEM_CERTIFICADO");
+
+      // Um A1 tem uns poucos KB. Recusar cedo evita gastar memória à toa e
+      // barra o engano comum de mandar o arquivo errado.
+      if (arquivo.length > 400_000) throw new Error("ARQUIVO_GRANDE");
+
+      // Falha aqui = senha errada ou arquivo que não é certificado. O usuário
+      // descobre agora, na tela, e não daqui a uma semana ao emitir a nota.
+      const cert = abrirP12(arquivo, senha);
+
+      chaveCripto(); // confere a chave do cofre ANTES de dizer que deu certo
+      await guardarCertificado(db, uid, cert);
+
+      const diasRestantes = Math.floor((cert.validade.getTime() - Date.now()) / 86400000);
+      console.log(`[NFS-e] Certificado guardado para ${uid}. Titular: ${cert.titular}. Vence em ${diasRestantes} dias.`);
+
+      res.json({
+        success: true,
+        configurado: true,
+        titular: cert.titular,
+        cnpj: cert.cnpj,
+        validoAte: cert.validade.toISOString().slice(0, 10),
+        diasRestantes,
+        alerta: diasRestantes < 30 ? `Atenção: este certificado vence em ${diasRestantes} dias.` : null,
+        mensagem: "Certificado guardado com segurança. Você já pode emitir notas.",
+      });
+    } catch (err: any) {
+      if (err.message === "ARQUIVO_GRANDE") {
+        return res.status(400).json({
+          success: false,
+          mensagem: "Esse arquivo é grande demais para ser um certificado A1. Confira se você escolheu o arquivo certo.",
+        });
+      }
+      const { status, mensagem } = explicar(err);
+      res.status(status).json({ success: false, mensagem });
+    }
+  });
+
+  /** Remove o certificado do cofre. Some do banco e da memória. */
+  app.delete("/api/nfse/certificado", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      await db.collection("nfse_certificados").doc(uid).delete();
+      limparCacheCertificado(uid);
+      console.log(`[NFS-e] Certificado removido para ${uid}.`);
+      res.json({ success: true, configurado: false, mensagem: "Certificado removido." });
     } catch (err: any) {
       const { status, mensagem } = explicar(err);
       res.status(status).json({ success: false, mensagem });
@@ -594,8 +758,8 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
   /** Consulta uma nota no Portal pela chave de acesso. */
   app.get("/api/nfse/:chave", async (req: any, res: any) => {
     try {
-      await exigirUsuario(req);
-      const { agente } = abrirCertificado();
+      const uid = await exigirUsuario(req);
+      const { agente } = await certificadoDoUsuario(db, uid);
       const { data } = await axios.get(`${baseUrl()}/nfse/${String(req.params.chave)}`, {
         httpsAgent: agente,
         headers: { Accept: "application/json" },

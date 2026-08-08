@@ -57,6 +57,7 @@ import DasModal from "./components/DasModal";
 import DasnModal from "./components/DasnModal";
 import ArquivoDigitalMei from "./components/ArquivoDigitalMei";
 import CobrancasPanel from "./components/CobrancasPanel";
+import NotaFiscalPanel from "./components/NotaFiscalPanel";
 import { jsPDF } from "jspdf";
 import { savePdfCrossPlatform, isNativePlatform } from "./utils/nativeFile";
 import autoTable from "jspdf-autotable";
@@ -1987,6 +1988,11 @@ ${meiName}`;
                 onTriggerUpgrade={() => setShowUpgradeModal(true)}
                 triggerToast={triggerToast}
               />
+            </div>
+
+            {/* SEÇÃO INTEGRADA: NOTA FISCAL (certificado A1 + dados fiscais) */}
+            <div className="mt-8">
+              <NotaFiscalPanel triggerToast={triggerToast} />
             </div>
 
             {/* SEÇÃO INTEGRADA: ARQUIVO DIGITAL DO MEI */}
