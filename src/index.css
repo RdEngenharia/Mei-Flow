@@ -70,14 +70,25 @@
     margin: 10mm;
   }
 
-  /* Nada do aplicativo vai para o papel, exceto o caminho até a folha. */
-  body * {
-    visibility: hidden;
+  /*
+    ⚠️ display: none, NUNCA visibility: hidden.
+
+    A primeira versão disto escondia o aplicativo com `visibility: hidden`. Só
+    que visibility esconde SEM tirar do fluxo: cada elemento continua ocupando
+    o espaço dele e continua gerando página. O resultado foi um PDF de quatro
+    páginas com a folha do orçamento na terceira e duas em branco antes.
+
+    A folha é levada para fora do #root por um portal do React, então esconder
+    o #root inteiro é suficiente e não deixa nada para trás.
+  */
+  #root {
+    display: none !important;
   }
 
-  #print-overlay,
-  #print-overlay * {
-    visibility: visible;
+  html, body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
   }
 
   /* A camada deixa de ser tela e passa a ser documento. */
@@ -103,7 +114,7 @@
     overflow: visible !important;
   }
 
-  /* A folha em si: sem fundo pontilhado, sem sombra, e não pode quebrar. */
+  /* A folha em si: sem sombra, sem borda, e não pode quebrar no meio. */
   [data-folha] {
     padding: 0 !important;
     background-image: none !important;
@@ -113,7 +124,6 @@
     page-break-inside: avoid;
   }
 
-  /* Blocos que não devem ser cortados no meio de uma quebra. */
   [data-folha] table,
   [data-folha] thead,
   [data-folha] tr {
@@ -121,7 +131,4 @@
     page-break-inside: avoid;
   }
 
-  .print\:hidden {
-    display: none !important;
-  }
 }

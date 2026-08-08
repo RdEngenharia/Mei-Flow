@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   Sparkles, Plus, Trash2, Loader2, Search, Package, Wrench, FileText, Calendar,
   User, CheckCircle2, Printer, X, Phone, Bookmark, ArrowRight, ArrowLeft,
-  TrendingUp, Clock, XCircle, ShoppingCart, Cloud, CloudOff,
+  TrendingUp, Clock, XCircle, ShoppingCart, Cloud, CloudOff, Download,
 } from "lucide-react";
 import { db, saveOrcamentoToFirebase, fetchOrcamentosFromFirebase,
          deleteOrcamentoFromFirebase, normalizarOrcamento } from "../firebase";
@@ -105,6 +106,8 @@ export default function OrcamentoGenerator({
   const [naNuvem, setNaNuvem] = useState<boolean | null>(null);
   const [salvando, setSalvando] = useState(false);
   const [convertendo, setConvertendo] = useState<string | null>(null);
+  // Orçamento recém-marcado como aceito, esperando a decisão sobre faturamento.
+  const [perguntarVenda, setPerguntarVenda] = useState<Orcamento | null>(null);
 
   // Cliente
   const [showClientDropdown, setShowClientDropdown] = useState(false);
@@ -332,6 +335,21 @@ export default function OrcamentoGenerator({
     } catch {
       triggerToast("⚠ Mudança salva aqui, mas não subiu para a nuvem.");
     }
+
+    /**
+     * ACEITO SIGNIFICA VENDA FEITA.
+     *
+     * Marcar aceito e depois ter que lembrar de clicar em "lançar venda" é
+     * pedir para o faturamento ficar errado — a pessoa marca, sai da tela e
+     * esquece. Então perguntamos na hora.
+     *
+     * Perguntar em vez de lançar direto é de propósito: isso entra no
+     * faturamento anual do MEI, que tem teto e reflete no DAS e na DASN. Valor
+     * que aparece sozinho no faturamento é pior do que um clique a mais.
+     */
+    if (situacao === "aceito" && !atualizado.vendaId && onConverterEmVenda) {
+      setPerguntarVenda(atualizado);
+    }
   };
 
   const converter = async (orc: Orcamento) => {
@@ -346,7 +364,8 @@ export default function OrcamentoGenerator({
       setHistorico(lista);
       espelharLocal(lista);
       try { await saveOrcamentoToFirebase(userId, atualizado); } catch { /* já avisado */ }
-      triggerToast("✓ Venda lançada no Livro Caixa! Já pode emitir a nota.");
+      setPerguntarVenda(null);
+      triggerToast("✓ Venda lançada no faturamento! Já pode emitir a nota fiscal.");
     } catch (err: any) {
       triggerToast(`⚠ ${err?.message || "Não consegui lançar a venda."}`);
     } finally {
@@ -370,26 +389,32 @@ export default function OrcamentoGenerator({
   // PDF
   // --------------------------------------------------------------------------
 
-  const handlePrintQuote = async () => {
-    // Dentro do APK não existe motor de impressão do navegador, então lá o
-    // caminho é fotografar a folha e montar o PDF na mão.
-    if (isNativePlatform()) {
-      if (!printableRef.current || isSavingQuotePdf) return;
-      setIsSavingQuotePdf(true);
-      try {
-        const quem = (activePreviewQuote?.clienteNome || "cliente").replace(/[^\wÀ-ÿ ]/g, "");
-        const nome = `orcamento_${activePreviewQuote?.numero || ""}_${quem}.pdf`.replace(/\s+/g, "_");
-        await saveHtmlElementAsPdf(printableRef.current, nome, { umaPagina: true });
-        triggerToast("✓ PDF salvo em Downloads.");
-      } catch (err) {
-        console.error("Erro ao gerar PDF do orçamento:", err);
-        triggerToast("⚠ Não consegui gerar o PDF.");
-      } finally {
-        setIsSavingQuotePdf(false);
-      }
-      return;
+  /**
+   * BAIXAR PDF — o mesmo caminho na web e no aplicativo.
+   *
+   * Antes, na web, isto chamava a impressão do navegador. Mesmo com a folha de
+   * estilo certa, o Chrome ainda enfia o cabeçalho dele ("data, MEI Flow, URL")
+   * e depende de o usuário desmarcar opções no diálogo de impressão. Gerando o
+   * PDF nós mesmos, o resultado é o mesmo em qualquer lugar: uma folha, sem
+   * cabeçalho de navegador, sem página em branco.
+   *
+   * O botão Imprimir continua existindo para quem quiser mandar direto para a
+   * impressora — e para esse caso o index.css deixa a folha apresentável.
+   */
+  const baixarPdf = async () => {
+    if (!printableRef.current || isSavingQuotePdf) return;
+    setIsSavingQuotePdf(true);
+    try {
+      const quem = (activePreviewQuote?.clienteNome || "cliente").replace(/[^\wÀ-ÿ ]/g, "");
+      const nome = `orcamento_${activePreviewQuote?.numero || ""}_${quem}.pdf`.replace(/\s+/g, "_");
+      await saveHtmlElementAsPdf(printableRef.current, nome, { umaPagina: true });
+      triggerToast(isNativePlatform() ? "✓ PDF salvo em Downloads." : "✓ PDF gerado.");
+    } catch (err) {
+      console.error("Erro ao gerar PDF do orçamento:", err);
+      triggerToast("⚠ Não consegui gerar o PDF.");
+    } finally {
+      setIsSavingQuotePdf(false);
     }
-    window.print();
   };
 
   const itensDaFolha = activePreviewQuote?.itens?.length
@@ -975,8 +1000,59 @@ export default function OrcamentoGenerator({
         </div>
       )}
 
+      {/* ---------------------------- aceito: lançar no faturamento? -------- */}
+      {perguntarVenda && (
+        <div className="fixed inset-0 z-[60] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-5 print:hidden">
+          <div className="bg-white rounded-3xl w-full max-w-md p-6 space-y-4 shadow-xl text-left">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center shrink-0">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-bold text-base text-slate-900">Orçamento aceito!</h3>
+                <p className="text-xs text-slate-400 font-medium mt-0.5 truncate">
+                  {perguntarVenda.clienteNome} · {brl(Number(perguntarVenda.total) || 0)}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-[12px] text-slate-600 leading-relaxed">
+              Quer lançar essa venda no <strong>faturamento</strong> agora? Ela entra no Livro Caixa como
+              entrada, passa a contar no seu faturamento anual do MEI e fica pronta para emitir nota fiscal.
+            </p>
+
+            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3 leading-relaxed">
+              Se o cliente aceitou mas ainda não pagou, você pode só marcar como aceito agora e lançar
+              depois, quando o dinheiro entrar. O botão "Lançar venda" continua no cartão.
+            </p>
+
+            <div className="flex flex-col gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => converter(perguntarVenda)}
+                disabled={!!convertendo}
+                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-2xl cursor-pointer uppercase tracking-wide disabled:opacity-60 flex items-center justify-center gap-2"
+              >
+                {convertendo
+                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : <ShoppingCart className="w-4 h-4" />}
+                Lançar {brl(Number(perguntarVenda.total) || 0)} no faturamento
+              </button>
+              <button
+                type="button"
+                onClick={() => setPerguntarVenda(null)}
+                disabled={!!convertendo}
+                className="w-full py-3 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold text-xs rounded-2xl cursor-pointer disabled:opacity-50"
+              >
+                Só marcar como aceito, lanço depois
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ============================================ VISUALIZADOR / FOLHA === */}
-      {activePreviewQuote && (
+      {activePreviewQuote && createPortal((
         <div id="print-overlay" className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex justify-center items-start p-4 sm:p-6 md:p-10 overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden text-left flex flex-col my-4 sm:my-8">
 
@@ -987,13 +1063,22 @@ export default function OrcamentoGenerator({
               </h3>
               <div className="flex items-center gap-2">
                 <button
-                  type="button" onClick={handlePrintQuote} disabled={isSavingQuotePdf}
+                  type="button" onClick={baixarPdf} disabled={isSavingQuotePdf}
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer disabled:opacity-60"
                 >
                   {isSavingQuotePdf
-                    ? <><Loader2 className="w-4 h-4 animate-spin" /><span>Salvando...</span></>
-                    : <><Printer className="w-4 h-4 text-blue-100" /><span>Imprimir / PDF</span></>}
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /><span>Gerando...</span></>
+                    : <><Download className="w-4 h-4 text-blue-100" /><span>Baixar PDF</span></>}
                 </button>
+                {!isNativePlatform() && (
+                  <button
+                    type="button" onClick={() => window.print()}
+                    className="px-3 py-2 bg-white hover:bg-slate-200 text-slate-600 border border-slate-200 text-xs font-bold rounded-xl cursor-pointer flex items-center gap-1.5"
+                    title="Mandar direto para a impressora"
+                  >
+                    <Printer className="w-4 h-4" />
+                  </button>
+                )}
                 <button
                   onClick={() => setActivePreviewQuote(null)}
                   className="bg-white hover:bg-slate-200 text-slate-600 border border-slate-200 p-2 rounded-xl cursor-pointer"
@@ -1161,7 +1246,7 @@ export default function OrcamentoGenerator({
 
           </div>
         </div>
-      )}
+      ), document.body)}
 
     </div>
   );
