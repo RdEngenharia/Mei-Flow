@@ -915,6 +915,30 @@ export function registrarRotasEfi(
       { merge: true }
     );
 
+    // --------------------------------------------------------------------
+    // NOTA FISCAL — emitida só depois que o dinheiro entrou.
+    // Emitir na hora do boleto criaria nota de serviço que o cliente talvez
+    // nunca pague, e nota emitida indevidamente dá trabalho para cancelar.
+    // Falha aqui NÃO desfaz o pagamento: o recebimento continua registrado.
+    // --------------------------------------------------------------------
+    try {
+      const cfgSnap = await db.collection("nfse_config").doc(cobranca.userId).get();
+      if (cfgSnap.exists && cfgSnap.data().ativo !== false && cfgSnap.data().emitirAoPagar !== false) {
+        const { emitirNfseDaCobranca } = await import("./nfse.js");
+        const nota = await emitirNfseDaCobranca(db, adminStorage, firebaseConfig, String(chargeId));
+        console.log(`[Efí] Nota fiscal da cobrança ${chargeId}:`, nota?.chave || nota);
+      }
+    } catch (errNota: any) {
+      console.warn(
+        `[Efí] Pagamento registrado, mas a nota fiscal falhou (${chargeId}):`,
+        errNota.response?.data || errNota.message
+      );
+      await snap.ref.set(
+        { nfseErro: String(errNota.message || "").slice(0, 300), nfseTentadaEm: new Date().toISOString() },
+        { merge: true }
+      );
+    }
+
     console.log(`[Efí] Cobrança ${chargeId} concluída e arquivada em ${mes}/${ano}.`);
     return { ok: true, ano, mes, documentoId: documento?.id || null };
   }

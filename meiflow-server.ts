@@ -29,6 +29,7 @@ import { getStorage } from "firebase-admin/storage";
 import { registrarRotasEfi } from "./efi.js";
 import { registrarRotasCobrancas } from "./cobrancas.js";
 import { registrarRotasCreditos } from "./creditos.js";
+import { registrarRotasNfse } from "./nfse.js";
 
 // ---------------------------------------------------------------------------
 // Firebase Admin — mesmo padrão do server.ts e dos outros arquivos de api/
@@ -117,6 +118,7 @@ app.use((req: any, res, next) => {
 registrarRotasEfi(app, db, adminStorage, firebaseConfig);
 registrarRotasCobrancas(app, db);
 registrarRotasCreditos(app, db);
+registrarRotasNfse(app, db, adminStorage, firebaseConfig);
 
 // Rede de segurança: se alguém chamar uma rota que não existe, responde em
 // JSON explicando, em vez da página de erro genérica da Vercel.
@@ -124,7 +126,7 @@ app.use((req, res) => {
   res.status(404).json({
     success: false,
     mensagem: `Rota não encontrada: ${req.method} ${req.url}`,
-    dica: "Confira o endereço. As rotas começam com /api/efi, /api/cobrancas ou /api/creditos.",
+    dica: "Confira o endereço. As rotas começam com /api/efi, /api/cobrancas, /api/creditos ou /api/nfse.",
   });
 });
 
