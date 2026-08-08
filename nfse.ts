@@ -1519,6 +1519,66 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
     }
   });
 
+  /**
+   * Arquiva no Arquivo Digital as notas que ficaram de fora.
+   *
+   * POR QUE ISTO EXISTE: o arquivamento automático só passou a rodar depois que
+   * as primeiras notas já tinham saído. Sem um reparo, o XML delas — que é o
+   * documento de guarda obrigatória — ficaria só numa coleção do banco, fora da
+   * pasta do mês, para sempre.
+   *
+   * Também serve de rede se algum arquivamento falhar no futuro: rodar de novo
+   * não duplica nada, porque `arquivarNaPasta` ignora o que já existe.
+   */
+  app.post("/api/nfse/arquivar-pendentes", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const snap = await db.collection("nfse_emitidas").where("userId", "==", uid).get();
+
+      let arquivadas = 0;
+      let semXml = 0;
+      const problemas: string[] = [];
+
+      for (const doc of snap.docs) {
+        const n = doc.data();
+        if (!n.xml) { semXml++; continue; }
+
+        // A pasta é a do mês em que a nota foi emitida, e não a de hoje —
+        // arquivar tudo em agosto bagunçaria a conferência do contador.
+        const quando = new Date(n.emitidaEm || Date.now());
+        const rotulo = `NFSe_${n.numeroNfse || n.numero}_${n.serie}`;
+        try {
+          await arquivarNaPasta(db, adminStorage, firebaseConfig, {
+            userId: uid,
+            conteudo: Buffer.from(n.xml, "utf8"),
+            nomeArquivo: `${rotulo}.xml`,
+            contentType: "application/xml",
+            quando: isNaN(quando.getTime()) ? new Date() : quando,
+            referenciaId: `nfse_xml_${n.chave || n.id}`,
+          });
+          arquivadas++;
+        } catch (err: any) {
+          problemas.push(`${rotulo}: ${err.message}`);
+        }
+      }
+
+      res.json({
+        success: true,
+        total: snap.size,
+        arquivadas,
+        semXml,
+        problemas,
+        mensagem: problemas.length
+          ? `Arquivei ${arquivadas} de ${snap.size}. ${problemas.length} deram erro.`
+          : `Pronto: ${arquivadas} nota(s) conferida(s) e guardada(s) no Arquivo Digital.`,
+      });
+    } catch (err: any) {
+      console.error("[NFS-e Arquivar]", err.message);
+      const { status, mensagem } = explicar(err);
+      res.status(status).json({ success: false, mensagem });
+    }
+  });
+
   /** Consulta uma nota no Portal pela chave de acesso. */
   app.get("/api/nfse/:chave", async (req: any, res: any) => {
     try {

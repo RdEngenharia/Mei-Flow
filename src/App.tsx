@@ -2110,6 +2110,8 @@ ${meiName}`;
                 cnpjPrestador={cnpjPrestador || ""}
                 inscricaoMunicipal={inscricaoMunicipal || ""}
                 telefonePrestador={telefonePrestador || ""}
+                companyLogo={planType === "premium" ? companyLogo : ""}
+                clientes={clientes}
               />
             </div>
 
@@ -2716,6 +2718,8 @@ ${meiName}`;
         cnpjPrestador={cnpjPrestador || ""}
         inscricaoMunicipal={inscricaoMunicipal || ""}
         telefonePrestador={telefonePrestador || ""}
+        companyLogo={planType === "premium" ? companyLogo : ""}
+        clientes={clientes}
         abrirExterno={abrirNotaFiscal}
         onFechado={() => { setAbrirNotaFiscal(false); setServicosNfse(null); }}
       />

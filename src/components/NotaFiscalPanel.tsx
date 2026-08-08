@@ -10,6 +10,7 @@ import { getApiUrl, saveHtmlElementAsPdf } from "../utils/nativeFile";
 import {
   buscarServicos, formatarCodigoServico, descricaoDoCodigo, ServicoNacional,
 } from "../data/servicosNfse";
+import FolhaNotaFiscal from "./FolhaNotaFiscal";
 
 /**
  * NOTA FISCAL — certificado digital A1 e dados fiscais do MEI.
@@ -55,6 +56,21 @@ interface Props {
   inscricaoMunicipal?: string;
   telefonePrestador?: string;
   municipioPrestador?: string;
+  emailPrestador?: string;
+  companyLogo?: string;
+  enderecoPrestador?: {
+    cep?: string; logradouro?: string; numero?: string;
+    bairro?: string; cidade?: string; uf?: string;
+  };
+  /**
+   * Cadastro de clientes, usado para completar o tomador na folha impressa.
+   *
+   * O Portal não recebe endereço nem telefone do tomador hoje — nós enviamos só
+   * nome, documento e e-mail. Então esses campos saem do cadastro que já existe
+   * aqui, o mesmo que o boleto usa. A nota oficial segue sem eles até a gente
+   * passar a enviá-los na DPS.
+   */
+  clientes?: any[];
   /** Abre a gaveta a partir de fora — usado pelo botão "Emitir Nota Fiscal" do topo. */
   abrirExterno?: boolean;
   /** Avisa quem abriu de fora que a gaveta fechou, para ele poder abrir de novo depois. */
@@ -101,6 +117,35 @@ const brl = (n: number) =>
 const dataBR = (iso?: string) =>
   iso ? iso.split("-").reverse().join("/") : "—";
 
+/** Formata CPF (11) ou CNPJ (14); qualquer outra coisa volta como veio. */
+const docBR = (v?: string) => {
+  const n = String(v || "").replace(/\D/g, "");
+  if (n.length === 11) return n.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
+  if (n.length === 14) return n.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
+  return v || "";
+};
+
+const cepBR = (v?: string) => {
+  const n = String(v || "").replace(/\D/g, "");
+  return n.length === 8 ? n.replace(/(\d{5})(\d{3})/, "$1-$2") : (v || "");
+};
+
+const foneBR = (v?: string) => {
+  const n = String(v || "").replace(/\D/g, "");
+  if (n.length === 11) return n.replace(/(\d{2})(\d{5})(\d{4})/, "($1) $2-$3");
+  if (n.length === 10) return n.replace(/(\d{2})(\d{4})(\d{4})/, "($1) $2-$3");
+  return v || "";
+};
+
+/** Iniciais do nome, para o monograma de quem não tem logo. */
+const iniciais = (nome?: string) =>
+  String(nome || "MEI").trim().split(/\s+/).filter(w => w.length > 1)
+    .slice(0, 2).map(w => w[0]).join("").toUpperCase() || "MF";
+
+/** Quebra a chave de 50 dígitos em grupos de 4 — muito mais fácil de conferir. */
+const chaveEmGrupos = (c?: string) =>
+  String(c || "").replace(/\D/g, "").replace(/(.{4})/g, "$1 ").trim();
+
 const cnpjBR = (v?: string) => {
   const d = String(v || "").replace(/\D/g, "");
   if (d.length !== 14) return v || "—";
@@ -110,6 +155,7 @@ const cnpjBR = (v?: string) => {
 export default function NotaFiscalPanel({
   triggerToast, abrirExterno, onFechado, semCartao,
   meiName, cnpjPrestador, inscricaoMunicipal, telefonePrestador, municipioPrestador,
+  emailPrestador, enderecoPrestador, clientes, companyLogo,
 }: Props) {
   const [aberto, setAberto] = useState(false);
   const [carregando, setCarregando] = useState(false);
@@ -143,6 +189,7 @@ export default function NotaFiscalPanel({
   const [dadosNota, setDadosNota] = useState<any>(null);
   const [lendoNota, setLendoNota] = useState(false);
   const [qrCode, setQrCode] = useState("");
+  const [arquivando, setArquivando] = useState(false);
   const [gerandoPdf, setGerandoPdf] = useState(false);
   const folhaNotaRef = useRef<HTMLDivElement>(null);
 
@@ -455,6 +502,26 @@ export default function NotaFiscalPanel({
     }
   }
 
+  /** Manda o servidor guardar no Arquivo Digital as notas que ficaram de fora. */
+  async function arquivarPendentes() {
+    if (arquivando) return;
+    setArquivando(true);
+    try {
+      const r = await fetch(getApiUrl("/api/nfse/arquivar-pendentes"), {
+        method: "POST",
+        headers: await comToken(),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.mensagem || "Não consegui arquivar.");
+      triggerToast?.(`✓ ${d.mensagem}`);
+      if (d.problemas?.length) console.warn("[NFS-e] Notas com problema:", d.problemas);
+    } catch (e: any) {
+      triggerToast?.(`⚠ ${e.message}`);
+    } finally {
+      setArquivando(false);
+    }
+  }
+
   function copiarChave(chave: string) {
     navigator.clipboard?.writeText(chave)
       .then(() => triggerToast?.("✓ Chave de acesso copiada. O cliente confere no site do governo."))
@@ -484,6 +551,18 @@ export default function NotaFiscalPanel({
       setSalvando(false);
     }
   }
+
+  /**
+   * Cliente do cadastro correspondente à nota aberta.
+   *
+   * Casa pelo documento, que é o único identificador que a nota carrega. Sem
+   * documento (tomador não identificado) não há o que casar.
+   */
+  const clienteDaNota = (() => {
+    const doc = String(dadosNota?.tomador?.documento || notaAberta?.clienteDocumento || "").replace(/\D/g, "");
+    if (!doc || !Array.isArray(clientes)) return null;
+    return clientes.find((c: any) => String(c?.documento || "").replace(/\D/g, "") === doc) || null;
+  })();
 
   const pronto = !!cert?.configurado;
   // Em produção cada clique gera documento fiscal de verdade. A tela precisa
@@ -1005,6 +1084,18 @@ export default function NotaFiscalPanel({
                   emissão — ele é o documento fiscal de verdade e a lei obriga a guardar.
                 </p>
 
+                {notas.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={arquivarPendentes}
+                    disabled={arquivando}
+                    className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
+                  >
+                    {arquivando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                    {arquivando ? "Arquivando..." : "Conferir e arquivar notas no Arquivo Digital"}
+                  </button>
+                )}
+
                 {carregandoNotas && notas.length === 0 ? (
                   <div className="flex justify-center py-6 text-slate-400">
                     <Loader2 className="w-5 h-5 animate-spin" />
@@ -1130,270 +1221,25 @@ export default function NotaFiscalPanel({
               </div>
             </div>
 
-            {/*
-              A DANFSe que o MEI Flow monta.
-              É documento AUXILIAR: o que vale legalmente é o XML. A função dela
-              é ser lida por gente, e trazer a chave de acesso para o cliente
-              conferir a autenticidade no site do governo.
-            */}
-            <div ref={folhaNotaRef} data-folha="danfse" className="p-5 md:p-6 bg-white font-sans text-slate-900 text-[10px] leading-snug">
-
-              {/*
-                DANFSe — mesmo conjunto de blocos do documento oficial.
-                Tudo sai do XML da nota (dadosNota); o resumo do banco é reserva.
-
-                ⚠️ Isto é DOCUMENTO AUXILIAR. Nenhum PDF tem valor fiscal, nem o
-                   do próprio governo — o que vale é o XML. A função da folha é
-                   representar a nota fielmente e permitir a verificação pela
-                   chave ou pelo QR.
-              */}
-
-              {/* ------------------------------------------------- cabeçalho */}
-              <div className="border border-slate-400 rounded-t">
-                <div className="flex items-stretch">
-                  <div className="flex-1 p-2.5 border-r border-slate-300">
-                    <p className="text-[8px] font-bold uppercase tracking-widest text-slate-500">Documento Auxiliar da</p>
-                    <p className="text-[13px] font-extrabold leading-tight">NFS-e</p>
-                    <p className="text-[9px] text-slate-600">Nota Fiscal de Serviço eletrônica</p>
-                  </div>
-                  <div className="flex-1 p-2.5 border-r border-slate-300 text-center">
-                    <p className="text-[8px] font-bold uppercase tracking-widest text-slate-500">Número da NFS-e</p>
-                    <p className="text-lg font-extrabold font-mono leading-tight">
-                      {dadosNota?.numeroNfse || notaAberta.numeroNfse || notaAberta.numero}
-                    </p>
-                    <p className="text-[8px] text-slate-500 font-mono">
-                      DPS {dadosNota?.numeroDps || notaAberta.numero} · Série {dadosNota?.serie || notaAberta.serie}
-                    </p>
-                  </div>
-                  <div className="flex-1 p-2.5 text-right">
-                    <p className="text-[8px] font-bold uppercase tracking-widest text-slate-500">Emissão</p>
-                    <p className="text-[10px] font-bold font-mono">
-                      {dataBR(String(dadosNota?.emitidaEm || notaAberta.emitidaEm || "").slice(0, 10))}
-                    </p>
-                    <p className="text-[8px] text-slate-500">
-                      Competência {dataBR(dadosNota?.competencia) }
-                    </p>
-                    <p className="text-[8px] text-slate-500">
-                      Ambiente: {((dadosNota?.ambiente || notaAberta.ambiente || "")).startsWith("produ") ? "Produção" : "Homologação"}
-                    </p>
-                  </div>
-                </div>
-
-                {/* chave + QR */}
-                <div className="flex items-stretch border-t border-slate-300">
-                  <div className="flex-1 p-2.5">
-                    <p className="text-[8px] font-bold uppercase tracking-widest text-slate-500">Chave de acesso da NFS-e</p>
-                    <p className="font-mono text-[10px] break-all mt-0.5 tracking-tight">
-                      {dadosNota?.chave || notaAberta.chave || "—"}
-                    </p>
-                    <p className="text-[8px] text-slate-500 mt-1.5 leading-relaxed max-w-md">
-                      A autenticidade desta NFS-e pode ser verificada pela leitura do código QR ao lado ou
-                      pela consulta da chave de acesso no portal nacional da NFS-e (nfse.gov.br).
-                    </p>
-                  </div>
-                  <div className="w-[92px] shrink-0 border-l border-slate-300 p-2 flex items-center justify-center">
-                    {qrCode ? (
-                      <img src={qrCode} alt="QR Code de verificação" className="w-[76px] h-[76px] block" />
-                    ) : (
-                      <div className="w-[76px] h-[76px] border border-dashed border-slate-300 flex items-center justify-center text-[7px] text-slate-400 text-center px-1">
-                        {lendoNota ? "gerando" : "QR indisponível"}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* ------------------------------------------------- prestador */}
-              <div className="border-x border-b border-slate-400">
-                <div className="bg-slate-100 px-2.5 py-1 border-b border-slate-300">
-                  <p className="text-[8px] font-extrabold uppercase tracking-widest">Prestador / Fornecedor</p>
-                </div>
-                <div className="p-2.5 grid grid-cols-3 gap-x-4 gap-y-1.5">
-                  <div className="col-span-2">
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Nome / Razão Social</p>
-                    <p className="font-bold">{dadosNota?.prestador?.nome || meiName || cert?.titular || "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">CNPJ / CPF</p>
-                    <p className="font-mono">{cnpjBR(dadosNota?.prestador?.cnpj) || cnpjPrestador || cnpjBR(cert?.cnpj) || "—"}</p>
-                  </div>
-                  <div className="col-span-2">
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Endereço</p>
-                    <p>
-                      {dadosNota?.prestador?.logradouro
-                        ? `${dadosNota.prestador.logradouro}${dadosNota.prestador.numero ? ", " + dadosNota.prestador.numero : ""}${dadosNota.prestador.bairro ? " — " + dadosNota.prestador.bairro : ""}`
-                        : "—"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Inscrição Municipal</p>
-                    <p className="font-mono">{dadosNota?.prestador?.inscricaoMunicipal || inscricaoMunicipal || "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Telefone</p>
-                    <p className="font-mono">{dadosNota?.prestador?.fone || telefonePrestador || "—"}</p>
-                  </div>
-                  <div className="col-span-2">
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">E-mail</p>
-                    <p className="truncate">{dadosNota?.prestador?.email || "—"}</p>
-                  </div>
-                  <div className="col-span-3">
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Simples Nacional na data da competência</p>
-                    <p>
-                      {dadosNota?.regime?.opSimpNac === "3"
-                        ? "Optante — Microempresa ou Empresa de Pequeno Porte"
-                        : dadosNota?.regime?.opSimpNac === "1"
-                          ? "Não optante"
-                          : "Optante — Microempreendedor Individual (MEI)"}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* --------------------------------------------------- tomador */}
-              <div className="border-x border-b border-slate-400">
-                <div className="bg-slate-100 px-2.5 py-1 border-b border-slate-300">
-                  <p className="text-[8px] font-extrabold uppercase tracking-widest">Tomador / Adquirente</p>
-                </div>
-                {(dadosNota ? dadosNota.tomador : notaAberta.clienteNome) ? (
-                  <div className="p-2.5 grid grid-cols-3 gap-x-4 gap-y-1.5">
-                    <div className="col-span-2">
-                      <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Nome / Razão Social</p>
-                      <p className="font-bold">{dadosNota?.tomador?.nome || notaAberta.clienteNome || "—"}</p>
-                    </div>
-                    <div>
-                      <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">CNPJ / CPF</p>
-                      <p className="font-mono">{dadosNota?.tomador?.documento || notaAberta.clienteDocumento || "—"}</p>
-                    </div>
-                    {dadosNota?.tomador?.email && (
-                      <div className="col-span-3">
-                        <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">E-mail</p>
-                        <p className="truncate">{dadosNota.tomador.email}</p>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="p-2.5 text-center text-[9px] font-bold uppercase tracking-wider text-slate-600">
-                    Tomador da operação não identificado na NFS-e
-                  </p>
-                )}
-              </div>
-
-              {/* --------------------------------------------------- serviço */}
-              <div className="border-x border-b border-slate-400">
-                <div className="bg-slate-100 px-2.5 py-1 border-b border-slate-300">
-                  <p className="text-[8px] font-extrabold uppercase tracking-widest">Serviço Prestado</p>
-                </div>
-                <div className="p-2.5 space-y-1.5">
-                  <div className="grid grid-cols-3 gap-x-4">
-                    <div>
-                      <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Código de Tributação Nacional</p>
-                      <p className="font-mono">
-                        {String(dadosNota?.servico?.codigoTributacao || notaAberta.servicoCodigo || "")
-                          .replace(/(\d{2})(\d{2})(\d{2})/, "$1.$2.$3") || "—"}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Código NBS</p>
-                      <p className="font-mono">{dadosNota?.servico?.codigoNbs || "—"}</p>
-                    </div>
-                    <div>
-                      <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Local da Prestação</p>
-                      <p className="font-mono">{dadosNota?.servico?.localPrestacao || "—"}</p>
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Descrição do Serviço</p>
-                    <p className="leading-relaxed">
-                      {dadosNota?.servico?.descricao || notaAberta.descricaoServico || (lendoNota ? "Carregando..." : "—")}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* ------------------------------------------------ tributação */}
-              <div className="border-x border-b border-slate-400">
-                <div className="bg-slate-100 px-2.5 py-1 border-b border-slate-300">
-                  <p className="text-[8px] font-extrabold uppercase tracking-widest">Tributação Municipal (ISSQN)</p>
-                </div>
-                <div className="p-2.5 grid grid-cols-4 gap-x-4 gap-y-1.5">
-                  <div>
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Tipo de Tributação</p>
-                    <p>{dadosNota?.valores?.issTributavel === false ? "Não tributável" : "Operação tributável"}</p>
-                  </div>
-                  <div>
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Retenção do ISSQN</p>
-                    <p>{dadosNota?.valores?.issRetido ? "Retido" : "Não retido"}</p>
-                  </div>
-                  <div>
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Base de Cálculo</p>
-                    <p className="font-mono">{dadosNota?.valores?.baseCalculo ? brl(dadosNota.valores.baseCalculo) : "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Alíquota / ISSQN Apurado</p>
-                    <p className="font-mono">
-                      {dadosNota?.valores?.aliquota ? `${dadosNota.valores.aliquota}%` : "—"}
-                      {dadosNota?.valores?.valorIss ? ` · ${brl(dadosNota.valores.valorIss)}` : ""}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* ---------------------------------------------------- valores */}
-              <div className="border-x border-b border-slate-400">
-                <div className="bg-slate-100 px-2.5 py-1 border-b border-slate-300">
-                  <p className="text-[8px] font-extrabold uppercase tracking-widest">Valor Total da NFS-e</p>
-                </div>
-                <div className="p-2.5 grid grid-cols-4 gap-x-4 gap-y-1.5 items-end">
-                  <div>
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Valor do Serviço</p>
-                    <p className="font-mono font-bold">{brl(Number(dadosNota?.valores?.servico || notaAberta.valor || 0))}</p>
-                  </div>
-                  <div>
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Desconto Incondicionado</p>
-                    <p className="font-mono">{brl(Number(dadosNota?.valores?.descontoIncondicionado || 0))}</p>
-                  </div>
-                  <div>
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Deduções / Reduções</p>
-                    <p className="font-mono">{brl(Number(dadosNota?.valores?.deducoes || 0))}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[7px] font-bold uppercase tracking-widest text-slate-500">Valor Líquido da NFS-e</p>
-                    <p className="font-mono font-extrabold text-base leading-tight">
-                      {brl(Number(dadosNota?.valores?.liquido || dadosNota?.valores?.servico || notaAberta.valor || 0))}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* ------------------------------------- informações complementares */}
-              <div className="border-x border-b border-slate-400 rounded-b">
-                <div className="bg-slate-100 px-2.5 py-1 border-b border-slate-300">
-                  <p className="text-[8px] font-extrabold uppercase tracking-widest">Informações Complementares</p>
-                </div>
-                <div className="p-2.5 space-y-1 min-h-[46px]">
-                  {(dadosNota?.servico?.informacoesComplementares || notaAberta.observacao) && (
-                    <p className="leading-relaxed whitespace-pre-line">
-                      {dadosNota?.servico?.informacoesComplementares || notaAberta.observacao}
-                    </p>
-                  )}
-                  <p className="text-[8px] text-slate-500">
-                    Totais aproximados dos tributos conforme Lei nº 12.741/2012:{" "}
-                    {dadosNota?.valores?.totalTributos ? brl(dadosNota.valores.totalTributos) : "não informado"}.
-                  </p>
-                  {((dadosNota?.ambiente || notaAberta.ambiente || "").startsWith("homolog")) && (
-                    <p className="text-[9px] font-extrabold text-red-700 uppercase tracking-wider">
-                      Documento emitido em ambiente de teste — sem validade fiscal.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <p className="text-[7px] text-slate-400 text-center leading-relaxed pt-2">
-                Documento auxiliar da NFS-e, impresso a partir do arquivo XML da nota. O documento fiscal é o
-                próprio XML, guardado no Arquivo Digital do MEI Flow.
-              </p>
-            </div>
+            {/* A folha vive em FolhaNotaFiscal.tsx — lá está o aviso sobre
+                por que ela cabe em uma página e de onde vem cada dado. */}
+            <FolhaNotaFiscal
+              refFolha={folhaNotaRef}
+              nota={notaAberta}
+              dados={dadosNota}
+              cliente={clienteDaNota}
+              qrCode={qrCode}
+              carregando={lendoNota}
+              meiName={meiName}
+              cnpjPrestador={cnpjPrestador}
+              cnpjDoCertificado={cert?.cnpj}
+              inscricaoMunicipal={inscricaoMunicipal}
+              telefonePrestador={telefonePrestador}
+              emailPrestador={emailPrestador}
+              municipioPrestador={municipioPrestador}
+              enderecoPrestador={enderecoPrestador}
+              companyLogo={companyLogo}
+            />
 
           </div>
         </div>
