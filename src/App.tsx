@@ -92,6 +92,9 @@ import { onSnapshot, doc, setDoc } from "firebase/firestore";
 export default function App() {
   // Controle de Navegação por Abas/Módulos
   const [currentView, setCurrentView] = useState<"home" | "clientes" | "financeiro" | "orcamentos" | "catalogo">("home");
+  // Bandeira que o botao "Emitir Nota Fiscal (NFS-e)" do topo levanta para abrir
+  // a gaveta do NotaFiscalPanel, que fica bem mais abaixo na pagina.
+  const [abrirNotaFiscal, setAbrirNotaFiscal] = useState(false);
 
   // State e Credenciais de Autenticação MEI
   const [userId, setUserId] = useState("user_49281");
@@ -913,23 +916,18 @@ export default function App() {
     setShowFocusNfeModal(true);
   };
 
-  // Emitir Nota Fiscal a partir do botão principal da dashboard
+  // Emitir Nota Fiscal a partir do botão principal da dashboard.
+  //
+  // Antes este botão copiava o CNPJ e jogava o usuário no site do governo. Agora
+  // ele abre a gaveta de Nota Fiscal, que é onde fica o certificado digital e a
+  // emissão automática. O atalho para o portal do governo não sumiu: virou um
+  // botão dentro da própria gaveta, para quem preferir fazer na mão.
   const handleEmitirNotaHeader = () => {
-    // Pegar as transações de entrada
-    const entradas = transacoes.filter(t => t.tipo === "entrada");
-    if (entradas.length > 0) {
-      if (isCpfEmissor) {
-        triggerToast("⚠ Emissão de NFS-e indisponível para Pessoa Física (CPF). Altere seu perfil para CNPJ para habilitar.");
-      } else if (planType === "free") {
-        setShowUpgradeModal(true);
-      } else {
-        // Pega a entrada mais recente
-        handleDownloadNFSe(entradas[0]);
-      }
-    } else {
-      triggerToast("⚠ Você precisa registrar pelo menos uma venda (Entrada) no sistema para vincular e emitir a Nota Fiscal.");
-      setShowVendaModal(true);
+    if (isCpfEmissor) {
+      triggerToast("⚠ Emissão de NFS-e indisponível para Pessoa Física (CPF). Altere seu perfil para CNPJ para habilitar.");
+      return;
     }
+    setAbrirNotaFiscal(true);
   };
 
   // Exportar todas as transações para relatório PDF profissional consolidado do MEI
@@ -1992,7 +1990,11 @@ ${meiName}`;
 
             {/* SEÇÃO INTEGRADA: NOTA FISCAL (certificado A1 + dados fiscais) */}
             <div className="mt-8">
-              <NotaFiscalPanel triggerToast={triggerToast} />
+              <NotaFiscalPanel
+                triggerToast={triggerToast}
+                abrirExterno={abrirNotaFiscal}
+                onFechado={() => setAbrirNotaFiscal(false)}
+              />
             </div>
 
             {/* SEÇÃO INTEGRADA: ARQUIVO DIGITAL DO MEI */}

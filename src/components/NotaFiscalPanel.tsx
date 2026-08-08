@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   FileText, X, Loader2, AlertTriangle, CheckCircle2, ShieldCheck, Upload,
-  Trash2, ChevronRight, Lock, RefreshCw, CalendarClock,
+  Trash2, ChevronRight, Lock, RefreshCw, CalendarClock, ExternalLink,
 } from "lucide-react";
 import { auth } from "../firebase";
 import { getApiUrl } from "../utils/nativeFile";
@@ -27,6 +27,10 @@ import { getApiUrl } from "../utils/nativeFile";
 
 interface Props {
   triggerToast?: (msg: string) => void;
+  /** Abre a gaveta a partir de fora — usado pelo botão "Emitir Nota Fiscal" do topo. */
+  abrirExterno?: boolean;
+  /** Avisa quem abriu de fora que a gaveta fechou, para ele poder abrir de novo depois. */
+  onFechado?: () => void;
 }
 
 type Cert = {
@@ -54,7 +58,7 @@ const cnpjBR = (v?: string) => {
   return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
 };
 
-export default function NotaFiscalPanel({ triggerToast }: Props) {
+export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado }: Props) {
   const [aberto, setAberto] = useState(false);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -113,6 +117,16 @@ export default function NotaFiscalPanel({ triggerToast }: Props) {
   useEffect(() => {
     if (aberto) carregar();
   }, [aberto, carregar]);
+
+  // O botão do topo levanta a bandeira; aqui a gaveta responde.
+  useEffect(() => {
+    if (abrirExterno) setAberto(true);
+  }, [abrirExterno]);
+
+  function fechar() {
+    setAberto(false);
+    onFechado?.();
+  }
 
   /** Converte o arquivo escolhido em base64 para viajar dentro do JSON. */
   function lerBase64(f: File): Promise<string> {
@@ -262,7 +276,7 @@ export default function NotaFiscalPanel({ triggerToast }: Props) {
                   <RefreshCw className={`w-4 h-4 ${carregando ? "animate-spin" : ""}`} />
                 </button>
                 <button
-                  onClick={() => setAberto(false)}
+                  onClick={fechar}
                   className="w-9 h-9 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-full flex items-center justify-center transition-colors cursor-pointer"
                 >
                   <X className="w-5 h-5" />
@@ -492,6 +506,22 @@ export default function NotaFiscalPanel({ triggerToast }: Props) {
                   {salvando ? "Salvando..." : "Salvar dados fiscais"}
                 </button>
               </form>
+
+              {/* Rota de fuga: enquanto a emissão automática não estiver 100%, o
+                  caminho manual continua a um clique de distância. */}
+              <div className="bg-white border border-slate-200/60 rounded-3xl p-5 text-left">
+                <h4 className="text-sm font-extrabold text-slate-800">Prefere emitir na mão?</h4>
+                <p className="text-[11px] text-slate-500 leading-relaxed mt-1.5">
+                  O Emissor Nacional continua disponível. Abre em outra aba, sem sair do MEI Flow.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => window.open("https://www.nfse.gov.br/EmissorNacional/Login", "_blank")}
+                  className="mt-3.5 w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs rounded-2xl transition-colors cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
+                >
+                  <ExternalLink className="w-4 h-4" /> Abrir o portal do governo
+                </button>
+              </div>
 
               <p className="text-[10px] text-slate-400 text-center leading-relaxed px-4">
                 Seu certificado é guardado cifrado e usado somente para assinar as suas notas.
