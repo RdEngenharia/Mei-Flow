@@ -84,3 +84,75 @@ export async function carregarLogoBase64(origem?: string | null): Promise<string
 export function limparCacheLogo() {
   cache.clear();
 }
+
+/**
+ * ============================================================================
+ * ENCOLHER A LOGO ANTES DE GUARDAR
+ * ============================================================================
+ *
+ * O PROBLEMA QUE ISTO RESOLVE
+ *
+ * A logo que o usuário escolhe é a foto que ele tem: normalmente 1500 ou 2000
+ * pixels de lado, 1 a 2 MB. Do jeito que estava, essa imagem inteira era
+ * enviada ao Firebase Storage — e se esse envio falhasse por qualquer motivo
+ * (regra do Storage não liberada, rede caindo no meio, arquivo grande demais),
+ * o código descartava a logo em silêncio e o usuário só descobria depois,
+ * quando voltava ao sistema e ela não estava mais lá.
+ *
+ * Encolher resolve na raiz. Num documento a logo é impressa com 14 a 16 mm de
+ * lado; 400 pixels já é mais resolução do que qualquer impressora aproveita. E
+ * uma imagem de 400 pixels pesa algumas dezenas de KB — pequena o bastante para
+ * caber com folga dentro do próprio cadastro no Firestore, que é o plano B
+ * quando o Storage não colabora.
+ *
+ * Só roda no navegador (usa canvas). No servidor devolve a imagem como veio.
+ */
+export async function prepararLogo(dataUri: string, maxLado = 400): Promise<string> {
+  const src = String(dataUri || "");
+  if (!src.startsWith("data:image")) return src;
+  if (typeof document === "undefined" || typeof Image === "undefined") return src;
+
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("imagem ilegível"));
+      i.src = src;
+    });
+
+    const lado = Math.max(img.naturalWidth, img.naturalHeight) || maxLado;
+    // Já é pequena: não mexe. Reprocessar só perderia qualidade à toa.
+    if (lado <= maxLado && src.length < 200_000) return src;
+
+    const escala = Math.min(1, maxLado / lado);
+    const largura = Math.max(1, Math.round(img.naturalWidth * escala));
+    const altura = Math.max(1, Math.round(img.naturalHeight * escala));
+
+    const tela = document.createElement("canvas");
+    tela.width = largura;
+    tela.height = altura;
+    const ctx = tela.getContext("2d");
+    if (!ctx) return src;
+    // PNG preserva transparência — logo com fundo transparente continua assim.
+    ctx.drawImage(img, 0, 0, largura, altura);
+    const menor = tela.toDataURL("image/png");
+
+    return menor.length < src.length ? menor : src;
+  } catch {
+    // Não conseguiu encolher: segue com a original. Melhor grande do que nenhuma.
+    return src;
+  }
+}
+
+/**
+ * Quanto uma string ocupa dentro de um documento do Firestore.
+ * O teto é 1.048.487 bytes para o documento INTEIRO, então usamos uma folga
+ * grande: o cadastro tem outros campos, e passar do limite trava toda a
+ * gravação do perfil, não só a da logo.
+ */
+export const LIMITE_LOGO_FIRESTORE = 700_000;
+
+export function cabeNoFirestore(texto?: string): boolean {
+  if (!texto) return true;
+  return new TextEncoder().encode(texto).length <= LIMITE_LOGO_FIRESTORE;
+}

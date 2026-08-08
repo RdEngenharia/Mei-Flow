@@ -826,17 +826,27 @@ export async function saveUserProfileToFirebase(
     const docRef = doc(db, 'users', userId);
 
     // PROTEÇÃO DEFENSIVA: o Firestore tem um limite de ~1 MiB por documento.
-    // Uma logo em base64 (data:image/...;base64,...) pode facilmente passar
-    // disso, travando QUALQUER atualização futura do perfil (não só a logo)
-    // até alguém limpar o campo manualmente. A logo deve sempre ser enviada
-    // ao Storage antes de chegar aqui — isto é só uma rede de segurança para
-    // nunca deixar uma string base64 bruta ser persistida no documento.
+    // Uma logo em base64 grande passa disso e trava QUALQUER atualização futura
+    // do perfil (não só a logo) até alguém limpar o campo manualmente.
+    //
+    // ⚠️ O LIMITE AQUI ERA 50 KB, E ISSO ESTAVA DERRUBANDO LOGOS BOAS.
+    //
+    // A ideia original era "a logo sempre vem como URL do Storage, então
+    // qualquer base64 aqui é engano". Só que quando o Storage recusa o envio —
+    // regra não liberada, rede caindo — o App agora manda a imagem já encolhida
+    // para ser guardada aqui mesmo, de propósito, como plano B. Uma logo de
+    // 400 px pesa uns 60 KB: passava dos 50 KB e era jogada fora em silêncio,
+    // que é justamente o defeito que estamos consertando.
+    //
+    // 700 KB deixa folga de sobra para os outros campos do cadastro e ainda
+    // impede que uma foto de 2 MB corrompa o documento.
+    const LIMITE_LOGO = 700_000;
     let safeCompanyLogo = profileData.companyLogo || '';
-    if (safeCompanyLogo.startsWith('data:') && safeCompanyLogo.length > 50000) {
+    if (safeCompanyLogo.startsWith('data:') && safeCompanyLogo.length > LIMITE_LOGO) {
       console.error(
-        "[saveUserProfileToFirebase] companyLogo recebido como base64 bruto (tamanho:",
+        "[saveUserProfileToFirebase] companyLogo grande demais para o documento (tamanho:",
         safeCompanyLogo.length,
-        "). Isso deveria ter sido convertido em URL do Storage antes de chegar aqui. Descartando para não corromper o documento."
+        "). Descartando para não corromper o cadastro — reduza a imagem antes de salvar."
       );
       safeCompanyLogo = '';
     }

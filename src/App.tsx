@@ -60,6 +60,7 @@ import CobrancasPanel from "./components/CobrancasPanel";
 import NotaFiscalPanel from "./components/NotaFiscalPanel";
 import { jsPDF } from "jspdf";
 import { savePdfCrossPlatform, isNativePlatform, getApiUrl } from "./utils/nativeFile";
+import { prepararLogo, cabeNoFirestore, carregarLogoBase64 } from "./utils/logoImagem";
 import autoTable from "jspdf-autotable";
 
 // IMPORTAÇÕES DO FIREBASE AUTH & FIRESTORE PARA SEGURANÇA MULTI-USUÁRIO
@@ -355,10 +356,27 @@ export default function App() {
             } else {
               setInvoiceUsed(0);
             }
-            setCompanyLogo(profile.companyLogo || "");
+            /**
+             * A logo tem uma rede de segurança que os outros campos não têm.
+             *
+             * Ela é o único dado do perfil que depende de uma segunda viagem à
+             * rede (o Firebase Storage) para existir, e por isso é o que mais se
+             * perde. Se a nuvem não devolver nada, tentamos a cópia que ficou
+             * neste navegador antes de dar a logo por perdida — foi exatamente o
+             * caso de "configuro, fecho o navegador e ela some".
+             */
+            const logoLocal = (() => {
+              try { return localStorage.getItem("meiflow_company_logo") || ""; }
+              catch { return ""; }
+            })();
+            setCompanyLogo(profile.companyLogo || logoLocal || "");
+            if (profile.companyLogo) {
+              try { localStorage.setItem("meiflow_company_logo", profile.companyLogo); } catch { /* sem espaço */ }
+            }
           } else {
             setPlanType("free");
-            setCompanyLogo("");
+            try { setCompanyLogo(localStorage.getItem("meiflow_company_logo") || ""); }
+            catch { setCompanyLogo(""); }
           }
 
           // Busca remotamente os dados específicos e restritos ao UID logado (Isolamento rígido)
@@ -468,7 +486,10 @@ export default function App() {
           setInvoiceUsed(0);
         }
         if (data.logoUrl || data.companyLogo) {
-          setCompanyLogo(data.logoUrl || data.companyLogo || "");
+          const daNuvem = data.logoUrl || data.companyLogo || "";
+          setCompanyLogo(daNuvem);
+          // Mantém a cópia local em dia: é ela que salva o dia se a nuvem falhar.
+          try { localStorage.setItem("meiflow_company_logo", daNuvem); } catch { /* sem espaço */ }
         }
         if (data.meiName || data.name) {
           setMeiName(data.meiName || data.name || "");
@@ -616,30 +637,78 @@ export default function App() {
       setTelefonePrestador(newTelefone);
       setIsCpfEmissor(false);
 
-      // RESOLUÇÃO DA LOGO: o Firestore tem um limite rígido de ~1 MiB por
-      // documento. Uma imagem em base64 (mesmo pequena, ~700KB+) facilmente
-      // excede esse limite, causando o erro "The value of property
-      // companyLogo is longer than 1048487 bytes" e impedindo QUALQUER
-      // atualização de perfil (não só a logo) até o usuário limpar o campo.
-      // A correção correta é nunca salvar a imagem em si no Firestore: ela
-      // vai para o Firebase Storage, e só a URL (uma string curta) é salva
-      // no documento do usuário.
+      /**
+       * ========================================================================
+       * RESOLUÇÃO DA LOGO — POR QUE ELA SUMIA A CADA VEZ
+       * ========================================================================
+       *
+       * A versão anterior tinha um único caminho: manda a imagem para o Firebase
+       * Storage e guarda a URL. Boa ideia (o Firestore tem teto de ~1 MiB por
+       * cadastro e a imagem estourava isso), mas sem plano B. Quando o envio
+       * falhava — regra do Storage não liberada para `usuarios/{uid}/logo/`,
+       * rede caindo no meio do arquivo de 2 MB, o que fosse — o código fazia
+       * `resolvedLogoUrl = companyLogo`, ou seja, **descartava a logo nova e
+       * voltava para a antiga (vazia)**. O aviso que ele mostrava era apagado
+       * uma linha depois pelo "✓ Dados atualizados com sucesso", então o usuário
+       * nunca ficava sabendo. Fechava o navegador, voltava, e a logo não estava
+       * mais lá.
+       *
+       * Agora são três camadas, nesta ordem:
+       *
+       *   1. ENCOLHER. 400 px de lado é mais do que qualquer impressora usa num
+       *      selo de 15 mm, e derruba a imagem para algumas dezenas de KB. Isso
+       *      sozinho já faz o envio quase nunca falhar.
+       *   2. STORAGE. Continua sendo o destino preferido: guarda só a URL curta.
+       *   3. PLANO B. Se o Storage recusar, a imagem — agora pequena — vai
+       *      dentro do próprio cadastro no Firestore. Não é o ideal, mas é
+       *      infinitamente melhor do que perder a logo.
+       *
+       * E em qualquer um dos casos ela também fica no navegador (localStorage),
+       * para reaparecer na hora mesmo se a nuvem estiver fora do ar.
+       */
       let resolvedLogoUrl: string | undefined = logo !== undefined ? logo : companyLogo;
+      let avisoLogo = "";
 
-      if (logo && logo.startsWith("data:") && user) {
-        try {
-          const logoStorageRef = storageRef(storage, `usuarios/${user.uid}/logo/company_logo.png`);
-          await uploadString(logoStorageRef, logo, "data_url");
-          resolvedLogoUrl = await getDownloadURL(logoStorageRef);
-        } catch (uploadErr) {
-          console.error("Erro ao enviar logo para o Storage:", uploadErr);
-          triggerToast("⚠ Não foi possível enviar a logo. As demais informações foram salvas normalmente.");
-          resolvedLogoUrl = companyLogo; // mantém a logo anterior em caso de falha
+      if (logo && logo.startsWith("data:")) {
+        // 1. Encolher antes de qualquer coisa.
+        const menor = await prepararLogo(logo);
+
+        if (user) {
+          try {
+            // 2. Caminho preferido: Storage, guardando só a URL.
+            const logoStorageRef = storageRef(storage, `usuarios/${user.uid}/logo/company_logo.png`);
+            await uploadString(logoStorageRef, menor, "data_url");
+            resolvedLogoUrl = await getDownloadURL(logoStorageRef);
+          } catch (uploadErr) {
+            // 3. Plano B: a imagem encolhida vai direto no cadastro.
+            console.error("[Logo] Storage recusou o envio, salvando a imagem no cadastro:", uploadErr);
+            if (cabeNoFirestore(menor)) {
+              resolvedLogoUrl = menor;
+              avisoLogo = "A logo foi salva, mas pelo caminho alternativo — vale conferir as regras do Firebase Storage.";
+            } else {
+              // ⚠️ Só aqui a logo é realmente descartada, e o usuário FICA SABENDO.
+              resolvedLogoUrl = companyLogo;
+              avisoLogo = "Não consegui salvar a logo: a imagem é grande demais. Tente uma imagem menor.";
+            }
+          }
+        } else {
+          // Sem login, fica só no navegador — e isso é dito na mensagem final.
+          resolvedLogoUrl = menor;
         }
       }
 
       setCompanyLogo(resolvedLogoUrl || "");
-      
+
+      /**
+       * Cópia local da logo. Nenhum dos outros campos precisava disso, mas a
+       * logo é o único que depende de uma segunda viagem à rede (Storage) — é
+       * o campo com mais chance de se perder, e o que mais incomoda perder.
+       */
+      try {
+        if (resolvedLogoUrl) localStorage.setItem("meiflow_company_logo", resolvedLogoUrl);
+        else localStorage.removeItem("meiflow_company_logo");
+      } catch { /* navegador sem espaço: a nuvem ainda tem */ }
+
       localStorage.setItem("meiflow_mei_name", newName);
       localStorage.setItem("meiflow_cnpj_prestador", newCnpj);
       localStorage.setItem("meiflow_inscricao_municipal", newInscricao);
@@ -656,7 +725,29 @@ export default function App() {
           companyLogo: resolvedLogoUrl,
           isCpfEmissor: false
         });
-        triggerToast("✓ Dados de perfil atualizados com sucesso e sincronizados na nuvem!");
+
+        /**
+         * CONFERE SE A LOGO REALMENTE FICOU GRAVADA.
+         *
+         * O motivo de existir esta conferência: durante meses o sistema disse
+         * "✓ salvo com sucesso" enquanto a logo se perdia no caminho. Uma volta
+         * de leitura custa pouco e é a diferença entre o usuário confiar na
+         * mensagem ou ter que descobrir sozinho, dias depois.
+         */
+        if (resolvedLogoUrl && !avisoLogo) {
+          try {
+            const conferencia = await fetchUserProfileFromFirebase(user.uid);
+            if (!conferencia?.companyLogo) {
+              avisoLogo = "A logo não ficou gravada na nuvem. Ela continua salva neste navegador.";
+            }
+          } catch { /* a conferência é um extra, não pode atrapalhar */ }
+        }
+
+        triggerToast(
+          avisoLogo
+            ? `⚠ Dados salvos. ${avisoLogo}`
+            : "✓ Dados de perfil atualizados com sucesso e sincronizados na nuvem!"
+        );
       } else {
         triggerToast("✓ Dados de perfil salvos localmente! (Acesse a nuvem para backup)");
       }
@@ -771,9 +862,13 @@ export default function App() {
       doc.rect(0, 0, 210, 40, "F");
       
       doc.setTextColor(255, 255, 255);
-      if (planType === "premium" && companyLogo) {
+      // ⚠️ `companyLogo` costuma ser uma URL do Storage, e o jsPDF não busca
+      //    imagem na rede — precisa dos bytes. Sem esta conversão o addImage
+      //    falha e o comprovante sai com o texto "MEI Flow" no lugar da logo.
+      const logoDesenhavel = planType === "premium" ? await carregarLogoBase64(companyLogo) : "";
+      if (logoDesenhavel) {
         try {
-          doc.addImage(companyLogo, "PNG", 15, 5, 28, 28);
+          doc.addImage(logoDesenhavel, "PNG", 15, 5, 28, 28);
         } catch (e) {
           console.error("Erro ao desenhar logotipo no PDF, fallback para texto:", e);
           doc.setFont("helvetica", "bold");
@@ -1055,9 +1150,11 @@ export default function App() {
       doc.rect(0, 0, 210, 42, "F");
       
       doc.setTextColor(255, 255, 255);
-      if (planType === "premium" && companyLogo) {
+      // Mesma conversão do comprovante: URL não serve para o jsPDF.
+      const logoRelatorio = planType === "premium" ? await carregarLogoBase64(companyLogo) : "";
+      if (logoRelatorio) {
         try {
-          doc.addImage(companyLogo, "PNG", 15, 5, 32, 32);
+          doc.addImage(logoRelatorio, "PNG", 15, 5, 32, 32);
         } catch (e) {
           console.error("Erro ao desenhar logotipo no PDF, fallback para texto:", e);
           doc.setFont("helvetica", "bold");
