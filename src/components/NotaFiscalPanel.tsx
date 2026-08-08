@@ -306,6 +306,9 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
   }
 
   const pronto = !!cert?.configurado;
+  // Em produção cada clique gera documento fiscal de verdade. A tela precisa
+  // dizer isso sem que o usuário tenha que lembrar de conferir.
+  const emProducao = (cert?.ambiente || "").toLowerCase().startsWith("produ");
   const vencendo = pronto && typeof cert?.diasRestantes === "number" && cert.diasRestantes < 30;
 
   return (
@@ -339,6 +342,15 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
                 ? `Certificado válido até ${dataBR(cert?.validoAte)}`
                 : "Configure seu certificado digital A1"}
             </p>
+            {pronto && (
+              <span className={`inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-widest border ${
+                emProducao
+                  ? "bg-red-50 text-red-700 border-red-200"
+                  : "bg-slate-100 text-slate-500 border-slate-200"
+              }`}>
+                {emProducao ? "Produção — notas valem de verdade" : "Homologação — notas de teste"}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2 text-indigo-600 font-semibold text-xs shrink-0 pl-2">
@@ -382,6 +394,20 @@ export default function NotaFiscalPanel({ triggerToast, abrirExterno, onFechado,
             </div>
 
             <div className="p-6 space-y-5">
+              {pronto && emProducao && (
+                <div className="bg-red-50 border border-red-200 p-4 rounded-2xl text-red-800 text-xs text-left leading-relaxed">
+                  <strong className="block mb-1">Você está em produção.</strong>
+                  As notas emitidas daqui valem para a Receita. Cancelar uma NFS-e exige justificativa e
+                  tem prazo, então confira valor e cliente antes de emitir.
+                </div>
+              )}
+              {pronto && !emProducao && (
+                <div className="bg-slate-100 border border-slate-200 p-4 rounded-2xl text-slate-600 text-xs text-left leading-relaxed">
+                  <strong className="block mb-1">Ambiente de teste (homologação).</strong>
+                  As notas daqui não existem para a Receita e não servem para o cliente. Servem para
+                  conferir que tudo funciona antes de valer.
+                </div>
+              )}
               {erro && (
                 <div className="bg-red-50 border border-red-200 p-4 rounded-2xl flex items-start gap-3 text-red-700 text-xs text-left">
                   <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />

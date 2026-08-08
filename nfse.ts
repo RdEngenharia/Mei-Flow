@@ -439,17 +439,38 @@ function desempacotar(b64: string): string {
 // ============================================================================
 
 /**
+ * ⚠️ CADA AMBIENTE TEM O SEU CONTADOR. NÃO JUNTE OS DOIS.
+ *
+ * Homologação e produção são mundos separados no Portal, com numerações
+ * independentes. O contador aqui era um só por série — então cada teste em
+ * homologação queimava um número da produção, e a primeira nota real sairia
+ * com o número 5 ou 10, deixando buraco na sequência fiscal. Buraco em
+ * numeração de nota é a primeira coisa que um fiscal repara.
+ *
+ * O ambiente entra no nome do documento. Nota de teste some junto com o
+ * ambiente de teste, e a produção começa limpa no 1.
+ */
+function refContador(db: any, uid: string, serie: string) {
+  const ambiente = ehProducao() ? "producao" : "homologacao";
+  return db.collection("nfse_contadores").doc(`${uid}_${serie}_${ambiente}`);
+}
+
+/**
  * Reserva o próximo número da série, dentro de uma transação.
  * Duas emissões simultâneas jamais recebem o mesmo número — e número repetido
  * é rejeitado pelo Portal.
  */
 async function proximoNumero(db: any, uid: string, serie: string): Promise<number> {
-  const ref = db.collection("nfse_contadores").doc(`${uid}_${serie}`);
+  const ref = refContador(db, uid, serie);
   return db.runTransaction(async (t: any) => {
     const snap = await t.get(ref);
     const atual = snap.exists ? Number(snap.data().ultimo || 0) : 0;
     const proximo = atual + 1;
-    t.set(ref, { userId: uid, serie, ultimo: proximo, atualizadoEm: new Date().toISOString() }, { merge: true });
+    t.set(ref, {
+      userId: uid, serie, ultimo: proximo,
+      ambiente: ehProducao() ? "producao" : "homologacao",
+      atualizadoEm: new Date().toISOString(),
+    }, { merge: true });
     return proximo;
   });
 }
@@ -612,7 +633,16 @@ export async function emitirNfseDaCobranca(
   if (!snap.exists) throw new Error("Cobrança não encontrada.");
   const cobranca = snap.data();
 
-  if (cobranca.nfseChave) {
+  /**
+   * ⚠️ "JÁ EMITIDA" SÓ VALE DENTRO DO MESMO AMBIENTE.
+   *
+   * A nota de teste que essa cobrança recebeu em homologação não é nota: não
+   * existe para a Receita. Se a travinha ignorasse o ambiente, o teste
+   * bloquearia a emissão real para sempre, e o usuário ficaria sem entender por
+   * que "já está emitida" sem nunca ter havido nota de verdade.
+   */
+  const ambienteAtual = ehProducao() ? "producao" : "homologacao";
+  if (cobranca.nfseChave && (cobranca.nfseAmbiente || "homologacao") === ambienteAtual) {
     return { jaEmitida: true, chave: cobranca.nfseChave };
   }
 
@@ -789,7 +819,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
       // chato do Portal: número de DPS repetido.
       let proximo = 1;
       if (cfg?.serie) {
-        const c = await db.collection("nfse_contadores").doc(`${uid}_${cfg.serie}`).get();
+        const c = await refContador(db, uid, cfg.serie).get();
         proximo = (c.exists ? Number(c.data().ultimo || 0) : 0) + 1;
       }
       res.json({ success: true, config: cfg, proximoNumero: proximo });
@@ -903,13 +933,16 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
        */
       const desejado = Number(primeiroNumero || 0);
       if (desejado > 1) {
-        const ref = db.collection("nfse_contadores").doc(`${uid}_${config.serie}`);
+        const ref = refContador(db, uid, config.serie);
         await db.runTransaction(async (t: any) => {
           const snap = await t.get(ref);
           const atual = snap.exists ? Number(snap.data().ultimo || 0) : 0;
           if (desejado - 1 > atual) {
-            t.set(ref, { userId: uid, serie: config.serie, ultimo: desejado - 1,
-                         atualizadoEm: new Date().toISOString() }, { merge: true });
+            t.set(ref, {
+              userId: uid, serie: config.serie, ultimo: desejado - 1,
+              ambiente: ehProducao() ? "producao" : "homologacao",
+              atualizadoEm: new Date().toISOString(),
+            }, { merge: true });
           }
         });
       }
@@ -962,10 +995,13 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
               observacao } = req.body || {};
 
       if (lancamentoId) {
+        // O ambiente entra na busca pelo mesmo motivo da cobrança: nota de
+        // teste não pode impedir a nota real do mesmo lançamento.
         const jaTem = await db
           .collection("nfse_emitidas")
           .where("userId", "==", uid)
           .where("lancamentoId", "==", String(lancamentoId))
+          .where("ambiente", "==", ehProducao() ? "producao" : "homologacao")
           .limit(1)
           .get();
         if (!jaTem.empty) {
@@ -1020,7 +1056,13 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
   app.get("/api/nfse", async (req: any, res: any) => {
     try {
       const uid = await exigirUsuario(req);
-      const snap = await db.collection("nfse_emitidas").where("userId", "==", uid).get();
+      // Só as notas do ambiente atual. Misturar teste com real numa lista de
+      // documento fiscal é convite para alguém contar errado.
+      const ambienteAtual = ehProducao() ? "producao" : "homologacao";
+      const snap = await db.collection("nfse_emitidas")
+        .where("userId", "==", uid)
+        .where("ambiente", "==", ambienteAtual)
+        .get();
       const notas = snap.docs
         .map((d: any) => {
           const n = d.data();
@@ -1032,7 +1074,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
           };
         })
         .sort((a: any, b: any) => String(b.emitidaEm).localeCompare(String(a.emitidaEm)));
-      res.json({ success: true, total: notas.length, notas });
+      res.json({ success: true, ambiente: ambienteAtual, total: notas.length, notas });
     } catch (err: any) {
       const { status, mensagem } = explicar(err);
       res.status(status).json({ success: false, mensagem });
