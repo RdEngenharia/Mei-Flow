@@ -51,7 +51,9 @@ import axios from "axios";
 import https from "https";
 import crypto from "crypto";
 import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
-import { lerCredenciaisBanco, registrarRotasBanco } from "./bancoCofre.js";
+import {
+  lerCredenciaisBanco, registrarRotasBanco, tokenWebhookConfere,
+} from "./bancoCofre.js";
 import { emitirBoletoAsaas, consultarCobrancaAsaas, situacaoAsaas } from "./bancoAsaas.js";
 
 /** URL pública do sistema — usada em webhooks e no retorno do banco. */
@@ -1218,7 +1220,15 @@ export function registrarRotasEfi(
           ["Valor recebido", `R$ ${Number(cobranca.valor).toFixed(2).replace(".", ",")}`],
           ["Vencimento do boleto", paraDataBR(cobranca.vencimento)],
           ["Data do pagamento", paraDataBR(pago)],
-          ["Forma de pagamento", "Boleto bancario (Efi)"],
+          // ⚠️ Já foi "Boleto bancario (Efi)", fixo. Com a Asaas emitindo
+          //    também, o comprovante passava a nomear o banco errado — num
+          //    documento que o usuário guarda por cinco anos e o contador lê.
+          [
+            "Forma de pagamento",
+            cobranca.gateway === "asaas"
+              ? "Boleto bancario (Asaas)"
+              : "Boleto bancario (Efi)",
+          ],
           ["Identificador da cobranca", String(chargeId)],
         ],
       });
@@ -1446,6 +1456,93 @@ export function registrarRotasEfi(
       }
     } catch (err: any) {
       console.error("[Efí Webhook Erro]", err.response?.data || err.message);
+    }
+  });
+
+  // ==========================================================================
+  // AVISO DE PAGAMENTO DA ASAAS
+  // ==========================================================================
+  //
+  // A Efí é configurada por cobrança: o endereço de retorno vai dentro de cada
+  // boleto. A Asaas é diferente — o usuário configura UM endereço no painel
+  // dele, e a Asaas passa a avisar todos os pagamentos daquela conta. Por isso
+  // este endereço carrega o UID: é ele que diz de quem é a conta.
+  //
+  // ⚠️ O AVISO É TRATADO COMO BOATO.
+  //
+  // Qualquer pessoa pode descobrir este endereço e mandar um JSON dizendo
+  // "fulano pagou". Se acreditássemos, o sistema registraria um recebimento
+  // que não existiu e emitiria uma NOTA FISCAL de um serviço não pago — que é
+  // problema fiscal, não bug de tela. Então o aviso serve só para dizer "vá
+  // conferir": quem responde de verdade é a Asaas, consultada com a chave do
+  // próprio usuário.
+  //
+  // O token é a primeira porta, não a garantia. Ele evita que qualquer robô
+  // faça o servidor consultar a Asaas à toa.
+  app.post("/api/banco/webhook/asaas", async (req: any, res: any) => {
+    // Responde já. Webhook que demora vira reenvio, e reenvio vira pagamento
+    // processado duas vezes.
+    res.status(200).json({ recebido: true });
+
+    try {
+      const uid = String(req.query?.u || "").trim();
+      if (!uid) return console.warn("[Asaas Webhook] Aviso sem dono no endereço. Ignorado.");
+
+      const conta = await lerCredenciaisBanco(db, uid);
+      if (!conta || conta.provedor !== "asaas") {
+        return console.warn(`[Asaas Webhook] ${uid} não usa Asaas. Ignorado.`);
+      }
+
+      const enviado =
+        req.headers?.["asaas-access-token"] ||
+        req.headers?.["Asaas-Access-Token"] ||
+        req.query?.token ||
+        "";
+      if (!tokenWebhookConfere(conta.segredos.webhookToken || "", String(enviado))) {
+        return console.warn(`[Asaas Webhook] Token inválido para ${uid}. Recusado.`);
+      }
+
+      const corpo =
+        typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
+      const idCobranca = String(corpo?.payment?.id || "").trim();
+      if (!idCobranca) return console.warn("[Asaas Webhook] Aviso sem id de cobrança.");
+
+      // ⚠️ AQUI ESTÁ A CONFIRMAÇÃO. O status usado é o que a Asaas responde
+      //    agora, não o que veio no aviso.
+      const confirmado = await consultarCobrancaAsaas(
+        conta.segredos,
+        conta.ambiente,
+        idCobranca
+      );
+      const situacao = situacaoAsaas(confirmado.status);
+
+      console.log(
+        `[Asaas Webhook] ${idCobranca}: aviso "${corpo?.event || "?"}" → confirmado "${confirmado.status}"`
+      );
+
+      if (situacao !== "pago") {
+        await db.collection("cobrancas").doc(idCobranca)
+          .set({ status: confirmado.status }, { merge: true });
+        return;
+      }
+
+      // A cobrança precisa ser DESTE usuário. Sem esta conferência, um aviso
+      // com o id de uma cobrança alheia daria baixa na cobrança de outra
+      // pessoa — e emitiria a nota fiscal dela.
+      const snap = await db.collection("cobrancas").doc(idCobranca).get();
+      if (!snap.exists) return console.warn(`[Asaas Webhook] Cobrança ${idCobranca} não é do MEI Flow.`);
+      if (snap.data()?.userId !== uid) {
+        return console.warn(`[Asaas Webhook] Cobrança ${idCobranca} não pertence a ${uid}. Recusado.`);
+      }
+      if (["paid", "settled"].includes(String(snap.data()?.status))) {
+        return console.log(`[Asaas Webhook] ${idCobranca} já estava paga. Nada a fazer.`);
+      }
+
+      // Daqui em diante é o MESMO caminho da Efí: registra o recebimento,
+      // arquiva o comprovante e emite a nota fiscal, se estiver ligado.
+      await concluirPagamento(idCobranca, confirmado.pagoEm || new Date().toISOString());
+    } catch (err: any) {
+      console.error("[Asaas Webhook Erro]", err?.response?.data || err?.message || err);
     }
   });
 

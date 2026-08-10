@@ -139,11 +139,11 @@ export const PROVEDORES: DefinicaoProvedor[] = [
     id: "asaas",
     nome: "Asaas",
     emiteBoleto: true,
-    // O Asaas tem webhook próprio, com formato diferente do da Efí — ainda não
-    // implementado. Enquanto isso a baixa vem pelo botão "Sincronizar".
-    avisoAutomatico: false,
+    // Passou a avisar sozinha: ver o aviso de pagamento em efi.ts. Exige um
+    // passo manual UMA vez — colar o endereço no painel da Asaas.
+    avisoAutomatico: true,
     situacao:
-      "Pronto. Cadastre a Chave de API e o boleto já sai registrado. A baixa do pagamento ainda não é automática — use o botão Sincronizar para atualizar.",
+      "Pronto. Cadastre a Chave de API e o boleto já sai registrado. Para o pagamento dar baixa sozinho, cole o endereço de aviso no painel da Asaas — as instruções aparecem aqui depois de salvar.",
     credenciais: [
       {
         id: "apiKey",
@@ -410,6 +410,13 @@ export async function guardarCredenciaisBanco(
   const anteriores: SegredosBanco = atual?.provedor === provedor ? atual.segredos : {};
 
   const segredos: SegredosBanco = {};
+
+  // ⚠️ O token do aviso de pagamento NÃO é um campo declarado pelo provedor —
+  //    é nosso, gerado pelo sistema. Sem carregá-lo à mão, a próxima gravação
+  //    do formulário o apagaria, e o aviso do banco passaria a ser recusado
+  //    silenciosamente. O usuário só descobriria pela nota que não saiu.
+  if (anteriores.webhookToken) segredos.webhookToken = anteriores.webhookToken;
+
   for (const campo of def.credenciais) {
     const valor = limpar(entrada[campo.id]) || anteriores[campo.id] || "";
     if (!campo.opcional && !valor) throw new Error("CREDENCIAIS_INCOMPLETAS");
@@ -453,6 +460,50 @@ export async function guardarCredenciaisBanco(
   limparCacheCredenciais(uid);
 
   return await resumoCredenciais(db, uid);
+}
+
+// ============================================================================
+// AVISO DE PAGAMENTO — o endereço que o usuário cola no painel do banco
+// ============================================================================
+//
+// O banco precisa saber PARA ONDE avisar, e nós precisamos saber DE QUEM é o
+// aviso. Como o endereço é colado pelo próprio usuário no painel dele, o UID
+// vai na URL — do mesmo jeito que já fazemos com a Efí.
+//
+// ⚠️ O TOKEN NÃO É O QUE GARANTE A SEGURANÇA. Ele é a primeira porta: barra
+//    quem descobriu a URL e resolveu bater nela. A garantia de verdade é que o
+//    aviso é tratado como BOATO — ao receber, o sistema pergunta ao próprio
+//    banco se aquilo é verdade, usando a chave do usuário. Sem isso, um aviso
+//    forjado criaria um recebimento e faria sair uma NOTA FISCAL de um
+//    pagamento que nunca aconteceu. Nota fiscal indevida dá trabalho para
+//    cancelar e é problema fiscal, não bug de tela.
+
+/** Devolve o token do aviso, criando na primeira vez. */
+export async function garantirTokenWebhook(db: any, uid: string): Promise<string> {
+  const atual = await lerCredenciaisBanco(db, uid);
+  if (!atual) throw new Error("SEM_CREDENCIAIS_USUARIO");
+  if (atual.segredos.webhookToken) return atual.segredos.webhookToken;
+
+  const token = crypto.randomBytes(24).toString("hex");
+  const segredos = { ...atual.segredos, webhookToken: token };
+
+  await db.collection(COLECAO_CREDENCIAIS).doc(uid).set(
+    { segredosCifrados: cifrar(JSON.stringify(segredos)), atualizadoEm: new Date().toISOString() },
+    { merge: true }
+  );
+  limparCacheCredenciais(uid);
+  return token;
+}
+
+/** Confere o token que o banco mandou no aviso. Comparação em tempo constante. */
+export function tokenWebhookConfere(guardado: string, recebido: string): boolean {
+  const a = Buffer.from(String(guardado || ""), "utf8");
+  const b = Buffer.from(String(recebido || ""), "utf8");
+  // ⚠️ Comprimentos diferentes fazem timingSafeEqual ESTOURAR, em vez de
+  //    devolver false. Conferir antes evita derrubar a rota com um aviso
+  //    malformado.
+  if (a.length === 0 || a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
 }
 
 export async function apagarCredenciaisBanco(db: any, uid: string): Promise<void> {
@@ -560,6 +611,53 @@ export function registrarRotasBanco(app: any, db: any) {
   // POST no mesmo caminho faz a mesma coisa, para não haver surpresa.
   app.put("/api/banco/credenciais", gravar);
   app.post("/api/banco/credenciais", gravar);
+
+  /**
+   * O endereço de aviso, para o usuário colar no painel do banco.
+   *
+   * Só faz sentido para quem usa um banco que avisa sozinho — para os outros a
+   * resposta diz isso, em vez de entregar um endereço que ninguém vai usar.
+   */
+  app.get("/api/banco/webhook", async (req: any, res: any) => {
+    try {
+      const uid = await verificarLogin(req);
+      const resumo = await resumoCredenciais(db, uid);
+
+      if (!resumo.cadastrado) {
+        return res.json({ success: true, disponivel: false, motivo: "Cadastre o seu banco primeiro." });
+      }
+      const def = provedorConhecido(resumo.provedor || "");
+      if (!def?.avisoAutomatico || resumo.provedor !== "asaas") {
+        return res.json({
+          success: true,
+          disponivel: false,
+          motivo:
+            resumo.provedor === "efi"
+              ? "A Efí é configurada automaticamente a cada cobrança — não há nada para colar."
+              : "Este banco ainda não avisa o pagamento automaticamente.",
+        });
+      }
+
+      const token = await garantirTokenWebhook(db, uid);
+      const base = (process.env.APP_URL || "https://meiflow.rdhomologacao.com.br").replace(/\/+$/, "");
+
+      res.json({
+        success: true,
+        disponivel: true,
+        url: `${base}/api/banco/webhook/asaas?u=${encodeURIComponent(uid)}`,
+        token,
+        instrucoes: [
+          "No painel da Asaas, abra Configurações → Integrações → Webhooks.",
+          "Crie um webhook novo e cole o endereço acima no campo de URL.",
+          "Cole o token no campo de autenticação (Token de acesso).",
+          "Marque os eventos de cobrança — pagamento recebido e confirmado.",
+          "Salve. A partir daí, boleto pago dá baixa e emite a nota sozinho.",
+        ],
+      });
+    } catch (err: any) {
+      responderErro(res, err);
+    }
+  });
 
   /** Apagar. */
   app.delete("/api/banco/credenciais", async (req: any, res: any) => {

@@ -155,6 +155,19 @@ export default function BancoCredenciaisPanel({
   const [resumo, setResumo] = useState<Resumo>({ cadastrado: false });
   const [form, setForm] = useState({ ...vazio });
 
+  /**
+   * O endereço que o usuário cola no painel do banco.
+   *
+   * Só existe para bancos que avisam o pagamento por um endereço configurado
+   * uma vez (hoje, a Asaas). A Efí é configurada a cada cobrança, então não há
+   * nada para colar — e o servidor responde dizendo isso, em vez de a tela
+   * inventar uma instrução que não serve.
+   */
+  const [aviso, setAviso] = useState<{
+    disponivel: boolean; url?: string; token?: string; instrucoes?: string[]; motivo?: string;
+  } | null>(null);
+  const [copiado, setCopiado] = useState<string>("");
+
   const provedorAtual = provedores.find((p) => p.id === form.provedor) || null;
 
   const carregar = useCallback(async () => {
@@ -162,10 +175,19 @@ export default function BancoCredenciaisPanel({
     setErro(null);
     try {
       const h = await comToken();
-      const [rProv, rCred] = await Promise.all([
+      const [rProv, rCred, rAviso] = await Promise.all([
         fetch(getApiUrl("/api/banco/provedores"), { headers: h }),
         fetch(getApiUrl("/api/banco/credenciais"), { headers: h }),
+        fetch(getApiUrl("/api/banco/webhook"), { headers: h }),
       ]);
+
+      try {
+        const dAviso = await rAviso.json();
+        setAviso(dAviso?.success ? dAviso : null);
+      } catch {
+        // Aviso indisponível não impede cadastrar credencial. Segue.
+        setAviso(null);
+      }
 
       const dProv = await rProv.json();
       if (dProv?.success) {
@@ -249,6 +271,9 @@ export default function BancoCredenciaisPanel({
       });
       triggerToast?.("Credenciais do banco guardadas com segurança.");
       onAtualizado?.();
+      // O endereço de aviso só passa a existir depois que há credencial — por
+      // isso ele é buscado de novo aqui, e não some da tela até o próximo F5.
+      carregar();
     } catch (e: any) {
       setErro(e?.message || "Não foi possível guardar.");
     } finally {
@@ -523,6 +548,69 @@ export default function BancoCredenciaisPanel({
                           className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition resize-none"
                         />
                       </div>
+                    </div>
+                  )}
+
+                  {/*
+                    AVISO DE PAGAMENTO — o único passo manual que sobrou.
+
+                    Fica depois do formulário de propósito: só faz sentido
+                    quando já existe credencial salva, e é a última coisa a
+                    fazer. As instruções vêm do servidor porque mudam de banco
+                    para banco.
+                  */}
+                  {resumo.cadastrado && aviso?.disponivel && (
+                    <div className="bg-white rounded-2xl border border-slate-200/70 p-5 space-y-3">
+                      <h4 className="text-xs font-extrabold uppercase tracking-widest text-slate-500">
+                        Baixa automática do pagamento
+                      </h4>
+                      <p className="text-[11px] text-slate-500 leading-relaxed">
+                        Falta um passo, feito uma única vez no painel do seu banco. Sem ele o
+                        boleto continua sendo emitido normalmente, mas o pagamento só aparece
+                        aqui quando você clicar em Sincronizar.
+                      </p>
+
+                      {[
+                        { rotulo: "Endereço (URL)", valor: aviso.url || "" },
+                        { rotulo: "Token de acesso", valor: aviso.token || "" },
+                      ].map((c) => (
+                        <div key={c.rotulo}>
+                          <label className="block text-[10px] font-extrabold uppercase tracking-widest text-slate-400 mb-1.5">
+                            {c.rotulo}
+                          </label>
+                          <div className="flex gap-2">
+                            <input
+                              readOnly
+                              value={c.valor}
+                              onFocus={(e) => e.currentTarget.select()}
+                              className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-[11px] font-mono text-slate-700"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard?.writeText(c.valor);
+                                setCopiado(c.rotulo);
+                                setTimeout(() => setCopiado(""), 2000);
+                              }}
+                              className="px-3 rounded-xl bg-slate-100 text-slate-600 text-[10px] font-bold hover:bg-slate-200 transition shrink-0"
+                            >
+                              {copiado === c.rotulo ? "Copiado" : "Copiar"}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+
+                      <ol className="text-[11px] text-slate-500 leading-relaxed list-decimal pl-4 space-y-0.5 pt-1">
+                        {(aviso.instrucoes || []).map((i) => (
+                          <li key={i}>{i}</li>
+                        ))}
+                      </ol>
+
+                      <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3 leading-relaxed">
+                        Guarde esse token como uma senha. Quem o tiver consegue avisar o sistema
+                        de pagamentos — e o sistema confere cada aviso com o seu banco antes de
+                        acreditar, mas não há motivo para deixá-lo à mostra.
+                      </p>
                     </div>
                   )}
 
