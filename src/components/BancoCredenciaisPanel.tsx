@@ -51,12 +51,32 @@ interface Props {
   onAtualizado?: () => void;
 }
 
+type CampoCredencial = {
+  id: string;
+  label: string;
+  tipo: "text" | "password";
+  opcional?: boolean;
+  dica?: string;
+};
+
 type Provedor = {
   id: string;
   nome: string;
   emiteBoleto: boolean;
+  /** O banco avisa o pagamento sozinho, ou depende do botão Sincronizar? */
+  avisoAutomatico: boolean;
   situacao: string;
-  campos: { credenciais: string[]; conta: string[] };
+  /**
+   * ⚠️ ESTA TELA NÃO SABE O NOME DE NENHUM CAMPO DE CREDENCIAL.
+   *
+   * Antes ela sabia: tinha "Client ID" e "Client Secret" escritos no meio do
+   * JSX. Aí chegou a Asaas, que usa uma Chave de API e mais nada — e a tela
+   * pedia dois campos que não existem. Agora cada banco declara os campos
+   * dele no servidor e a tela desenha a partir disso. Banco novo não mexe
+   * aqui.
+   */
+  credenciais: CampoCredencial[];
+  conta: string[];
 };
 
 type Resumo = {
@@ -64,6 +84,7 @@ type Resumo = {
   provedor?: string;
   provedorNome?: string;
   emiteBoleto?: boolean;
+  avisoAutomatico?: boolean;
   ambiente?: "homologacao" | "producao";
   identificacao?: string;
   temSegredo?: boolean;
@@ -104,11 +125,9 @@ const ROTULOS: Record<string, { label: string; dica?: string }> = {
   chavePix: { label: "Chave Pix" },
 };
 
-const vazio = {
+const vazio: Record<string, any> = {
   provedor: "efi",
   ambiente: "producao" as "producao" | "homologacao",
-  clientId: "",
-  clientSecret: "",
   banco: "",
   agencia: "",
   conta: "",
@@ -197,9 +216,14 @@ export default function BancoCredenciaisPanel({
 
   const salvar = async () => {
     // A validação de verdade é no servidor — esta aqui só evita a viagem à toa
-    // e a mensagem genérica que voltaria dela.
-    if (!resumo.temSegredo && (!form.clientId.trim() || !form.clientSecret.trim())) {
-      setErro("Informe o identificador e o segredo que o seu banco forneceu.");
+    // e a mensagem genérica que voltaria dela. Percorre os campos DO PROVEDOR,
+    // sem supor que existam "clientId" e "clientSecret".
+    const faltando = (provedorAtual?.credenciais || [])
+      .filter((c) => !c.opcional && !String(form[c.id] || "").trim())
+      .map((c) => c.label);
+
+    if (!resumo.temSegredo && faltando.length) {
+      setErro(`Preencha: ${faltando.join(", ")}.`);
       return;
     }
 
@@ -216,8 +240,13 @@ export default function BancoCredenciaisPanel({
       if (!r.ok || !d?.success) throw new Error(d?.mensagem || "Não foi possível guardar.");
 
       setResumo(d);
-      // Limpa os segredos da memória da tela assim que saem daqui.
-      setForm((f) => ({ ...f, clientId: "", clientSecret: "" }));
+      // Limpa os segredos da memória da tela assim que saem daqui — quaisquer
+      // que sejam os campos daquele banco.
+      setForm((f) => {
+        const limpo = { ...f };
+        for (const c of provedorAtual?.credenciais || []) limpo[c.id] = "";
+        return limpo;
+      });
       triggerToast?.("Credenciais do banco guardadas com segurança.");
       onAtualizado?.();
     } catch (e: any) {
@@ -247,7 +276,7 @@ export default function BancoCredenciaisPanel({
   };
 
   const campo = (
-    chave: keyof typeof form,
+    chave: string,
     label: string,
     dica?: string,
     tipo: "text" | "password" = "text"
@@ -456,28 +485,28 @@ export default function BancoCredenciaisPanel({
                     <h4 className="text-xs font-extrabold uppercase tracking-widest text-slate-500">
                       Credenciais
                     </h4>
-                    {campo(
-                      "clientId",
-                      "Identificador (Client ID)",
-                      resumo.temSegredo ? "Deixe em branco para manter o atual" : undefined
-                    )}
-                    {campo(
-                      "clientSecret",
-                      "Segredo (Client Secret)",
-                      resumo.temSegredo
-                        ? "Deixe em branco para manter o atual"
-                        : "Nunca é mostrado de volta depois de guardado",
-                      "password"
+                    {(provedorAtual?.credenciais || []).map((c) =>
+                      campo(
+                        c.id,
+                        c.label + (c.opcional ? " (opcional)" : ""),
+                        resumo.temSegredo
+                          ? "Deixe em branco para manter o atual"
+                          : c.dica ||
+                            (c.tipo === "password"
+                              ? "Nunca é mostrado de volta depois de guardado"
+                              : undefined),
+                        c.tipo
+                      )
                     )}
                   </div>
 
                   {/* Dados do convênio — só os que o banco escolhido usa */}
-                  {provedorAtual && provedorAtual.campos.conta.length > 0 && (
+                  {provedorAtual && provedorAtual.conta.length > 0 && (
                     <div className="bg-white rounded-2xl border border-slate-200/70 p-5 space-y-4">
                       <h4 className="text-xs font-extrabold uppercase tracking-widest text-slate-500">
                         Dados da conta
                       </h4>
-                      {provedorAtual.campos.conta.map((c) =>
+                      {provedorAtual.conta.map((c) =>
                         campo(c as any, ROTULOS[c]?.label || c, ROTULOS[c]?.dica)
                       )}
                       <div>

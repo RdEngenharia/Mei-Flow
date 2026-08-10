@@ -25,19 +25,39 @@
  * autenticidade: se alguém editar o texto cifrado na marra, a abertura falha em
  * vez de devolver lixo silenciosamente.
  *
- * As funções de cifra estão repetidas aqui de propósito, em vez de importadas
- * do nfse.ts. São oito linhas, e assim o cofre do banco não fica dependendo do
- * módulo de nota fiscal — dois assuntos que não têm por que se derrubar.
+ * ----------------------------------------------------------------------------
+ * ⚠️ UM BLOB SÓ, E NÃO UM CAMPO POR SEGREDO
+ *
+ * A primeira versão guardava `clientIdCifrado`, `clientSecretCifrado`,
+ * `pixClientIdCifrado`… um campo para cada segredo. Funcionou até chegar o
+ * primeiro banco com formato diferente: a Asaas não usa Client ID nem Client
+ * Secret — usa UMA chave de API. O cofre a recusava por "credenciais
+ * incompletas", e não havia nada de errado com ela.
+ *
+ * Agora todos os segredos viram um JSON único, cifrado inteiro. Banco novo com
+ * formato novo não exige campo novo no banco de dados nem migração.
+ *
+ * Documentos gravados no formato antigo continuam sendo lidos — ver
+ * `lerCredenciaisBanco`. Ninguém precisa cadastrar de novo.
+ *
+ * (Desenho trazido do Vitri Pro, onde já rodou em produção.)
+ *
+ * ----------------------------------------------------------------------------
+ * ⚠️ CADA BANCO DECLARA OS CAMPOS DELE
+ *
+ * A tela NÃO sabe que existe "Client Secret". Ela lê `credenciais` do provedor
+ * escolhido e desenha o formulário a partir disso. Consequência prática:
+ * implementar um banco novo é criar um item nesta lista e um arquivo de
+ * emissão — nenhuma tela muda.
  *
  * ----------------------------------------------------------------------------
  * O QUE NUNCA SAI DAQUI
  *
- * O `clientSecret` não volta para a tela em nenhuma hipótese, nem para o dono
- * dele. A tela recebe um RESUMO: qual banco, qual ambiente, quando foi
- * cadastrado, e o começo/fim do identificador para a pessoa reconhecer o que
- * cadastrou. Se precisar trocar, cadastra de novo. É a mesma regra da senha do
- * certificado — o que não é devolvido não vaza por descuido de tela, de log ou
- * de captura de tela.
+ * Nenhum segredo volta para a tela, nem para o dono dele. A tela recebe um
+ * RESUMO: qual banco, qual ambiente, quando foi cadastrado, e o começo/fim do
+ * identificador para a pessoa reconhecer o que cadastrou. Se precisar trocar,
+ * cadastra de novo. É a mesma regra da senha do certificado — o que não é
+ * devolvido não vaza por descuido de tela, de log ou de captura de tela.
  *
  * ----------------------------------------------------------------------------
  * A COLEÇÃO PRECISA SER FECHADA NAS REGRAS DO FIRESTORE
@@ -67,20 +87,30 @@ export const COLECAO_CREDENCIAIS = "banco_credenciais";
 // A tela LÊ esta lista do servidor em vez de trazer a própria. Assim é
 // impossível a tela prometer um banco que o servidor não sabe operar.
 
-export type ProvedorBanco = "efi" | "caixa" | "outro";
+export type ProvedorBanco = "efi" | "asaas" | "caixa" | "outro";
+
+/** Um campo que o banco pede. A tela desenha o formulário a partir disto. */
+export type CampoCredencial = {
+  id: string;
+  label: string;
+  tipo: "text" | "password";
+  opcional?: boolean;
+  dica?: string;
+};
 
 export type DefinicaoProvedor = {
   id: ProvedorBanco;
   nome: string;
   /** true quando o sistema registra o boleto sozinho, de ponta a ponta. */
   emiteBoleto: boolean;
+  /** true quando o provedor avisa o pagamento sozinho (webhook). */
+  avisoAutomatico: boolean;
   /** Frase curta mostrada na tela, sem promessa que o sistema não cumpre. */
   situacao: string;
-  /** Campos que aquele provedor realmente usa. */
-  campos: {
-    credenciais: string[];
-    conta: string[];
-  };
+  /** Segredos — vão cifrados para o blob. */
+  credenciais: CampoCredencial[];
+  /** Dados de conta, que não são segredo e aparecem no resumo. */
+  conta: string[];
 };
 
 export const PROVEDORES: DefinicaoProvedor[] = [
@@ -88,34 +118,67 @@ export const PROVEDORES: DefinicaoProvedor[] = [
     id: "efi",
     nome: "Efí Bank (antigo Gerencianet)",
     emiteBoleto: true,
+    avisoAutomatico: true,
     situacao:
-      "Pronto. Cadastre o Client ID e o Client Secret da aplicação de Cobranças e o boleto já sai registrado.",
-    campos: {
-      credenciais: ["clientId", "clientSecret"],
-      conta: ["cedente", "chavePix"],
-    },
+      "Pronto. Cadastre o Client ID e o Client Secret da aplicação de Cobranças e o boleto já sai registrado. O pagamento dá baixa sozinho.",
+    credenciais: [
+      { id: "clientId", label: "Client ID", tipo: "text" },
+      { id: "clientSecret", label: "Client Secret", tipo: "password" },
+      {
+        id: "pixClientId",
+        label: "Client ID do Pix",
+        tipo: "text",
+        opcional: true,
+        dica: "Só se você usa uma aplicação separada para Pix. Em branco, usa a de Cobranças.",
+      },
+      { id: "pixClientSecret", label: "Client Secret do Pix", tipo: "password", opcional: true },
+    ],
+    conta: ["cedente", "chavePix"],
+  },
+  {
+    id: "asaas",
+    nome: "Asaas",
+    emiteBoleto: true,
+    // O Asaas tem webhook próprio, com formato diferente do da Efí — ainda não
+    // implementado. Enquanto isso a baixa vem pelo botão "Sincronizar".
+    avisoAutomatico: false,
+    situacao:
+      "Pronto. Cadastre a Chave de API e o boleto já sai registrado. A baixa do pagamento ainda não é automática — use o botão Sincronizar para atualizar.",
+    credenciais: [
+      {
+        id: "apiKey",
+        label: "Chave de API (API Key)",
+        tipo: "password",
+        dica: "No painel da Asaas: Configurações → Integrações → Chave de API.",
+      },
+    ],
+    conta: ["cedente"],
   },
   {
     id: "caixa",
     nome: "Caixa Econômica Federal",
     emiteBoleto: false,
+    avisoAutomatico: false,
     situacao:
       "As credenciais ficam guardadas aqui, no mesmo lugar das outras. A emissão pela Caixa depende da integração de remessa, que ainda não está pronta — cadastre agora e o sistema avisa quando puder emitir.",
-    campos: {
-      credenciais: ["clientId", "clientSecret"],
-      conta: ["banco", "agencia", "conta", "convenio", "carteira", "cedente"],
-    },
+    credenciais: [
+      { id: "clientId", label: "Client ID", tipo: "text" },
+      { id: "clientSecret", label: "Client Secret", tipo: "password" },
+    ],
+    conta: ["banco", "agencia", "conta", "convenio", "carteira", "cedente"],
   },
   {
     id: "outro",
     nome: "Outro banco",
     emiteBoleto: false,
+    avisoAutomatico: false,
     situacao:
       "Guarda as credenciais e os dados do convênio de cobrança para quando a integração daquele banco existir.",
-    campos: {
-      credenciais: ["clientId", "clientSecret"],
-      conta: ["banco", "agencia", "conta", "convenio", "carteira", "cedente"],
-    },
+    credenciais: [
+      { id: "clientId", label: "Client ID", tipo: "text" },
+      { id: "clientSecret", label: "Client Secret", tipo: "password" },
+    ],
+    conta: ["banco", "agencia", "conta", "convenio", "carteira", "cedente"],
   },
 ];
 
@@ -162,16 +225,15 @@ function decifrar(pacote: string): string {
 // O QUE FICA GUARDADO
 // ============================================================================
 
+/** Os segredos, abertos. As chaves variam por banco — ver PROVEDORES. */
+export type SegredosBanco = Record<string, string>;
+
 export type CredenciaisBanco = {
   provedor: ProvedorBanco;
   ambiente: "homologacao" | "producao";
 
-  /** Segredos — cifrados no banco, nunca devolvidos para a tela. */
-  clientId: string;
-  clientSecret: string;
-  /** A Efí separa a aplicação de Pix da de Cobranças; se vazio, usa a de cobranças. */
-  pixClientId?: string;
-  pixClientSecret?: string;
+  /** Segredos abertos. USO EXCLUSIVO DO SERVIDOR. */
+  segredos: SegredosBanco;
 
   /** Dados de conta — não são segredo, aparecem no resumo. */
   banco?: string;
@@ -190,10 +252,10 @@ export type ResumoCredenciais = {
   provedor?: ProvedorBanco;
   provedorNome?: string;
   emiteBoleto?: boolean;
+  avisoAutomatico?: boolean;
   ambiente?: "homologacao" | "producao";
   identificacao?: string;
   temSegredo?: boolean;
-  temPixProprio?: boolean;
   banco?: string;
   agencia?: string;
   conta?: string;
@@ -220,11 +282,16 @@ function mascarar(txt: string): string {
 
 const limpar = (v: any) => String(v ?? "").trim();
 
+/** Todos os campos de conta que existem, para o gravador não precisar saber. */
+const CAMPOS_CONTA = [
+  "banco", "agencia", "conta", "convenio", "carteira", "cedente", "chavePix", "observacoes",
+];
+
 // ============================================================================
 // CACHE — uma gaveta POR USUÁRIO
 // ============================================================================
 //
-// ⚠️ ESTE É O ERRO QUE JÁ APARECEU DUAS VEZES NESTE PROJETO.
+// ⚠️ ESTE É O ERRO QUE JÁ APARECEU TRÊS VEZES NESTE PROJETO.
 //
 // Guardar em uma variável só ("o certificado", "o token") funciona enquanto
 // existe um usuário. No segundo, o servidor entrega para B o que era de A —
@@ -242,6 +309,37 @@ export function limparCacheCredenciais(uid?: string) {
 // ============================================================================
 // LER E GRAVAR
 // ============================================================================
+
+/**
+ * Abre os segredos de um documento, aceitando os DOIS formatos.
+ *
+ * Formato novo: um campo `segredosCifrados` com um JSON cifrado inteiro.
+ * Formato antigo: um campo cifrado por segredo. Ainda existe no banco de quem
+ * cadastrou antes desta mudança — e por isso continua sendo lido. Na próxima
+ * gravação o documento passa sozinho para o formato novo.
+ */
+function abrirSegredos(d: any): SegredosBanco {
+  if (d?.segredosCifrados) {
+    try {
+      const cru = JSON.parse(decifrar(d.segredosCifrados));
+      return cru && typeof cru === "object" ? cru : {};
+    } catch {
+      throw new Error("COFRE_CORROMPIDO");
+    }
+  }
+
+  const antigos: SegredosBanco = {};
+  const mapa: Record<string, string> = {
+    clientIdCifrado: "clientId",
+    clientSecretCifrado: "clientSecret",
+    pixClientIdCifrado: "pixClientId",
+    pixClientSecretCifrado: "pixClientSecret",
+  };
+  for (const [campo, nome] of Object.entries(mapa)) {
+    if (d?.[campo]) antigos[nome] = decifrar(d[campo]);
+  }
+  return antigos;
+}
 
 /**
  * Credenciais de um usuário, já abertas. USO EXCLUSIVO DO SERVIDOR.
@@ -268,19 +366,9 @@ export async function lerCredenciaisBanco(
       dados = {
         provedor: (d.provedor || "efi") as ProvedorBanco,
         ambiente: d.ambiente === "producao" ? "producao" : "homologacao",
-        clientId: d.clientIdCifrado ? decifrar(d.clientIdCifrado) : "",
-        clientSecret: d.clientSecretCifrado ? decifrar(d.clientSecretCifrado) : "",
-        pixClientId: d.pixClientIdCifrado ? decifrar(d.pixClientIdCifrado) : "",
-        pixClientSecret: d.pixClientSecretCifrado ? decifrar(d.pixClientSecretCifrado) : "",
-        banco: d.banco || "",
-        agencia: d.agencia || "",
-        conta: d.conta || "",
-        convenio: d.convenio || "",
-        carteira: d.carteira || "",
-        cedente: d.cedente || "",
-        chavePix: d.chavePix || "",
-        observacoes: d.observacoes || "",
+        segredos: abrirSegredos(d),
       };
+      for (const c of CAMPOS_CONTA) (dados as any)[c] = d[c] || "";
     }
   } catch (err: any) {
     // Cofre corrompido ou chave trocada: melhor tratar como "não tem" e deixar
@@ -294,29 +382,43 @@ export async function lerCredenciaisBanco(
 }
 
 /**
- * Grava. Segredo em branco significa "não mexi nele" — assim a pessoa pode
- * corrigir a agência sem ter que digitar o Client Secret de novo, que é
- * justamente quando ela erraria e derrubaria a emissão.
+ * Grava.
+ *
+ * Percorre os campos declarados PELO PROVEDOR — não assume que todo banco tem
+ * Client ID e Client Secret, que foi exatamente o engano que a Asaas expôs.
+ *
+ * Campo em branco significa "não mexi nele": assim a pessoa corrige a agência
+ * sem redigitar a chave de API, que é justamente quando ela erraria e
+ * derrubaria a emissão.
  */
 export async function guardarCredenciaisBanco(
   db: any,
   uid: string,
-  entrada: Partial<CredenciaisBanco>
+  entrada: Record<string, any>
 ): Promise<ResumoCredenciais> {
   if (!db) throw new Error("SEM_BANCO");
   if (!uid) throw new Error("NAO_AUTENTICADO");
 
   const provedor = (limpar(entrada.provedor) || "efi") as ProvedorBanco;
-  if (!provedorConhecido(provedor)) throw new Error("PROVEDOR_DESCONHECIDO");
+  const def = provedorConhecido(provedor);
+  if (!def) throw new Error("PROVEDOR_DESCONHECIDO");
 
   const atual = await lerCredenciaisBanco(db, uid);
+  // Trocar de banco não herda o segredo do banco anterior: são chaves de
+  // sistemas diferentes, e reaproveitar só produziria erro de autenticação
+  // difícil de entender.
+  const anteriores: SegredosBanco = atual?.provedor === provedor ? atual.segredos : {};
 
-  const clientId = limpar(entrada.clientId) || atual?.clientId || "";
-  const clientSecret = limpar(entrada.clientSecret) || atual?.clientSecret || "";
-  if (!clientId || !clientSecret) throw new Error("CREDENCIAIS_INCOMPLETAS");
+  const segredos: SegredosBanco = {};
+  for (const campo of def.credenciais) {
+    const valor = limpar(entrada[campo.id]) || anteriores[campo.id] || "";
+    if (!campo.opcional && !valor) throw new Error("CREDENCIAIS_INCOMPLETAS");
+    if (valor) segredos[campo.id] = valor;
+  }
 
-  const pixClientId = limpar(entrada.pixClientId) || atual?.pixClientId || "";
-  const pixClientSecret = limpar(entrada.pixClientSecret) || atual?.pixClientSecret || "";
+  // O identificador mostrado é o primeiro campo declarado pelo provedor — o
+  // Client ID na Efí, a Chave de API na Asaas.
+  const principal = segredos[def.credenciais[0]?.id] || "";
 
   const agora = new Date().toISOString();
   const doc: any = {
@@ -324,25 +426,25 @@ export async function guardarCredenciaisBanco(
     provedor,
     ambiente: entrada.ambiente === "producao" ? "producao" : "homologacao",
 
-    clientIdCifrado: cifrar(clientId),
-    clientSecretCifrado: cifrar(clientSecret),
-    pixClientIdCifrado: pixClientId ? cifrar(pixClientId) : "",
-    pixClientSecretCifrado: pixClientSecret ? cifrar(pixClientSecret) : "",
+    segredosCifrados: cifrar(JSON.stringify(segredos)),
 
     // Guardado em claro só para o resumo conseguir mostrar sem abrir o cofre.
-    identificacao: mascarar(clientId),
-
-    banco: limpar(entrada.banco ?? atual?.banco),
-    agencia: limpar(entrada.agencia ?? atual?.agencia),
-    conta: limpar(entrada.conta ?? atual?.conta),
-    convenio: limpar(entrada.convenio ?? atual?.convenio),
-    carteira: limpar(entrada.carteira ?? atual?.carteira),
-    cedente: limpar(entrada.cedente ?? atual?.cedente),
-    chavePix: limpar(entrada.chavePix ?? atual?.chavePix),
-    observacoes: limpar(entrada.observacoes ?? atual?.observacoes),
+    identificacao: mascarar(principal),
 
     atualizadoEm: agora,
+
+    // ⚠️ Limpeza do formato antigo. Sem isto, um documento migrado ficaria com
+    // os campos velhos cifrados para sempre — segredo duplicado em repouso, e
+    // uma segunda cópia para vazar.
+    clientIdCifrado: "",
+    clientSecretCifrado: "",
+    pixClientIdCifrado: "",
+    pixClientSecretCifrado: "",
   };
+
+  for (const c of CAMPOS_CONTA) {
+    doc[c] = limpar(entrada[c] ?? (atual as any)?.[c]);
+  }
 
   const antes = await db.collection(COLECAO_CREDENCIAIS).doc(uid).get();
   if (!antes.exists) doc.cadastradoEm = agora;
@@ -374,26 +476,20 @@ export async function resumoCredenciais(db: any, uid: string): Promise<ResumoCre
 
   const def = provedorConhecido(d.provedor || "efi");
 
-  return {
+  const resumo: ResumoCredenciais = {
     cadastrado: true,
     provedor: (d.provedor || "efi") as ProvedorBanco,
     provedorNome: def?.nome || d.provedor,
     emiteBoleto: !!def?.emiteBoleto,
+    avisoAutomatico: !!def?.avisoAutomatico,
     ambiente: d.ambiente === "producao" ? "producao" : "homologacao",
     identificacao: d.identificacao || "",
-    temSegredo: !!d.clientSecretCifrado,
-    temPixProprio: !!d.pixClientIdCifrado,
-    banco: d.banco || "",
-    agencia: d.agencia || "",
-    conta: d.conta || "",
-    convenio: d.convenio || "",
-    carteira: d.carteira || "",
-    cedente: d.cedente || "",
-    chavePix: d.chavePix || "",
-    observacoes: d.observacoes || "",
+    temSegredo: !!(d.segredosCifrados || d.clientSecretCifrado),
     cadastradoEm: d.cadastradoEm || "",
     atualizadoEm: d.atualizadoEm || "",
   };
+  for (const c of CAMPOS_CONTA) (resumo as any)[c] = d[c] || "";
+  return resumo;
 }
 
 // ============================================================================
@@ -413,7 +509,7 @@ const MENSAGENS: Record<string, [number, string]> = {
   PROVEDOR_DESCONHECIDO: [400, "Esse banco ainda não é reconhecido pelo sistema."],
   CREDENCIAIS_INCOMPLETAS: [
     400,
-    "Informe o identificador (Client ID) e o segredo (Client Secret) fornecidos pelo seu banco.",
+    "Preencha todos os campos obrigatórios que o seu banco fornece.",
   ],
   COFRE_CORROMPIDO: [
     500,
@@ -431,7 +527,7 @@ function responderErro(res: any, err: any) {
 }
 
 export function registrarRotasBanco(app: any, db: any) {
-  /** Quais bancos o sistema opera hoje — a tela se monta a partir daqui. */
+  /** Quais bancos o sistema opera hoje, e que campos cada um pede. */
   app.get("/api/banco/provedores", (_req: any, res: any) => {
     res.json({
       success: true,
@@ -450,24 +546,7 @@ export function registrarRotasBanco(app: any, db: any) {
     }
   });
 
-  /** Cadastrar ou atualizar. */
-  app.put("/api/banco/credenciais", async (req: any, res: any) => {
-    try {
-      const uid = await verificarLogin(req);
-      const resumo = await guardarCredenciaisBanco(db, uid, req.body || {});
-      res.json({
-        success: true,
-        mensagem: "Credenciais guardadas no cofre.",
-        ...resumo,
-      });
-    } catch (err: any) {
-      responderErro(res, err);
-    }
-  });
-
-  // Alguns clientes HTTP (e o Capacitor) tratam PUT de forma diferente;
-  // POST no mesmo caminho faz a mesma coisa, para não haver surpresa.
-  app.post("/api/banco/credenciais", async (req: any, res: any) => {
+  const gravar = async (req: any, res: any) => {
     try {
       const uid = await verificarLogin(req);
       const resumo = await guardarCredenciaisBanco(db, uid, req.body || {});
@@ -475,7 +554,12 @@ export function registrarRotasBanco(app: any, db: any) {
     } catch (err: any) {
       responderErro(res, err);
     }
-  });
+  };
+
+  // Alguns clientes HTTP (e o Capacitor) tratam PUT de forma diferente;
+  // POST no mesmo caminho faz a mesma coisa, para não haver surpresa.
+  app.put("/api/banco/credenciais", gravar);
+  app.post("/api/banco/credenciais", gravar);
 
   /** Apagar. */
   app.delete("/api/banco/credenciais", async (req: any, res: any) => {

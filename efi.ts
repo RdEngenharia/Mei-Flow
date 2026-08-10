@@ -52,6 +52,7 @@ import https from "https";
 import crypto from "crypto";
 import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
 import { lerCredenciaisBanco, registrarRotasBanco } from "./bancoCofre.js";
+import { emitirBoletoAsaas, consultarCobrancaAsaas, situacaoAsaas } from "./bancoAsaas.js";
 
 /** URL pública do sistema — usada em webhooks e no retorno do banco. */
 export const APP_URL = process.env.APP_URL || "https://meiflow.rdhomologacao.com.br";
@@ -155,12 +156,15 @@ async function contaEfi(uid: string, tipo: "cobrancas" | "pix" = "cobrancas"): P
   const proprias = dbCofre ? await lerCredenciaisBanco(dbCofre, uid) : null;
 
   if (proprias) {
+    // Esta função é só da Efí. Quem cadastrou outro banco chega aqui apenas
+    // por engano de roteamento — e o erro precisa dizer isso, não "credencial
+    // inválida", que mandaria a pessoa conferir o que está certo.
     if (proprias.provedor !== "efi") throw new Error("BANCO_SEM_EMISSAO");
 
-    const clientId =
-      tipo === "pix" ? proprias.pixClientId || proprias.clientId : proprias.clientId;
+    const seg = proprias.segredos || {};
+    const clientId = (tipo === "pix" ? seg.pixClientId || seg.clientId : seg.clientId) || "";
     const clientSecret =
-      tipo === "pix" ? proprias.pixClientSecret || proprias.clientSecret : proprias.clientSecret;
+      (tipo === "pix" ? seg.pixClientSecret || seg.clientSecret : seg.clientSecret) || "";
 
     if (!clientId || !clientSecret) throw new Error("SEM_CREDENCIAIS_USUARIO");
     return { clientId, clientSecret, ambiente: proprias.ambiente, origem: "usuario" };
@@ -724,6 +728,94 @@ export function registrarRotasEfi(
       }
 
       const nomeCliente = cliente.name || cliente.nome || "Cliente";
+
+      // ======================================================================
+      // DE QUEM É A CONTA, E QUAL BANCO?
+      // ======================================================================
+      //
+      // Tudo acima é comum a qualquer banco: achar o cliente, conferir o
+      // documento. Tudo abaixo é específico. A separação fica aqui de
+      // propósito — banco novo entra como mais um ramo, sem mexer no que já
+      // funciona.
+      //
+      // ⚠️ O nome da rota continua /api/efi/boleto por compatibilidade com o
+      //    aplicativo publicado. Ela já não é só da Efí. Renomear exigiria
+      //    atualizar o APK, e endereço de rota não vale uma quebra dessas.
+      const contaDoUsuario = await lerCredenciaisBanco(db, uid);
+
+      if (contaDoUsuario?.provedor === "asaas") {
+        const totalAsaas = itens.reduce(
+          (soma: number, it: any) =>
+            soma + Number(it.valor ?? it.value ?? 0) * Number(it.quantidade ?? it.amount ?? 1),
+          0
+        );
+
+        // A descrição é o único texto livre que chega ao pagador na folha do
+        // boleto ("Instruções"). Montar a partir dos itens vale muito mais que
+        // repetir o número do pedido — foi lição do boleto real do Vitri Pro.
+        const descricaoAsaas =
+          String(mensagem || "").trim() ||
+          itens
+            .map((it: any) => {
+              const qtd = Number(it.quantidade ?? it.amount ?? 1);
+              const nome = String(it.nome || it.name || "Serviço");
+              return qtd > 1 ? `${qtd}x ${nome}` : nome;
+            })
+            .join(" · ")
+            .slice(0, 500);
+
+        const boleto = await emitirBoletoAsaas(
+          contaDoUsuario.segredos || {},
+          contaDoUsuario.ambiente,
+          {
+            valor: totalAsaas,
+            vencimento,
+            clienteNome: nomeCliente,
+            clienteDocumento: doc,
+            clienteEmail: cliente.email || "",
+            clienteTelefone: cliente.telefone || "",
+            descricao: descricaoAsaas,
+            juros,
+            multa,
+          }
+        );
+
+        // O documento gravado tem O MESMO FORMATO do da Efí. É isso que faz a
+        // agenda de cobranças, o Arquivo Digital e a emissão de nota ao pagar
+        // continuarem funcionando sem saber qual banco emitiu.
+        await db.collection("cobrancas").doc(String(boleto.id)).set({
+          id: String(boleto.id),
+          userId: uid,
+          customerId: String(customerId),
+          clienteNome: nomeCliente,
+          clienteDocumento: doc,
+          gateway: "asaas",
+          valor: boleto.valor,
+          vencimento: boleto.vencimento,
+          status: boleto.status,
+          barcode: boleto.linhaDigitavel,
+          link: boleto.linkPdf,
+          pdfUrl: boleto.linkPdf,
+          criadoEm: new Date().toISOString(),
+          pagoEm: null,
+        });
+
+        return res.json({
+          success: true,
+          chargeId: boleto.id,
+          valor: boleto.valor,
+          link: boleto.linkPdf,
+          pdf: boleto.linkPdf,
+          barcode: boleto.linhaDigitavel,
+          status: boleto.status,
+          // A Asaas ainda não avisa o pagamento sozinho aqui. A tela usa isto
+          // para explicar por que a baixa depende do botão Sincronizar, em vez
+          // de o usuário achar que o sistema esqueceu dele.
+          avisoAutomatico: false,
+        });
+      }
+
+      // ============================================ daqui para baixo, Efí
       const customer: any =
         doc.length === 11
           ? { name: nomeCliente, cpf: doc }
@@ -898,6 +990,19 @@ export function registrarRotasEfi(
   app.post("/api/efi/carne", async (req: any, res: any) => {
     try {
       const uid = await exigirUsuarioAutenticado(req);
+
+      // O carnê é um recurso da Efí — a Asaas tem parcelamento, mas com outro
+      // formato, ainda não implementado. Dizer isso aqui evita a mensagem
+      // errada ("seu banco não emite boleto"), que seria falsa: ele emite,
+      // só não emite CARNÊ.
+      const contaCarne = await lerCredenciaisBanco(db, uid);
+      if (contaCarne && contaCarne.provedor !== "efi") {
+        return res.status(428).json({
+          success: false,
+          mensagem:
+            "O carnê parcelado ainda só funciona com a Efí. Com o seu banco, emita os boletos um a um.",
+        });
+      }
       const { customerId, valorTotal, parcelas, primeiroVencimento, descricao, juros, multa } = req.body;
 
       const total = Number(valorTotal);
@@ -1200,26 +1305,50 @@ export function registrarRotasEfi(
         .filter((c: any) => !["paid", "settled", "canceled", "cancelled", "unpaid", "expired"].includes(String(c.status)))
         .slice(0, 60); // teto de segurança por chamada
 
+      const contaDoUsuario = await lerCredenciaisBanco(db, uid);
+      const ehAsaas = contaDoUsuario?.provedor === "asaas";
+
       // Confere a conta UMA vez, antes do laço. Sem isto, a falta de
       // credencial cairia no catch de cada item, seria só um aviso no log, e a
       // tela responderia "Tudo já estava em dia" — a pior resposta possível,
       // porque nada foi verificado.
-      if (abertas.length) await getTokenCobrancas(uid);
+      if (abertas.length && !ehAsaas) await getTokenCobrancas(uid);
 
       let atualizadas = 0, pagas = 0;
       const detalhes: any[] = [];
 
       for (const c of abertas) {
         try {
-          const r = await efiCobrancas(uid, "GET", `/v1/charge/${c.id}`);
-          const dados = r?.data || r;
-          const status = String(dados?.status || "");
+          // ⚠️ Cada cobrança é consultada no banco QUE A EMITIU, e não no banco
+          //    que o usuário usa hoje. Quem trocou de provedor tem cobranças
+          //    antigas de um e novas de outro — perguntar ao banco errado
+          //    devolveria "não encontrado" e a baixa nunca aconteceria.
+          const emitidaPorAsaas = c.gateway === "asaas" || (!c.gateway && ehAsaas);
+
+          let status = "";
+          let quandoPago = "";
+
+          if (emitidaPorAsaas) {
+            const r = await consultarCobrancaAsaas(
+              contaDoUsuario?.segredos || {},
+              contaDoUsuario?.ambiente,
+              String(c.id)
+            );
+            status = situacaoAsaas(r.status) === "pago" ? "paid" : r.status;
+            quandoPago = r.pagoEm || "";
+          } else {
+            const r = await efiCobrancas(uid, "GET", `/v1/charge/${c.id}`);
+            const dados = r?.data || r;
+            status = String(dados?.status || "");
+            quandoPago =
+              dados?.payment?.banking_billet?.paid_at || dados?.paid_at || "";
+          }
+
           if (!status || status === c.status) continue;
 
           atualizadas++;
           if (["paid", "settled"].includes(status)) {
-            const quando = dados?.payment?.banking_billet?.paid_at || dados?.paid_at || new Date().toISOString();
-            await concluirPagamento(String(c.id), quando);
+            await concluirPagamento(String(c.id), quandoPago || new Date().toISOString());
             pagas++;
             detalhes.push({ id: c.id, cliente: c.clienteNome, status: "pago" });
           } else {
