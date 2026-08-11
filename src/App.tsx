@@ -59,6 +59,8 @@ import ArquivoDigitalMei from "./components/ArquivoDigitalMei";
 import CobrancasPanel from "./components/CobrancasPanel";
 import NotaFiscalPanel from "./components/NotaFiscalPanel";
 import BancoCredenciaisPanel from "./components/BancoCredenciaisPanel";
+import Navbar from "./components/Navbar";
+import Sidebar from "./components/Sidebar";
 import PainelAcompanhamento from "./components/PainelAcompanhamento";
 import { jsPDF } from "jspdf";
 import { savePdfCrossPlatform, isNativePlatform, getApiUrl } from "./utils/nativeFile";
@@ -151,6 +153,9 @@ export default function App() {
   }, []);
   // Bandeira que o botao "Emitir Nota Fiscal (NFS-e)" do topo levanta para abrir
   // a gaveta do NotaFiscalPanel, que fica bem mais abaixo na pagina.
+  /** Gaveta do menu no celular. No computador o menu fica sempre visível. */
+  const [menuAberto, setMenuAberto] = useState(false);
+
   const [abrirNotaFiscal, setAbrirNotaFiscal] = useState(false);
   // Qual lancamento esta com a nota sendo emitida agora (para o botao virar
   // ampulheta so naquela linha, e nao na tabela inteira).
@@ -956,15 +961,15 @@ export default function App() {
   const faturamentoBrutoTotal = faturamentoPrecedente + totalEntradas;
   const porcentagemLimite = Math.min((faturamentoBrutoTotal / limiteAnual) * 100, 100);
 
-  // Download do APK real, hospedado nas GitHub Releases do projeto
-  const handleDownloadAPK = () => {
-    const apkUrl = "https://github.com/RdEngenharia/Mei-Flow/releases/download/v1.0.2/app-debug.apk";
-    const link = document.createElement("a");
-    link.href = apkUrl;
-    link.download = "meiflow.apk";
-    link.click();
-    triggerToast("✓ Download do APK Android iniciado! Verifique a barra de downloads do seu celular.");
-  };
+  /*
+   * O download do APK saiu daqui.
+   *
+   * O arquivo apontava para uma versão publicada há tempos, e um botão que
+   * entrega uma versão velha é pior que botão nenhum: a pessoa instala, o
+   * aplicativo não tem metade do que ela acabou de ver no navegador, e a culpa
+   * fica com o sistema. Quando houver um APK novo, o botão volta — junto com
+   * ele, e não antes.
+   */
 
   // Download do PDF (geração real de arquivo PDF formatado como comprovante oficial)
   const handleDownloadPDF = async (tx: Transacao, e?: React.MouseEvent) => {
@@ -1862,84 +1867,48 @@ ${meiName}`;
         </div>
       )}
 
-      {/* HEADER DE NAVEGAÇÃO LIMPO - INTEGRADO COM FIREBASE CLOUD */}
-      <nav className="h-20 bg-white border-b border-slate-200 px-6 md:px-12 flex items-center justify-between sticky top-0 z-40">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white font-black text-xl shadow-md tracking-wider">
-            M
-          </div>
-          <div className="flex flex-col">
-            <span className="text-xl font-bold tracking-tight text-slate-900">
-              MEI Flow
-            </span>
-            <span className="text-xs text-slate-400 font-medium">Gestão Inteligente & Comprovantes Fiscais</span>
-          </div>
-        </div>
+      <Navbar
+        logado={!!user}
+        sincronizando={isFirebaseSyncing}
+        onEntrar={() => setShowAuthModal(true)}
+        onSair={handleSignOut}
+        onAbrirMenu={() => setMenuAberto(true)}
+        mostrarMenu={!!user && !!cnpjPrestador}
+      />
 
-        <div className="flex items-center gap-4">
-          {/* PAINEL DE CONFIGURAÇÕES CADASTRAIS DO EMISSOR */}
-          {user && (
-            <button
-              onClick={() => setShowMeiConfigModal(true)}
-              className="flex items-center gap-2 group text-left p-1.5 rounded-xl hover:bg-slate-50 transition-all border border-transparent hover:border-slate-200 cursor-pointer text-slate-800"
-              title="Clique para cadastrar ou modificar os dados de sua empresa MEI"
-            >
-              <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-all shadow-sm">
-                <Building className="w-4 h-4" />
-              </div>
-              <div className="hidden md:flex flex-col text-left">
-                <span className="text-xs font-bold text-slate-800 group-hover:text-blue-600 transition-all leading-tight">
-                  {meiName}
-                </span>
-                <span className="text-[9px] text-slate-400 font-medium font-mono">
-                  CNPJ: {cnpjPrestador || "Não cadastrado"}
-                </span>
-              </div>
-              <Settings className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 shrink-0 hidden sm:inline ml-1 margin-left-xs" />
-            </button>
-          )}
+      {/*
+        A CASCA: menu lateral + conteúdo, lado a lado.
 
-          {/* CONTROLE DE LOGIN/AUTENTICAÇÃO FIREBASE */}
-          {user ? (
-            <div className="flex items-center gap-2">
-              <div 
-                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 rounded-xl text-blue-700 text-xs font-bold border border-blue-100/50"
-                title="Sincronização em nuvem ativa"
-              >
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
-                <span>Nuvem Ativa</span>
-              </div>
-              <button
-                onClick={handleSignOut}
-                className="bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 px-3.5 font-bold rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-sm border border-slate-200"
-                title="Sair da Conta"
-              >
-                <LogOut className="w-4 h-4 text-slate-500" />
-                <span className="hidden sm:inline">Desconectar</span>
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowAuthModal(true)}
-                disabled={isFirebaseSyncing}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md shrink-0 cursor-pointer"
-                title="Acesse sua conta ou cadastre-se para sincronização segura e backup automático"
-              >
-                {isFirebaseSyncing ? (
-                  <RefreshCw className="w-4 h-4 text-blue-100 animate-spin" />
-                ) : (
-                  <LogIn className="w-4 h-4 text-blue-100" />
-                )}
-                <span>Acessar Conta</span>
-              </button>
-            </div>
-          )}
-        </div>
-      </nav>
+        `flex-col md:flex-row` faz a responsividade sem uma linha de media
+        query: no celular empilha, no computador fica lado a lado. E o menu só
+        entra quando há usuário COM cadastro concluído — na tela de
+        apresentação e no cadastro inicial ele não teria para onde levar, e
+        ainda roubaria a atenção de quem está decidindo se entra.
+      */}
+      <div className="flex-1 flex flex-col md:flex-row w-full max-w-[100rem] mx-auto min-h-0">
+        {user && cnpjPrestador && cnpjPrestador.trim() !== "" && (
+          <Sidebar
+            ativa={currentView}
+            onSelecionar={irPara}
+            totalClientes={clientes.length}
+            totalLancamentos={transacoes.length}
+            planType={planType}
+            onUpgrade={() => setShowUpgradeModal(true)}
+            onDas={() => setShowDasModal(true)}
+            onDasn={() => setShowDasnModal(true)}
+            meiName={meiName}
+            cnpj={cnpjPrestador}
+            onConfig={() => setShowMeiConfigModal(true)}
+            aberto={menuAberto}
+            onFechar={() => setMenuAberto(false)}
+          />
+        )}
 
-      {/* WORKSPACE PRINCIPAL */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 md:p-12 space-y-12 font-sans">
+        {/*
+          `min-w-0` não é detalhe: sem ele, uma tabela larga empurra o menu e
+          o layout inteiro sai do lugar em vez de a tabela rolar sozinha.
+        */}
+        <main className="flex-1 min-w-0 p-5 md:p-8 lg:p-10 space-y-10 font-sans">
         {!user ? (
           <div className="space-y-12 animate-fade-in text-left" id="landing-presentation">
             {/* GORGEOUS LANDING HERO SECTION */}
@@ -2117,80 +2086,45 @@ ${meiName}`;
                 </p>
               </div>
               
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  onClick={() => setShowVendaModal(true)}
-                  className="px-4.5 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
-                  id="btn-new-sale-clean"
-                >
-                  <Plus className="w-3.5 h-3.5 text-slate-500" />
-                  <span>Registrar Venda</span>
-                </button>
-                
-                <button
-                  onClick={() => setShowDespesaModal(true)}
-                  className="px-4.5 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
-                  id="btn-new-expense-clean"
-                >
-                  <Minus className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Adicionar Despesa</span>
-                </button>
+              {/*
+                DE OITO BOTÕES PARA TRÊS.
 
-                <button
-                  onClick={() => setShowClienteModal(true)}
-                  className="px-4.5 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
-                >
-                  <UserPlus className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Novo Cliente</span>
-                </button>
+                A fileira antiga misturava ação com navegação: "Registrar
+                Venda" abre uma janelinha, "Gerador Orçamentos" e "Catálogo"
+                levam para outra tela, "Gerar DAS" é obrigação mensal. Oito
+                opções lado a lado não é escolha, é procura.
 
+                Ficaram as três coisas que se faz VÁRIAS VEZES POR DIA e que
+                pertencem a esta tela. As telas foram para o menu lateral; as
+                obrigações do MEI também, agrupadas; e "Novo Cliente" mora na
+                tela de Clientes, que é onde a pessoa está quando precisa dele.
+              */}
+              <div className="flex flex-wrap items-center gap-2.5">
                 <button
                   onClick={handleEmitirNotaHeader}
-                  className="px-4.5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-extrabold rounded-xl shadow-xs hover:shadow-md transition-all flex items-center gap-2 cursor-pointer"
+                  className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
                   id="btn-emitir-nota-header"
                 >
-                  <FileText className="w-3.5 h-3.5 text-blue-100" />
-                  <span>Emitir Nota Fiscal (NFS-e)</span>
+                  <FileText className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Emitir nota fiscal</span>
                 </button>
 
                 <button
-                  onClick={() => irPara("orcamentos")}
-                  className="px-4.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+                  onClick={() => setShowVendaModal(true)}
+                  className="px-4 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 hover:border-slate-300 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+                  id="btn-new-sale-clean"
                 >
-                  <FileText className="w-3.5 h-3.5 text-blue-100" />
-                  <span>Gerador Orçamentos</span>
+                  <Plus className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>Registrar venda</span>
                 </button>
 
                 <button
-                  onClick={() => setShowDasModal(true)}
-                  className="px-4.5 py-2.5 bg-indigo-50 border border-indigo-200/60 hover:bg-indigo-100/50 text-indigo-700 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
-                  id="btn-gerar-das-header"
+                  onClick={() => setShowDespesaModal(true)}
+                  className="px-4 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 hover:border-slate-300 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+                  id="btn-new-expense-clean"
                 >
-                  <FileText className="w-3.5 h-3.5 text-indigo-500" />
-                  <span>Gerar DAS MEI</span>
-                </button>
-
-                <button
-                  onClick={() => setShowDasnModal(true)}
-                  className="px-4.5 py-2.5 bg-amber-50 border border-amber-200/60 hover:bg-amber-100/50 text-amber-700 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer animate-pulse"
-                  id="btn-declaracao-dasn-header"
-                >
-                  <Calendar className="w-3.5 h-3.5 text-amber-500" />
-                  <span>Declaração Anual MEI</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    if (planType === "free") {
-                      setShowUpgradeModal(true);
-                    } else {
-                      irPara("catalogo");
-                    }
-                  }}
-                  className="px-4.5 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
-                >
-                  <BookOpen className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Catálogo {planType === "free" ? "🔒" : ""}</span>
+                  <Minus className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Adicionar despesa</span>
                 </button>
               </div>
             </div>
@@ -2469,15 +2403,6 @@ ${meiName}`;
         {/* VIEW: CLIENTES */}
         {currentView === "clientes" && (
           <div className="space-y-8 animate-fade-in text-left">
-            <div className="flex items-center gap-2 mb-2">
-              <button 
-                onClick={() => irPara("home")}
-                className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-950 transition-all bg-white px-4 py-2 border border-slate-200 rounded-xl shadow-xs cursor-pointer"
-              >
-                <span>&larr; Voltar para o Início (Home)</span>
-              </button>
-            </div>
-
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 pb-6 border-b border-slate-100">
               <div>
                 <h1 className="text-3xl md:text-4xl font-display font-light text-slate-900 tracking-tight">
@@ -2585,15 +2510,6 @@ ${meiName}`;
         {/* VIEW: FINANCEIRO (LIVRO CAIXA COMPLETO) */}
         {currentView === "financeiro" && (
           <div className="space-y-8 animate-fade-in text-left">
-            <div className="flex items-center gap-2 mb-2">
-              <button 
-                onClick={() => irPara("home")}
-                className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-950 transition-all bg-white px-4 py-2 border border-slate-200 rounded-xl shadow-xs cursor-pointer"
-              >
-                <span>&larr; Voltar para o Início (Home)</span>
-              </button>
-            </div>
-
             <div className="pb-2 border-b border-slate-100">
               <h1 className="text-3xl md:text-4xl font-display font-light text-slate-900 tracking-tight">
                 Livro Caixa & Lançamentos
@@ -2869,34 +2785,13 @@ ${meiName}`;
         )}
           </>
         )}
-      </main>
-
-      {/* SEÇÃO AMIGÁVEL DE ACESSO MOBILE PARA MEI FLOW (oculta dentro do próprio app instalado) */}
-      {!isNativeApp && (
-      <div className="max-w-7xl mx-auto px-4 md:px-8 mt-12 animate-fade-in">
-        <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-6 md:p-8 flex flex-col md:flex-row items-center justify-between gap-6 text-left">
-          <div className="space-y-1.5 text-left">
-            <span className="inline-flex items-center gap-1.5 bg-blue-50 text-blue-700 font-bold text-[10px] px-2.5 py-1 rounded-full border border-blue-100 uppercase tracking-widest">
-              <Smartphone className="w-3.5 h-3.5" /> Acesso Rápido no Celular
-            </span>
-            <h3 className="text-lg font-extrabold text-slate-900 tracking-tight">Leve o MEI Flow sempre no seu bolso</h3>
-            <p className="text-xs text-slate-500 max-w-2xl leading-relaxed">
-              Instale o aplicativo oficial para gerenciar seus clientes, transações, vendas e orçamentos diretamente no seu celular de forma rápida e segura.
-            </p>
-          </div>
-          <button
-            onClick={handleDownloadAPK}
-            className="w-full md:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-xl text-xs flex items-center justify-center gap-2 transition-all shadow-md group shrink-0 cursor-pointer"
-            id="download-apk-footer"
-          >
-            <Download className="w-4 h-4 text-emerald-100 group-hover:scale-110 transition-all" />
-            <span>Baixar Aplicativo para Celular (APK)</span>
-          </button>
-        </div>
+        </main>
       </div>
-      )}
 
-
+      {/*
+        O convite para baixar o aplicativo saiu junto com o botão. Chamar
+        atenção para uma versão desatualizada é pior do que não chamar.
+      */}
 
       {/* FOOTER DA APLICAÇÃO */}
       <footer className="bg-white border-t border-slate-200 py-8 px-6 mt-12 text-center shrink-0">
@@ -2922,15 +2817,6 @@ ${meiName}`;
               <AlertCircle className="w-3.5 h-3.5" />
               <span>Suporte Técnico</span>
             </button>
-            {!isNativeApp && (
-            <button
-              onClick={handleDownloadAPK}
-              className="text-xs text-emerald-600 hover:underline font-bold transition-all cursor-pointer flex items-center gap-1"
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-              <span>Baixar App (APK)</span>
-            </button>
-            )}
           </div>
         </div>
       </footer>
