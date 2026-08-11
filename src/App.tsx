@@ -909,6 +909,35 @@ export default function App() {
     }
   };
 
+  /**
+   * Recarrega os lançamentos do servidor.
+   *
+   * Os lançamentos são buscados uma vez, na entrada. Quando algo acontece do
+   * lado do servidor — um boleto pago vira entrada no livro caixa —, o
+   * aplicativo não fica sabendo, e a tela inicial continua mostrando o valor
+   * antigo até um F5. Esta função existe para fechar essa lacuna, e é chamada
+   * por quem provoca a mudança.
+   */
+  const recarregarLancamentos = useCallback(async () => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    try {
+      const [dbTransacoes, dbVendas] = await Promise.all([
+        fetchTransacoesFromFirebase(uid),
+        fetchVendasFromFirebase(uid),
+      ]);
+      // As vendas vêm primeiro: quando o mesmo id existe nos dois lugares, a
+      // subcoleção do usuário é a versão boa.
+      const juntas = [...dbVendas];
+      dbTransacoes.forEach((tx: any) => {
+        if (!juntas.some((m: any) => m.id === tx.id)) juntas.push(tx);
+      });
+      setTransacoes(juntas);
+    } catch (err: any) {
+      console.warn("[MEI Flow] Não foi possível recarregar os lançamentos:", err?.message || err);
+    }
+  }, []);
+
   // Cálculos Financeiros
   const totalEntradas = transacoes
     .filter(t => t.tipo === "entrada")
@@ -2298,6 +2327,13 @@ ${meiName}`;
                 planType={planType}
                 onTriggerUpgrade={() => setShowUpgradeModal(true)}
                 triggerToast={triggerToast}
+                /*
+                  Quando uma cobrança é dada como paga, o lançamento é criado no
+                  SERVIDOR — o aplicativo não tem como adivinhar. Sem recarregar,
+                  o faturamento da tela inicial continua com o valor antigo até o
+                  usuário apertar F5, o que parece que o sistema não fez nada.
+                */
+                onRecebimento={recarregarLancamentos}
               />
             </div>
 

@@ -21,6 +21,17 @@ interface Props {
   planType?: "free" | "premium";
   onTriggerUpgrade?: () => void;
   triggerToast?: (msg: string) => void;
+  /**
+   * Avisa o aplicativo de que dinheiro entrou.
+   *
+   * ⚠️ SEM ISTO O SALDO DA TELA INICIAL NÃO MUDA. Os lançamentos são
+   * carregados uma vez, quando o usuário entra. Quando o pagamento é
+   * processado aqui — no servidor —, o aplicativo não fica sabendo, e o
+   * faturamento continua mostrando o valor de antes até um F5. Foi
+   * exatamente esse o relato: "o boleto já mostra como pago, mas não mudou o
+   * saldo na tela inicial".
+   */
+  onRecebimento?: () => void;
 }
 
 type Item = {
@@ -50,7 +61,7 @@ async function comToken(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${t}`, "Content-Type": "application/json" };
 }
 
-export default function CobrancasPanel({ clientes, planType = "free", onTriggerUpgrade, triggerToast }: Props) {
+export default function CobrancasPanel({ clientes, planType = "free", onTriggerUpgrade, triggerToast, onRecebimento }: Props) {
   const [aberto, setAberto] = useState(false);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -134,8 +145,29 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
       });
       const d = await r.json();
       if (!d.success) throw new Error(d.mensagem || "Não foi possível sincronizar.");
+
+      /**
+       * ⚠️ PENDÊNCIA NÃO PODE VIRAR MENSAGEM DE SUCESSO.
+       *
+       * O servidor agora avisa quando a cobrança foi paga mas alguma etapa não
+       * pôde ser concluída — lançamento, comprovante ou nota fiscal. Antes
+       * isso não existia e o usuário via "Tudo já estava em dia" enquanto o
+       * faturamento não mexia e a nota não saía. Aqui a pendência aparece na
+       * tela, escrita, e não some sozinha.
+       */
+      if (Array.isArray(d.pendencias) && d.pendencias.length) {
+        setErro(
+          d.pendencias
+            .map((p: any) => `${p.cliente || p.id}: ${(p.falhas || []).join("; ")}`)
+            .join(" — ")
+        );
+      }
+
       triggerToast?.(d.mensagem);
       await carregar();
+
+      // Entrou dinheiro? O resto do aplicativo precisa saber.
+      if ((d.pagas || 0) > 0) onRecebimento?.();
     } catch (e: any) {
       setErro(e.message);
     } finally {

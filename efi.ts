@@ -585,7 +585,20 @@ export async function criarLancamento(
 ) {
   if (!db) return null;
 
-  const id = `tx_${Date.now().toString().slice(-6)}`;
+  /**
+   * ⚠️ O IDENTIFICADOR PRECISA SER DERIVADO DA ORIGEM, NÃO DO RELÓGIO.
+   *
+   * Era `tx_${Date.now()}`: cada execução gerava um id novo. Como o pagamento
+   * pode ser reprocessado — e agora é, de propósito, quando algo falhou no meio
+   * —, isso criaria uma entrada NOVA a cada tentativa. O faturamento passaria a
+   * contar o mesmo recebimento duas, três vezes, e o MEI declararia a maior.
+   *
+   * Com o id derivado da referência, reprocessar SOBRESCREVE a mesma linha.
+   * Duplicar deixa de ser possível, mesmo se algo chamar isto dez vezes.
+   */
+  const id = opts.referenciaId
+    ? `tx_${String(opts.tipo).slice(0, 1)}_${String(opts.referenciaId).replace(/[^A-Za-z0-9_-]/g, "")}`
+    : `tx_${Date.now().toString().slice(-6)}`;
 
   try {
     if (opts.tipo === "entrada") {
@@ -1191,16 +1204,42 @@ export function registrarRotasEfi(
   // CONCLUIR PAGAMENTO — um caminho só, usado pelo webhook E pela sincronização
   // --------------------------------------------------------------------------
   /**
-   * Marca a cobrança como paga, gera o comprovante, arquiva no mês certo e
-   * lança a entrada no financeiro. É idempotente: se já foi processada antes,
-   * não faz nada. Por isso pode ser chamada quantas vezes for preciso.
+   * Marca a cobrança como paga, gera o comprovante, arquiva no mês certo,
+   * lança a entrada no financeiro e emite a nota fiscal.
+   *
+   * ============================================================================
+   * ⚠️ POR QUE ESTA FUNÇÃO FOI REESCRITA
+   * ============================================================================
+   *
+   * Ela tinha três `try/catch` que só faziam `console.warn` e seguiam adiante —
+   * e no fim marcava a cobrança como PAGA de qualquer jeito. O resultado, num
+   * caso real: o boleto apareceu como pago na lista, mas não houve lançamento
+   * no livro caixa, não houve comprovante no Arquivo Digital e não saiu nota
+   * fiscal. Nada acusou. E, pior, a cobrança ficava PRESA: a sincronização
+   * ignora o que já está "paid", e o aviso do banco responde "já estava paga".
+   * Ou seja, o estado errado era permanente e invisível.
+   *
+   * Agora:
+   *   • cada etapa registra a falha DENTRO do documento da cobrança;
+   *   • `processadoEm` só é gravado quando tudo essencial deu certo;
+   *   • quem não tem `processadoEm` é reprocessado na próxima sincronização;
+   *   • a função devolve as falhas, para a tela poder dizer o que houve.
+   *
+   * Continua idempotente — e continua verdade que uma falha aqui NÃO desfaz o
+   * pagamento. O que muda é que ela deixa de mentir que deu tudo certo.
    */
   async function concluirPagamento(chargeId: string, dataPagamento?: string) {
     const snap = await db.collection("cobrancas").doc(String(chargeId)).get();
     if (!snap.exists) return { ok: false, motivo: "cobranca_desconhecida" };
 
     const cobranca = snap.data();
-    if (cobranca.documentoId) return { ok: true, motivo: "ja_processada" };
+    // ⚠️ A trava é `processadoEm`, e não `documentoId`. O documento pode ser
+    //    nulo legitimamente (Storage indisponível), e usá-lo como marca fazia
+    //    a cobrança ser reprocessada para sempre — ou nunca.
+    if (cobranca.processadoEm) return { ok: true, motivo: "ja_processada" };
+
+    /** O que deu errado. Vazio no fim = processamento completo. */
+    const falhas: string[] = [];
 
     const pago = dataPagamento || new Date().toISOString();
     const { ano, mes } = resolverMesFiscal(pago, cobranca.vencimento, false);
@@ -1244,10 +1283,12 @@ export function registrarRotasEfi(
     } catch (err: any) {
       // Sem credenciais de Storage o arquivamento falha, mas o pagamento
       // continua válido — marcar como pago é mais importante que o PDF.
-      console.warn(`[Efí] Comprovante de ${chargeId} não arquivado:`, err.message);
+      // O que mudou: agora isso FICA REGISTRADO, em vez de sumir num log.
+      console.warn(`[MEI Flow] Comprovante de ${chargeId} não arquivado:`, err.message);
+      falhas.push(`comprovante: ${String(err?.message || err).slice(0, 160)}`);
     }
 
-    await criarLancamento(db, {
+    const lancamento = await criarLancamento(db, {
       userId: cobranca.userId,
       tipo: "entrada",
       valor: Number(cobranca.valor),
@@ -1262,6 +1303,13 @@ export function registrarRotasEfi(
       clienteDocumento: cobranca.clienteDocumento,
     });
 
+    // ⚠️ `criarLancamento` engole o próprio erro e devolve null. Sem conferir
+    //    o retorno, o dinheiro entrava no banco e NÃO aparecia no faturamento —
+    //    exatamente o sintoma relatado: "não mudou o saldo na tela inicial".
+    if (!lancamento) {
+      falhas.push("lancamento: a entrada não pôde ser gravada no livro caixa");
+    }
+
     await snap.ref.set(
       { status: "paid", pagoEm: pago, documentoId: documento?.id || null },
       { merge: true }
@@ -1273,26 +1321,78 @@ export function registrarRotasEfi(
     // nunca pague, e nota emitida indevidamente dá trabalho para cancelar.
     // Falha aqui NÃO desfaz o pagamento: o recebimento continua registrado.
     // --------------------------------------------------------------------
+    let notaEmitida: any = null;
     try {
       const cfgSnap = await db.collection("nfse_config").doc(cobranca.userId).get();
-      if (cfgSnap.exists && cfgSnap.data().ativo !== false && cfgSnap.data().emitirAoPagar !== false) {
+
+      // ⚠️ Três motivos diferentes para a nota não sair, e eles PRECISAM ser
+      //    distinguidos: sem configuração fiscal, desligado de propósito, ou
+      //    falha de verdade. Antes os três eram silêncio idêntico, e o usuário
+      //    só via "não emitiu a nota".
+      if (!cfgSnap.exists) {
+        falhas.push("nota fiscal: dados fiscais não configurados");
+      } else if (cfgSnap.data().ativo === false || cfgSnap.data().emitirAoPagar === false) {
+        console.log(`[MEI Flow] Nota automática desligada para ${cobranca.userId}. Nada a fazer.`);
+      } else {
         const { emitirNfseDaCobranca } = await import("./nfse.js");
-        const nota = await emitirNfseDaCobranca(db, adminStorage, firebaseConfig, String(chargeId));
-        console.log(`[Efí] Nota fiscal da cobrança ${chargeId}:`, nota?.chave || nota);
+        notaEmitida = await emitirNfseDaCobranca(db, adminStorage, firebaseConfig, String(chargeId));
+        console.log(`[MEI Flow] Nota fiscal da cobrança ${chargeId}:`, notaEmitida?.chave || notaEmitida);
       }
     } catch (errNota: any) {
-      console.warn(
-        `[Efí] Pagamento registrado, mas a nota fiscal falhou (${chargeId}):`,
-        errNota.response?.data || errNota.message
-      );
+      const motivo =
+        errNota?.response?.data?.mensagem || errNota?.message || "erro desconhecido";
+      console.warn(`[MEI Flow] Pagamento registrado, mas a nota fiscal falhou (${chargeId}):`, motivo);
+      falhas.push(`nota fiscal: ${String(motivo).slice(0, 200)}`);
       await snap.ref.set(
-        { nfseErro: String(errNota.message || "").slice(0, 300), nfseTentadaEm: new Date().toISOString() },
+        { nfseErro: String(motivo).slice(0, 300), nfseTentadaEm: new Date().toISOString() },
         { merge: true }
       );
     }
 
-    console.log(`[Efí] Cobrança ${chargeId} concluída e arquivada em ${mes}/${ano}.`);
-    return { ok: true, ano, mes, documentoId: documento?.id || null };
+    /**
+     * ⚠️ O QUE TRAVA A CONCLUSÃO É SÓ O ESSENCIAL — E ISSO É DELIBERADO.
+     *
+     * A primeira versão desta regra segurava a marca de "processado" diante de
+     * QUALQUER falha. Parecia mais seguro e era pior: com o Storage fora do ar,
+     * o comprovante falha sempre, a cobrança nunca fecha, e cada sincronização
+     * recomeça o processamento. O teste flagrou o resultado — lançamento
+     * duplicado. Faturamento inflado é bem pior que comprovante faltando.
+     *
+     * Então:
+     *   • lançamento no livro caixa  → ESSENCIAL. Falhou, tenta de novo.
+     *   • comprovante em PDF          → o dinheiro já está registrado; o PDF é
+     *                                   regerável e não vale repetir tudo.
+     *   • nota fiscal                 → idem: ela tem trava própria contra
+     *                                   emissão dupla, e insistir num usuário
+     *                                   sem dados fiscais seria laço infinito.
+     *
+     * As pendências continuam gravadas e aparecem na tela em qualquer caso —
+     * o que não acontece é o reprocessamento em loop.
+     */
+    const precisaRefazer = falhas.some((f) => f.startsWith("lancamento:"));
+
+    await snap.ref.set(
+      {
+        processadoEm: precisaRefazer ? null : new Date().toISOString(),
+        falhasProcessamento: falhas,
+        ultimaTentativaEm: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+
+    if (falhas.length) {
+      console.warn(`[MEI Flow] Cobrança ${chargeId} paga, mas com pendências:`, falhas.join(" | "));
+    } else {
+      console.log(`[MEI Flow] Cobrança ${chargeId} concluída e arquivada em ${mes}/${ano}.`);
+    }
+
+    return {
+      ok: falhas.length === 0,
+      ano, mes,
+      documentoId: documento?.id || null,
+      notaChave: notaEmitida?.chave || null,
+      falhas,
+    };
   }
 
   // --------------------------------------------------------------------------
@@ -1310,9 +1410,30 @@ export function registrarRotasEfi(
       const uid = await exigirUsuarioAutenticado(req);
 
       const snap = await db.collection("cobrancas").where("userId", "==", uid).get();
-      const abertas = snap.docs
-        .map((d: any) => d.data())
-        .filter((c: any) => !["paid", "settled", "canceled", "cancelled", "unpaid", "expired"].includes(String(c.status)))
+      const todas = snap.docs.map((d: any) => d.data());
+
+      const MORTAS = ["canceled", "cancelled", "unpaid", "expired"];
+      const PAGAS = ["paid", "settled"];
+
+      /**
+       * ⚠️ AS PAGAS-MAS-NÃO-PROCESSADAS PRECISAM ENTRAR AQUI.
+       *
+       * Antes a varredura pulava tudo que já estava "paid". Só que uma cobrança
+       * pode ter sido marcada como paga e ter falhado depois — sem lançamento,
+       * sem comprovante, sem nota. Ficava presa para sempre: a sincronização a
+       * ignorava e o aviso do banco respondia "já estava paga". Era um beco sem
+       * saída, e o usuário não tinha como sair dele.
+       *
+       * Agora quem está pago sem `processadoEm` volta para a fila — e não custa
+       * nada, porque essas nem precisam de consulta ao banco: já sabemos que
+       * foram pagas.
+       */
+      const presas = todas.filter(
+        (c: any) => PAGAS.includes(String(c.status)) && !c.processadoEm
+      );
+
+      const abertas = todas
+        .filter((c: any) => !PAGAS.includes(String(c.status)) && !MORTAS.includes(String(c.status)))
         .slice(0, 60); // teto de segurança por chamada
 
       const contaDoUsuario = await lerCredenciaisBanco(db, uid);
@@ -1326,6 +1447,26 @@ export function registrarRotasEfi(
 
       let atualizadas = 0, pagas = 0;
       const detalhes: any[] = [];
+      const pendencias: any[] = [];
+
+      // Primeiro as presas: terminar o que ficou pela metade vem antes de
+      // procurar novidade.
+      for (const c of presas.slice(0, 60)) {
+        try {
+          const r = await concluirPagamento(String(c.id), c.pagoEm || undefined);
+          if (r?.falhas?.length) {
+            pendencias.push({ id: c.id, cliente: c.clienteNome, falhas: r.falhas });
+          } else if (r?.ok) {
+            pagas++;
+            detalhes.push({ id: c.id, cliente: c.clienteNome, status: "pago", recuperada: true });
+          }
+        } catch (err: any) {
+          pendencias.push({
+            id: c.id, cliente: c.clienteNome,
+            falhas: [String(err?.message || err).slice(0, 200)],
+          });
+        }
+      }
 
       for (const c of abertas) {
         try {
@@ -1357,8 +1498,11 @@ export function registrarRotasEfi(
           if (!status || status === c.status) continue;
 
           atualizadas++;
-          if (["paid", "settled"].includes(status)) {
-            await concluirPagamento(String(c.id), quandoPago || new Date().toISOString());
+          if (PAGAS.includes(status)) {
+            const r = await concluirPagamento(String(c.id), quandoPago || new Date().toISOString());
+            if (r?.falhas?.length) {
+              pendencias.push({ id: c.id, cliente: c.clienteNome, falhas: r.falhas });
+            }
             pagas++;
             detalhes.push({ id: c.id, cliente: c.clienteNome, status: "pago" });
           } else {
@@ -1370,17 +1514,26 @@ export function registrarRotasEfi(
         }
       }
 
-      res.json({
-        success: true,
-        verificadas: abertas.length,
-        atualizadas,
-        pagas,
-        detalhes,
-        mensagem: pagas > 0
+      // ⚠️ "Tudo já estava em dia" era a resposta mesmo quando havia cobrança
+      //    paga pela metade. A mensagem precisa carregar a pendência, senão o
+      //    usuário fecha a tela achando que está tudo certo.
+      const mensagem = pendencias.length
+        ? `${pendencias.length} cobrança(s) foram pagas, mas algo não pôde ser concluído. Veja os detalhes.`
+        : pagas > 0
           ? `${pagas} cobrança(s) marcada(s) como paga(s).`
           : atualizadas > 0
             ? `${atualizadas} cobrança(s) atualizada(s).`
-            : "Tudo já estava em dia.",
+            : "Tudo já estava em dia.";
+
+      res.json({
+        success: true,
+        verificadas: abertas.length,
+        recuperadas: presas.length,
+        atualizadas,
+        pagas,
+        detalhes,
+        pendencias,
+        mensagem,
       });
     } catch (err: any) {
       if (
@@ -1534,8 +1687,11 @@ export function registrarRotasEfi(
       if (snap.data()?.userId !== uid) {
         return console.warn(`[Asaas Webhook] Cobrança ${idCobranca} não pertence a ${uid}. Recusado.`);
       }
-      if (["paid", "settled"].includes(String(snap.data()?.status))) {
-        return console.log(`[Asaas Webhook] ${idCobranca} já estava paga. Nada a fazer.`);
+      // ⚠️ A trava é `processadoEm`, não o status. Uma cobrança marcada como
+      //    paga que falhou no meio do caminho PRECISA ser retomada — antes,
+      //    este `return` a deixava presa para sempre.
+      if (snap.data()?.processadoEm) {
+        return console.log(`[Asaas Webhook] ${idCobranca} já foi processada. Nada a fazer.`);
       }
 
       // Daqui em diante é o MESMO caminho da Efí: registra o recebimento,
