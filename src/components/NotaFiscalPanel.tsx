@@ -53,6 +53,16 @@ interface Props {
    * as telas, que é a que os botões espalhados pelo sistema abrem.
    */
   semCartao?: boolean;
+  /**
+   * MODO PÁGINA — o painel deixa de ser gaveta e vira tela.
+   *
+   * Cada serviço passou a ter caminho próprio no menu lateral. Gaveta que abre
+   * por cima faz sentido quando a ação é um desvio rápido; não faz quando
+   * aquele é o destino. E a separação por tela é o que vai permitir ligar ou
+   * desligar serviços por permissão de usuário: o que é uma tela pode ser
+   * escondido de quem não deve ver.
+   */
+  modoPagina?: boolean;
 }
 
 /** Um serviço que o usuário pré-configurou. O apelido é como ele chama. */
@@ -96,7 +106,20 @@ const cnpjBR = (v?: string) => {
 
 export default function NotaFiscalPanel({
   triggerToast, abrirExterno, onFechado, semCartao,
+  modoPagina,
 }: Props) {
+
+  /*
+    Em modo página não há sobreposição nem largura travada: o painel ocupa o
+    espaço do conteúdo, ao lado do menu. Fora dele, tudo continua exatamente
+    como era — gaveta escura por cima, presa à direita.
+  */
+  const classeFora = modoPagina
+    ? "w-full animate-fade-in"
+    : "fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex justify-end animate-fade-in";
+  const classeDentro = modoPagina
+    ? "w-full bg-transparent"
+    : "w-full max-w-2xl bg-slate-50 h-full overflow-y-auto relative";
   const [aberto, setAberto] = useState(false);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -331,7 +354,7 @@ export default function NotaFiscalPanel({
   return (
     <div className="w-full">
       {/* ------------------------------------------------------ cartão fechado */}
-      {!semCartao && (
+      {!semCartao && !modoPagina && (
       <button
         onClick={() => setAberto(true)}
         className="w-full bg-white p-6 rounded-3xl border border-slate-200/50 shadow-xs cursor-pointer hover:border-indigo-300 hover:shadow-md transition-all duration-300 flex items-center justify-between group"
@@ -384,9 +407,9 @@ export default function NotaFiscalPanel({
       )}
 
       {/* ------------------------------------------------------------- gaveta */}
-      {aberto && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex justify-end animate-fade-in">
-          <div className="w-full max-w-2xl bg-slate-50 h-full overflow-y-auto relative">
+      {(aberto || modoPagina) && (
+        <div className={classeFora}>
+          <div className={classeDentro}>
             <div className="pt-safe bg-white border-b border-slate-100 px-6 pb-5 flex items-center justify-between sticky top-0 z-10">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center border border-indigo-100">

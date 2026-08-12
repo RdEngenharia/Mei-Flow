@@ -1,7 +1,7 @@
 import React from "react";
 import {
   LayoutDashboard, Users, BookOpen, FileText, Package,
-  Building, Calendar, Receipt, X, Crown, Barcode,
+  Building, Calendar, Receipt, X, Crown, Barcode, FolderArchive, Landmark,
 } from "lucide-react";
 
 /**
@@ -32,7 +32,36 @@ import {
  * decide qual tela aparece.
  */
 
-export type TelaMeiFlow = "home" | "clientes" | "financeiro" | "orcamentos" | "catalogo";
+export type TelaMeiFlow =
+  | "home"
+  | "clientes"
+  | "financeiro"
+  | "orcamentos"
+  | "catalogo"
+  | "cobrancas"
+  | "notafiscal"
+  | "arquivos"
+  | "banco";
+
+/**
+ * ============================================================================
+ * PERMISSÕES — a estrutura já existe, a tela de cadastro virá depois
+ * ============================================================================
+ *
+ * O plano é ter usuários por conta, criados com senha master, cada um vendo só
+ * o que lhe cabe. Isso não muda nada no menu quando chegar — porque cada
+ * serviço já é um CAMINHO próprio, e caminho se esconde com uma linha.
+ *
+ * Enquanto ninguém definir permissões, `undefined` quer dizer "pode tudo": o
+ * dono da conta nunca fica trancado do próprio sistema por um campo que ainda
+ * não existe no cadastro dele.
+ *
+ * ⚠️ Esconder no menu é a PRIMEIRA camada, não a única. A tela precisa conferir
+ *    de novo antes de renderizar — senão basta o estado de navegação ficar
+ *    velho, ou alguém chamar `irPara`, para o conteúdo aparecer para quem não
+ *    deveria vê-lo.
+ */
+export type PermissoesUsuario = Partial<Record<TelaMeiFlow, boolean>>;
 
 interface Props {
   ativa: TelaMeiFlow;
@@ -44,6 +73,9 @@ interface Props {
 
   planType?: "free" | "premium";
   onUpgrade?: () => void;
+
+  /** Quando ausente, o usuário vê tudo. Ver o comentário de PermissoesUsuario. */
+  permissoes?: PermissoesUsuario;
 
   /**
    * As duas ações que fazem dinheiro entrar.
@@ -76,11 +108,13 @@ type ItemMenu = {
   contador?: number;
   /** Premium: mostra cadeado e leva para o upgrade em vez de abrir. */
   bloqueado?: boolean;
+  /** Título do grupo em que o item entra. */
+  grupo: "trabalho" | "cadastro" | "fiscal";
 };
 
 export default function Sidebar({
   ativa, onSelecionar, totalClientes, totalLancamentos,
-  planType = "free", onUpgrade, onEmitirNota, onEmitirBoleto, onDas, onDasn,
+  planType = "free", onUpgrade, permissoes, onEmitirNota, onEmitirBoleto, onDas, onDasn,
   meiName, cnpj, onConfig, aberto = false, onFechar,
 }: Props) {
   /**
@@ -90,12 +124,33 @@ export default function Sidebar({
    * regra de negócio é um campo, não um `{condição && (<button>…</button>)}`
    * envolvendo trinta linhas de JSX duplicado.
    */
-  const itens: ItemMenu[] = [
-    { id: "home", rotulo: "Visão Geral", icone: LayoutDashboard },
-    { id: "financeiro", rotulo: "Livro Caixa", icone: BookOpen, contador: totalLancamentos },
-    { id: "clientes", rotulo: "Clientes", icone: Users, contador: totalClientes },
-    { id: "orcamentos", rotulo: "Orçamentos", icone: FileText },
-    { id: "catalogo", rotulo: "Catálogo", icone: Package, bloqueado: planType === "free" },
+  const TODOS: ItemMenu[] = [
+    // O dia a dia
+    { id: "home", rotulo: "Visão Geral", icone: LayoutDashboard, grupo: "trabalho" },
+    { id: "orcamentos", rotulo: "Orçamentos", icone: FileText, grupo: "trabalho" },
+    { id: "cobrancas", rotulo: "Cobranças e boletos", icone: Barcode, grupo: "trabalho" },
+    { id: "financeiro", rotulo: "Livro Caixa", icone: BookOpen, contador: totalLancamentos, grupo: "trabalho" },
+
+    // Cadastros
+    { id: "clientes", rotulo: "Clientes", icone: Users, contador: totalClientes, grupo: "cadastro" },
+    { id: "catalogo", rotulo: "Catálogo", icone: Package, bloqueado: planType === "free", grupo: "cadastro" },
+
+    // Fiscal — cada serviço com caminho próprio, e não empilhado numa tela só
+    { id: "notafiscal", rotulo: "Nota fiscal", icone: Receipt, grupo: "fiscal" },
+    { id: "arquivos", rotulo: "Arquivos Fiscais", icone: FolderArchive, bloqueado: planType === "free", grupo: "fiscal" },
+    { id: "banco", rotulo: "Banco", icone: Landmark, grupo: "fiscal" },
+  ];
+
+  /*
+    Uma linha, e o serviço some do menu para quem não tem permissão. Era esse o
+    ponto de dar caminho próprio a cada um: o que é tela, se esconde.
+  */
+  const itens = TODOS.filter((i) => permissoes?.[i.id] !== false);
+
+  const GRUPOS: { chave: ItemMenu["grupo"]; titulo: string }[] = [
+    { chave: "trabalho", titulo: "" },
+    { chave: "cadastro", titulo: "Cadastros" },
+    { chave: "fiscal", titulo: "Fiscal" },
   ];
 
   const abrir = (item: ItemMenu) => {
@@ -138,7 +193,18 @@ export default function Sidebar({
       )}
 
       <nav className="p-3 space-y-1">
-        {itens.map((item) => {
+        {GRUPOS.map(({ chave, titulo }) => {
+          const doGrupo = itens.filter((i) => i.grupo === chave);
+          if (!doGrupo.length) return null;
+          return (
+            <div key={chave} className={titulo ? "pt-3" : ""}>
+              {titulo && (
+                <p className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 px-3 pb-1.5">
+                  {titulo}
+                </p>
+              )}
+              <div className="space-y-1">
+                {doGrupo.map((item) => {
           const Icone = item.icone;
           const ativo = ativa === item.id && !item.bloqueado;
           return (
@@ -175,6 +241,10 @@ export default function Sidebar({
                 </span>
               )}
             </button>
+                  );
+                })}
+              </div>
+            </div>
           );
         })}
       </nav>

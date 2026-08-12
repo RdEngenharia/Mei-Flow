@@ -96,7 +96,10 @@ import { onSnapshot, doc, setDoc } from "firebase/firestore";
 
 export default function App() {
   // Controle de Navegação por Abas/Módulos
-  const [currentView, setCurrentView] = useState<"home" | "clientes" | "financeiro" | "orcamentos" | "catalogo">("home");
+  const [currentView, setCurrentView] = useState<
+    | "home" | "clientes" | "financeiro" | "orcamentos" | "catalogo"
+    | "cobrancas" | "notafiscal" | "arquivos" | "banco"
+  >("home");
 
   /**
    * ==========================================================================
@@ -166,9 +169,6 @@ export default function App() {
   // a gaveta do NotaFiscalPanel, que fica bem mais abaixo na pagina.
   /** Gaveta do menu no celular. No computador o menu fica sempre visível. */
   const [menuAberto, setMenuAberto] = useState(false);
-
-  /** Levantada pelo botão "Emitir boleto" do menu lateral. */
-  const [abrirBoleto, setAbrirBoleto] = useState(false);
 
   const [abrirNotaFiscal, setAbrirNotaFiscal] = useState(false);
   // Qual lancamento esta com a nota sendo emitida agora (para o botao virar
@@ -2001,7 +2001,11 @@ ${meiName}`;
             planType={planType}
             onUpgrade={() => setShowUpgradeModal(true)}
             onEmitirNota={handleEmitirNotaHeader}
-            onEmitirBoleto={() => setAbrirBoleto(true)}
+            /*
+              As permissões ainda não existem no cadastro; quando existirem,
+              basta passá-las aqui e o menu se ajusta sozinho.
+            */
+            onEmitirBoleto={() => irPara("cobrancas")}
             onDas={() => setShowDasModal(true)}
             onDasn={() => setShowDasnModal(true)}
             meiName={meiName}
@@ -2358,58 +2362,17 @@ ${meiName}`;
 
             </div>
 
-            {/* SEÇÃO INTEGRADA: COBRANÇAS E BOLETOS (Efí) */}
-            <div className="mt-8">
-              <CobrancasPanel
-                clientes={clientes}
-                planType={planType}
-                onTriggerUpgrade={() => setShowUpgradeModal(true)}
-                triggerToast={triggerToast}
-                /*
-                  Quando uma cobrança é dada como paga, o lançamento é criado no
-                  SERVIDOR — o aplicativo não tem como adivinhar. Sem recarregar,
-                  o faturamento da tela inicial continua com o valor antigo até o
-                  usuário apertar F5, o que parece que o sistema não fez nada.
-                */
-                onRecebimento={recarregarLancamentos}
-                abrirExterno={abrirBoleto}
-                onFechado={() => setAbrirBoleto(false)}
-                emitirDireto
-              />
-            </div>
-
-            {/* SEÇÃO INTEGRADA: NOTA FISCAL (certificado A1 + dados fiscais) */}
-            <div className="mt-8">
-              {/*
-                As props de emissor e clientes saíram: este painel não desenha
-                mais a nota. A folha é desenhada uma vez só, no servidor, e vive
-                no Arquivos Fiscais — logo abaixo nesta mesma tela.
-              */}
-              <NotaFiscalPanel triggerToast={triggerToast} />
-            </div>
-
             {/*
-              SEÇÃO INTEGRADA: BANCO (credenciais de cobrança do próprio usuário)
+              OS QUATRO SERVIÇOS SAÍRAM DAQUI.
 
-              Fica logo abaixo da nota fiscal de propósito: são as duas coisas
-              que cada MEI precisa trazer de fora para o sistema funcionar no
-              nome dele — o certificado, para assinar a nota, e a conta, para
-              receber o dinheiro. Quem acabou de cadastrar um já está no lugar
-              certo para cadastrar o outro.
+              Cobranças, Nota Fiscal, Banco e Arquivos Fiscais eram cartões
+              empilhados nesta tela, cada um abrindo uma gaveta por cima. A
+              Visão Geral virava um índice de tudo — e nenhum dos quatro tinha
+              endereço próprio.
+
+              Agora cada um é um caminho no menu lateral. A Visão Geral volta a
+              ser o que o nome promete: o resumo do dinheiro, e nada mais.
             */}
-            <div className="mt-8">
-              <BancoCredenciaisPanel triggerToast={triggerToast} />
-            </div>
-
-            {/* SEÇÃO INTEGRADA: ARQUIVO DIGITAL DO MEI */}
-            <div className="mt-8">
-              <ArquivoDigitalMei 
-                userId={user?.uid || "demouser_49281"} 
-                userProfile={{ meiName: meiName }} 
-                planType={planType}
-                onTriggerUpgrade={() => setShowUpgradeModal(true)}
-              />
-            </div>
 
             {/* INTEGRATED BUSINESS MANAGEMENT ROW (BENTO ROW 2) */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -2880,6 +2843,51 @@ ${meiName}`;
             mensagensContato={mensagensContato}
             triggerToast={triggerToast}
           />
+        )}
+
+        {/*
+          ======================================================================
+          CADA SERVIÇO NA SUA PRÓPRIA TELA
+          ======================================================================
+
+          Antes, Cobranças, Nota Fiscal, Arquivos Fiscais e Banco eram cartões
+          empilhados na Visão Geral, e cada um abria uma gaveta por cima. A
+          Visão Geral virava um índice de tudo, e nenhum serviço tinha endereço.
+
+          Agora cada um é um caminho no menu. Além de mais limpo, é o que
+          permite ligar e desligar serviço por permissão de usuário: o que é
+          tela, se esconde de quem não deve ver.
+
+          Os painéis são os MESMOS componentes — só recebem `modoPagina`, que
+          troca a moldura de gaveta por conteúdo. Nada de duplicar tela.
+        */}
+        {currentView === "cobrancas" && (
+          <CobrancasPanel
+            modoPagina
+            clientes={clientes}
+            planType={planType}
+            onTriggerUpgrade={() => setShowUpgradeModal(true)}
+            triggerToast={triggerToast}
+            onRecebimento={recarregarLancamentos}
+          />
+        )}
+
+        {currentView === "notafiscal" && (
+          <NotaFiscalPanel modoPagina triggerToast={triggerToast} />
+        )}
+
+        {currentView === "arquivos" && (
+          <ArquivoDigitalMei
+            modoPagina
+            userId={user?.uid || "demouser_49281"}
+            userProfile={{ meiName: meiName }}
+            planType={planType}
+            onTriggerUpgrade={() => setShowUpgradeModal(true)}
+          />
+        )}
+
+        {currentView === "banco" && (
+          <BancoCredenciaisPanel modoPagina triggerToast={triggerToast} />
         )}
 
         {/* VIEW: CATÁLOGO DE ITENS */}

@@ -80,6 +80,14 @@ interface UserProfile {
 }
 
 interface ArquivoDigitalMeiProps {
+  /**
+   * MODO PÁGINA — o painel deixa de ser gaveta e vira tela.
+   *
+   * Cada serviço passou a ter caminho próprio no menu lateral. Gaveta que abre
+   * por cima faz sentido quando a ação é um desvio rápido; não faz quando
+   * aquele é o destino.
+   */
+  modoPagina?: boolean;
   userId: string;
   userProfile?: UserProfile;
   planType?: "free" | "premium";
@@ -92,7 +100,20 @@ const MESES = [
   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
 ];
 
-export default function ArquivoDigitalMei({ userId, userProfile, planType = "free", onTriggerUpgrade }: ArquivoDigitalMeiProps) {
+export default function ArquivoDigitalMei({ userId, userProfile, planType = "free", onTriggerUpgrade,
+  modoPagina,
+}: ArquivoDigitalMeiProps) {
+
+  /*
+    Em modo página não há sobreposição nem largura travada. Fora dele, tudo
+    continua como era — gaveta escura por cima, presa à direita.
+  */
+  const classeFora = modoPagina
+    ? "w-full animate-fade-in"
+    : "fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex justify-end transition-opacity duration-300 animate-fade-in";
+  const classeDentro = modoPagina
+    ? "w-full bg-transparent"
+    : "w-full max-w-2xl bg-slate-50 h-full overflow-y-auto relative";
   const currentYear = new Date().getFullYear(); // 2026 no contexto atual
   
   // Limite legal de 5 anos fiscais (ex: 2026, 2025, 2024, 2023, 2022)
@@ -815,10 +836,10 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
       )}
 
       {/* 2. DRAWER COMPLETO DO ARQUIVO DIGITAL */}
-      {isMobileDrawerOpen && planType === "premium" && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex justify-end transition-opacity duration-300 animate-fade-in">
+      {(isMobileDrawerOpen || modoPagina) && planType === "premium" && (
+        <div className={classeFora}>
           <div 
-            className="w-full max-w-2xl bg-slate-50 h-full overflow-y-auto relative"
+            className={classeDentro}
             id="mei-arquivo-drawer-container"
           >
             {/* Header do Drawer (agora rola junto com o conteúdo, em vez de fixo —

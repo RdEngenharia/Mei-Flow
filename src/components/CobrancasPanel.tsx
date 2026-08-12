@@ -33,6 +33,16 @@ interface Props {
    */
   onRecebimento?: () => void;
   /**
+   * MODO PÁGINA — o painel deixa de ser gaveta e vira tela.
+   *
+   * Cada serviço passou a ter caminho próprio no menu lateral. Gaveta que abre
+   * por cima faz sentido quando a ação é um desvio rápido; não faz quando
+   * aquele é o destino. E a separação por tela é o que vai permitir ligar ou
+   * desligar serviços por permissão de usuário: o que é uma tela pode ser
+   * escondido de quem não deve ver.
+   */
+  modoPagina?: boolean;
+  /**
    * Abre a gaveta a partir de fora — hoje, do botão "Emitir boleto" do menu
    * lateral. Mesma ideia já usada no painel de Nota Fiscal: o botão que a
    * pessoa procura fica onde ela olha, e o painel continua morando onde mora.
@@ -72,8 +82,20 @@ async function comToken(): Promise<Record<string, string>> {
 
 export default function CobrancasPanel({
   clientes, planType = "free", onTriggerUpgrade, triggerToast, onRecebimento,
-  abrirExterno, onFechado, emitirDireto,
+  abrirExterno, onFechado, emitirDireto, modoPagina,
 }: Props) {
+
+  /*
+    Em modo página não há sobreposição nem largura travada: o painel ocupa o
+    espaço do conteúdo, ao lado do menu. Fora dele, tudo continua exatamente
+    como era — gaveta escura por cima, presa à direita.
+  */
+  const classeFora = modoPagina
+    ? "w-full animate-fade-in"
+    : "fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex justify-end animate-fade-in";
+  const classeDentro = modoPagina
+    ? "w-full bg-transparent"
+    : "w-full max-w-2xl bg-slate-50 h-full overflow-y-auto relative";
   const [aberto, setAberto] = useState(false);
 
   /*
@@ -319,9 +341,9 @@ export default function CobrancasPanel({
       </div>
 
       {/* GAVETA */}
-      {aberto && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex justify-end animate-fade-in">
-          <div className="w-full max-w-2xl bg-slate-50 h-full overflow-y-auto relative">
+      {(aberto || modoPagina) && (
+        <div className={classeFora}>
+          <div className={classeDentro}>
             {/* Cabeçalho */}
             <div className="pt-safe bg-white border-b border-slate-100 px-6 pb-5 flex items-center justify-between sticky top-0 z-10">
               <div className="flex items-center gap-3">

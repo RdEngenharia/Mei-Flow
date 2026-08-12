@@ -786,9 +786,37 @@ export async function saveOrcamentoToFirebase(userId: string, orc: Orcamento): P
       validade: orc.validade || '',
       situacao: orc.situacao || 'enviado',
       vendaId: orc.vendaId || '',
+
+      /**
+       * ⚠️ ESTES DOIS CAMPOS FALTAVAM — E O SINTOMA ERA CRUEL.
+       *
+       * A régua de contato guarda aqui quais das três mensagens já foram
+       * enviadas. Como a gravação monta o documento campo a campo, e estes não
+       * estavam na lista, acontecia o seguinte: o usuário marcava "já mandei",
+       * a notificação sumia da tela, o orçamento subia para a nuvem SEM o
+       * registro — e, na próxima vez que a página carregasse, o lembrete
+       * voltava. Todo dia. Como se o sistema não tivesse ouvido.
+       *
+       * Pior: o `setDoc` abaixo grava o documento INTEIRO. Então cada
+       * salvamento não só deixava de gravar o acompanhamento: apagava o que já
+       * existia. Por isso `{ merge: true }` agora — gravação parcial deixa de
+       * poder destruir campo que ela não conhece.
+       *
+       * Lição: montar o documento campo a campo é seguro contra lixo, e
+       * perigoso contra esquecimento. Ao acrescentar um campo ao orçamento,
+       * acrescente TAMBÉM aqui — senão ele existe na tela e não existe amanhã.
+       */
+      acompanhamento: Array.isArray(orc.acompanhamento)
+        ? orc.acompanhamento.map((c: any) => ({
+            etapa: Number(c?.etapa) || 0,
+            quando: String(c?.quando || '').slice(0, 10),
+          }))
+        : [],
+      acompanhamentoEncerrado: !!orc.acompanhamentoEncerrado,
+
       createdAt: orc.createdAt || new Date().toISOString(),
       atualizadoEm: new Date().toISOString(),
-    });
+    }, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
     throw error;
