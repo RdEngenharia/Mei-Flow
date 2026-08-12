@@ -63,6 +63,30 @@ export type UsuarioVerificado = {
   uid: string;
   email?: string;
   emailVerificado?: boolean;
+
+  /**
+   * ============================================================================
+   * AS PERMISSÕES VIAJAM DENTRO DO PRÓPRIO TOKEN
+   * ============================================================================
+   *
+   * Quando o dono da conta cria um usuário para um ajudante, o servidor grava
+   * no login dessa pessoa três informações extras (as "custom claims" do
+   * Firebase): de quem é a empresa, que papel ela tem, e o que pode fazer.
+   *
+   * A alternativa seria guardar isso numa coleção e consultar a cada operação —
+   * o que custa uma leitura de banco em TODA chamada, não só no login. Vindo no
+   * token, já chega pronto e conferido: a assinatura do Google é verificada
+   * acima, então nada aqui pode ter sido forjado pelo navegador.
+   *
+   * ⚠️ AUSÊNCIA DE `papel` SIGNIFICA "É O DONO".
+   *
+   * Contas criadas antes deste sistema existir não têm claim nenhuma — e não
+   * podem ficar trancadas fora do próprio sistema por causa de um campo que
+   * não existia quando elas nasceram. Quem não é membro é mestre.
+   */
+  empresaId?: string;
+  papel?: "mestre" | "membro";
+  permissoes?: Record<string, boolean>;
 };
 
 /**
@@ -115,21 +139,51 @@ export async function verificarIdToken(idToken: string): Promise<UsuarioVerifica
     throw new Error("Horário de autenticação inválido.");
   }
 
+  const ehMembro = corpo.papel === "membro";
+
   return {
     uid: corpo.sub,
     email: corpo.email,
     emailVerificado: corpo.email_verified,
+    // Membro pertence à empresa do mestre; mestre é a própria empresa.
+    empresaId: ehMembro && corpo.empresaId ? String(corpo.empresaId) : corpo.sub,
+    papel: ehMembro ? "membro" : "mestre",
+    permissoes: ehMembro && corpo.permissoes && typeof corpo.permissoes === "object"
+      ? corpo.permissoes
+      : undefined,
   };
 }
 
 /** Lê o cabeçalho Authorization e devolve o UID. Lança NAO_AUTENTICADO. */
+/** O usuário inteiro — para quem precisa do papel e das permissões. */
+export async function exigirUsuarioCompleto(req: any): Promise<UsuarioVerificado> {
+  const cabecalho = String(req.headers?.authorization || "");
+  const token = cabecalho.startsWith("Bearer ") ? cabecalho.slice(7).trim() : "";
+  if (!token) throw new Error("NAO_AUTENTICADO");
+  try {
+    return await verificarIdToken(token);
+  } catch (err: any) {
+    console.warn("[Auth] Token recusado:", err.message);
+    throw new Error("NAO_AUTENTICADO");
+  }
+}
+
 export async function exigirUsuario(req: any): Promise<string> {
   const cabecalho = String(req.headers?.authorization || "");
   const token = cabecalho.startsWith("Bearer ") ? cabecalho.slice(7).trim() : "";
   if (!token) throw new Error("NAO_AUTENTICADO");
   try {
     const usuario = await verificarIdToken(token);
-    return usuario.uid;
+    /**
+     * ⚠️ DEVOLVE A EMPRESA, NÃO O LOGIN.
+     *
+     * Todas as rotas do sistema usam este retorno para saber "de quem são os
+     * dados". Para o dono, os dois são a mesma coisa. Para um ajudante, NÃO:
+     * ele tem login próprio, mas os clientes, as cobranças e as notas são da
+     * empresa do dono. Devolver o uid dele aqui faria o ajudante entrar num
+     * sistema vazio — e gravar tudo num canto que ninguém mais veria.
+     */
+    return usuario.empresaId || usuario.uid;
   } catch (err: any) {
     console.warn("[Auth] Token recusado:", err.message);
     throw new Error("NAO_AUTENTICADO");

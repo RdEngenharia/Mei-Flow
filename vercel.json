@@ -23,6 +23,14 @@
     {
       "source": "/api/banco/:path*",
       "destination": "/api/mf?__rota=banco/:path*"
+    },
+    {
+      "source": "/api/equipe/:path*",
+      "destination": "/api/mf?__rota=equipe/:path*"
+    },
+    {
+      "source": "/api/equipe",
+      "destination": "/api/mf?__rota=equipe"
     }
   ]
 }

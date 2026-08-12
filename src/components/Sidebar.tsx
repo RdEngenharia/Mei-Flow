@@ -1,7 +1,7 @@
 import React from "react";
 import {
   LayoutDashboard, Users, BookOpen, FileText, Package,
-  Building, Calendar, Receipt, X, Crown, Barcode, FolderArchive, Landmark,
+  Building, Calendar, Receipt, X, Crown, Barcode, FolderArchive, Landmark, UserCog,
 } from "lucide-react";
 
 /**
@@ -41,7 +41,8 @@ export type TelaMeiFlow =
   | "cobrancas"
   | "notafiscal"
   | "arquivos"
-  | "banco";
+  | "banco"
+  | "usuarios";
 
 /**
  * ============================================================================
@@ -78,6 +79,12 @@ interface Props {
   permissoes?: PermissoesUsuario;
 
   /**
+   * "mestre" é o dono da conta. Só ele gerencia usuários — e isso não é uma
+   * permissão que se marque numa caixinha: é condição do papel.
+   */
+  papel?: "mestre" | "membro";
+
+  /**
    * As duas ações que fazem dinheiro entrar.
    *
    * Ficam no topo do menu, e não junto da navegação, porque não são lugares —
@@ -109,7 +116,7 @@ type ItemMenu = {
   /** Premium: mostra cadeado e leva para o upgrade em vez de abrir. */
   bloqueado?: boolean;
   /** Título do grupo em que o item entra. */
-  grupo: "trabalho" | "cadastro" | "fiscal";
+  grupo: "trabalho" | "cadastro" | "fiscal" | "empresa";
   /**
    * ⚠️ NEM TODO ITEM DO MENU É UMA TELA.
    *
@@ -128,7 +135,7 @@ type ItemMenu = {
 
 export default function Sidebar({
   ativa, onSelecionar, totalClientes, totalLancamentos,
-  planType = "free", onUpgrade, permissoes, onEmitirNota, onEmitirBoleto, onDas, onDasn,
+  planType = "free", onUpgrade, permissoes, papel = "mestre", onEmitirNota, onEmitirBoleto, onDas, onDasn,
   meiName, cnpj, onConfig, aberto = false, onFechar,
 }: Props) {
   /**
@@ -153,18 +160,26 @@ export default function Sidebar({
     { id: "notafiscal", rotulo: "Nota fiscal", icone: Receipt, grupo: "fiscal", acao: onEmitirNota },
     { id: "arquivos", rotulo: "Arquivos Fiscais", icone: FolderArchive, bloqueado: planType === "free", grupo: "fiscal" },
     { id: "banco", rotulo: "Banco", icone: Landmark, grupo: "fiscal" },
+
+    // Gestão de equipe é sempre exclusiva do dono — nem um membro com todas as
+    // áreas marcadas entra aqui.
+    { id: "usuarios", rotulo: "Usuários", icone: UserCog, grupo: "empresa" },
   ];
 
   /*
     Uma linha, e o serviço some do menu para quem não tem permissão. Era esse o
     ponto de dar caminho próprio a cada um: o que é tela, se esconde.
   */
-  const itens = TODOS.filter((i) => permissoes?.[i.id] !== false);
+  const itens = TODOS
+    .filter((i) => permissoes?.[i.id] !== false)
+    // Papel vem antes de permissão: gerenciar equipe não é área delegável.
+    .filter((i) => i.id !== "usuarios" || papel === "mestre");
 
   const GRUPOS: { chave: ItemMenu["grupo"]; titulo: string }[] = [
     { chave: "trabalho", titulo: "" },
     { chave: "cadastro", titulo: "Cadastros" },
     { chave: "fiscal", titulo: "Fiscal" },
+    { chave: "empresa", titulo: "Empresa" },
   ];
 
   const abrir = (item: ItemMenu) => {

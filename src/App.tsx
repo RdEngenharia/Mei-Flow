@@ -61,6 +61,7 @@ import NotaFiscalPanel from "./components/NotaFiscalPanel";
 import BancoCredenciaisPanel from "./components/BancoCredenciaisPanel";
 import Navbar from "./components/Navbar";
 import Sidebar from "./components/Sidebar";
+import EquipePanel from "./components/EquipePanel";
 import PainelAcompanhamento from "./components/PainelAcompanhamento";
 import { jsPDF } from "jspdf";
 import { savePdfCrossPlatform, isNativePlatform, getApiUrl } from "./utils/nativeFile";
@@ -98,7 +99,7 @@ export default function App() {
   // Controle de Navegação por Abas/Módulos
   const [currentView, setCurrentView] = useState<
     | "home" | "clientes" | "financeiro" | "orcamentos" | "catalogo"
-    | "arquivos" | "banco"
+    | "arquivos" | "banco" | "usuarios"
   >("home");
 
   /**
@@ -169,6 +170,34 @@ export default function App() {
   // a gaveta do NotaFiscalPanel, que fica bem mais abaixo na pagina.
   /** Gaveta do menu no celular. No computador o menu fica sempre visível. */
   const [menuAberto, setMenuAberto] = useState(false);
+
+  /**
+   * QUEM SOU EU NESTA EMPRESA.
+   *
+   * Vem do servidor, que lê do próprio token de login — o navegador não tem
+   * como inventar. Enquanto não chega, o padrão é "mestre": conta antiga, que
+   * nunca teve equipe, não pode ficar trancada fora do próprio sistema à
+   * espera de uma resposta.
+   */
+  const [papelNaEmpresa, setPapelNaEmpresa] = useState<"mestre" | "membro">("mestre");
+  const [permissoesDaConta, setPermissoesDaConta] = useState<Record<string, boolean> | undefined>(undefined);
+
+  useEffect(() => {
+    if (!user) { setPapelNaEmpresa("mestre"); setPermissoesDaConta(undefined); return; }
+    (async () => {
+      try {
+        const t = await auth.currentUser?.getIdToken();
+        if (!t) return;
+        const r = await fetch(getApiUrl("/api/equipe/eu"), { headers: { Authorization: `Bearer ${t}` } });
+        const d = await r.json();
+        if (!d?.success) return;
+        setPapelNaEmpresa(d.papel === "membro" ? "membro" : "mestre");
+        setPermissoesDaConta(d.papel === "membro" ? d.permissoes || {} : undefined);
+      } catch {
+        // Sem resposta, segue como dono — que é o comportamento de sempre.
+      }
+    })();
+  }, [user]);
 
   /** Abre a gaveta de Cobranças a partir do menu lateral. */
   const [abrirBoletoDrawer, setAbrirBoletoDrawer] = useState(false);
@@ -2003,6 +2032,8 @@ ${meiName}`;
             totalLancamentos={transacoes.length}
             planType={planType}
             onUpgrade={() => setShowUpgradeModal(true)}
+            permissoes={permissoesDaConta as any}
+            papel={papelNaEmpresa}
             onEmitirNota={handleEmitirNotaHeader}
             /*
               As permissões ainda não existem no cadastro; quando existirem,
@@ -2888,6 +2919,23 @@ ${meiName}`;
 
         {currentView === "banco" && (
           <BancoCredenciaisPanel modoPagina triggerToast={triggerToast} />
+        )}
+
+        {/*
+          ⚠️ SEGUNDA CAMADA — a tela confere de novo.
+
+          Esconder o item no menu evita o clique sem querer. Não basta: o
+          estado de navegação pode estar velho (a pessoa estava aqui quando
+          perdeu a permissão), e `irPara` pode ser chamado de qualquer lugar.
+          Quem manda é o servidor, mas a tela não deve nem desenhar o que não
+          é para ser visto.
+        */}
+        {currentView === "usuarios" && papelNaEmpresa === "mestre" && (
+          <EquipePanel
+            planType={planType}
+            onTriggerUpgrade={() => setShowUpgradeModal(true)}
+            triggerToast={triggerToast}
+          />
         )}
 
         {/* VIEW: CATÁLOGO DE ITENS */}

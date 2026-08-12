@@ -156,5 +156,13 @@ service cloud.firestore {
     match /banco_credenciais/{doc} {
       allow read, write: if false;
     }
+
+    // equipe guarda quem tem acesso a cada empresa. Se o navegador pudesse
+    // escrever aqui, qualquer usuario se promoveria a dono da conta de outro.
+    // O servidor entra pelo Admin SDK e passa por cima destas regras.
+
+    match /equipe/{doc} {
+      allow read, write: if false;
+    }
   }
 }
