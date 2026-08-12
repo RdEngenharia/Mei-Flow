@@ -182,23 +182,6 @@ export default function App() {
   const [papelNaEmpresa, setPapelNaEmpresa] = useState<"mestre" | "membro">("mestre");
   const [permissoesDaConta, setPermissoesDaConta] = useState<Record<string, boolean> | undefined>(undefined);
 
-  useEffect(() => {
-    if (!user) { setPapelNaEmpresa("mestre"); setPermissoesDaConta(undefined); return; }
-    (async () => {
-      try {
-        const t = await auth.currentUser?.getIdToken();
-        if (!t) return;
-        const r = await fetch(getApiUrl("/api/equipe/eu"), { headers: { Authorization: `Bearer ${t}` } });
-        const d = await r.json();
-        if (!d?.success) return;
-        setPapelNaEmpresa(d.papel === "membro" ? "membro" : "mestre");
-        setPermissoesDaConta(d.papel === "membro" ? d.permissoes || {} : undefined);
-      } catch {
-        // Sem resposta, segue como dono — que é o comportamento de sempre.
-      }
-    })();
-  }, [user]);
-
   /** Abre a gaveta de Cobranças a partir do menu lateral. */
   const [abrirBoletoDrawer, setAbrirBoletoDrawer] = useState(false);
 
@@ -236,6 +219,38 @@ export default function App() {
   // NOVO: ESTADOS INTEGRADOS DO FIREBASE & ISOLAMENTO DE USUÁRIOS (MULTITENANCY)
   // -------------------------------------------------------------------------
   const [user, setUser] = useState<User | null>(null);
+
+  /**
+   * ⚠️ ESTE EFEITO PRECISA VIR DEPOIS DE `user` — E ISSO DEU TELA BRANCA.
+   *
+   * Ele estava lá em cima, junto dos estados de papel e permissões, o que
+   * parecia arrumado. Só que ele LÊ `user`, e `user` é declarado aqui embaixo.
+   * Em JavaScript, ler uma `const` antes da linha que a declara não devolve
+   * "indefinido": estoura. E como isso acontece durante a montagem do
+   * componente, o React não renderiza nada — tela branca, sem mensagem, com
+   * um "Cannot access 'ce' before initialization" no console, onde 'ce' é o
+   * nome que o empacotador deu à variável.
+   *
+   * A regra: efeito fica ABAIXO de tudo que ele lê. Foi a segunda vez que este
+   * projeto caiu por isso.
+   */
+  useEffect(() => {
+    if (!user) { setPapelNaEmpresa("mestre"); setPermissoesDaConta(undefined); return; }
+    (async () => {
+      try {
+        const t = await auth.currentUser?.getIdToken();
+        if (!t) return;
+        const r = await fetch(getApiUrl("/api/equipe/eu"), { headers: { Authorization: `Bearer ${t}` } });
+        const d = await r.json();
+        if (!d?.success) return;
+        setPapelNaEmpresa(d.papel === "membro" ? "membro" : "mestre");
+        setPermissoesDaConta(d.papel === "membro" ? d.permissoes || {} : undefined);
+      } catch {
+        // Sem resposta, segue como dono — que é o comportamento de sempre.
+      }
+    })();
+  }, [user]);
+
 
   // Detecta se o app está rodando dentro do APK nativo (via Capacitor) ou no
   // navegador comum (web). O Capacitor injeta o objeto global window.Capacitor
