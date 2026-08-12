@@ -98,7 +98,7 @@ export default function App() {
   // Controle de Navegação por Abas/Módulos
   const [currentView, setCurrentView] = useState<
     | "home" | "clientes" | "financeiro" | "orcamentos" | "catalogo"
-    | "cobrancas" | "notafiscal" | "arquivos" | "banco"
+    | "arquivos" | "banco"
   >("home");
 
   /**
@@ -169,6 +169,9 @@ export default function App() {
   // a gaveta do NotaFiscalPanel, que fica bem mais abaixo na pagina.
   /** Gaveta do menu no celular. No computador o menu fica sempre visível. */
   const [menuAberto, setMenuAberto] = useState(false);
+
+  /** Abre a gaveta de Cobranças a partir do menu lateral. */
+  const [abrirBoletoDrawer, setAbrirBoletoDrawer] = useState(false);
 
   const [abrirNotaFiscal, setAbrirNotaFiscal] = useState(false);
   // Qual lancamento esta com a nota sendo emitida agora (para o botao virar
@@ -2005,7 +2008,7 @@ ${meiName}`;
               As permissões ainda não existem no cadastro; quando existirem,
               basta passá-las aqui e o menu se ajusta sozinho.
             */
-            onEmitirBoleto={() => irPara("cobrancas")}
+            onEmitirBoleto={() => setAbrirBoletoDrawer(true)}
             onDas={() => setShowDasModal(true)}
             onDasn={() => setShowDasnModal(true)}
             meiName={meiName}
@@ -2861,20 +2864,17 @@ ${meiName}`;
           Os painéis são os MESMOS componentes — só recebem `modoPagina`, que
           troca a moldura de gaveta por conteúdo. Nada de duplicar tela.
         */}
-        {currentView === "cobrancas" && (
-          <CobrancasPanel
-            modoPagina
-            clientes={clientes}
-            planType={planType}
-            onTriggerUpgrade={() => setShowUpgradeModal(true)}
-            triggerToast={triggerToast}
-            onRecebimento={recarregarLancamentos}
-          />
-        )}
+        {/*
+          ⚠️ NÃO CRIE TELA PARA NOTA FISCAL NEM PARA COBRANÇAS.
 
-        {currentView === "notafiscal" && (
-          <NotaFiscalPanel modoPagina triggerToast={triggerToast} />
-        )}
+          As duas já têm painel próprio, montado uma vez só no fim deste
+          arquivo, que abre por cima. Quando eu dei "caminho próprio" a elas,
+          passaram a existir DUAS telas do mesmo assunto — e apareceram juntas:
+          a de trás pedindo o certificado que a da frente mostrava cadastrado.
+
+          Os itens continuam no menu (e continuam podendo sumir por permissão);
+          eles apenas abrem o painel que já existe. Ver `acao` no Sidebar.
+        */}
 
         {currentView === "arquivos" && (
           <ArquivoDigitalMei
@@ -2977,12 +2977,34 @@ ${meiName}`;
         />
       )}
 
+      {/*
+        UMA INSTÂNCIA DE CADA PAINEL, FORA DAS TELAS.
+
+        Ficam aqui, e não dentro de uma tela, porque são chamados de vários
+        lugares — do menu lateral, do botão de emitir num lançamento, de um
+        aviso. Montar de novo dentro de cada tela foi exatamente o que produziu
+        duas Nota Fiscal na mesma página, uma pedindo o certificado que a outra
+        já tinha.
+      */}
       <NotaFiscalPanel
         semCartao
         triggerToast={triggerToast}
         abrirExterno={abrirNotaFiscal}
         onFechado={() => { setAbrirNotaFiscal(false); setServicosNfse(null); }}
       />
+
+      {user && (
+        <CobrancasPanel
+          semCartao
+          clientes={clientes}
+          planType={planType}
+          onTriggerUpgrade={() => setShowUpgradeModal(true)}
+          triggerToast={triggerToast}
+          onRecebimento={recarregarLancamentos}
+          abrirExterno={abrirBoletoDrawer}
+          onFechado={() => setAbrirBoletoDrawer(false)}
+        />
+      )}
 
       {/* Conferencia antes de emitir a nota */}
       {notaEmAndamento && (

@@ -47,6 +47,8 @@ interface Props {
    * lateral. Mesma ideia já usada no painel de Nota Fiscal: o botão que a
    * pessoa procura fica onde ela olha, e o painel continua morando onde mora.
    */
+  /** Renderiza só a gaveta, sem o cartão — quando o painel é aberto de fora. */
+  semCartao?: boolean;
   abrirExterno?: boolean;
   onFechado?: () => void;
   /** Já entra com o formulário de emissão aberto, sem um clique a mais. */
@@ -82,7 +84,7 @@ async function comToken(): Promise<Record<string, string>> {
 
 export default function CobrancasPanel({
   clientes, planType = "free", onTriggerUpgrade, triggerToast, onRecebimento,
-  abrirExterno, onFechado, emitirDireto, modoPagina,
+  abrirExterno, onFechado, emitirDireto, modoPagina, semCartao,
 }: Props) {
 
   /*
@@ -172,9 +174,23 @@ export default function CobrancasPanel({
     }
   }, []);
 
+  /**
+   * ⚠️ EM MODO PÁGINA NÃO EXISTE "ABRIR" — E ISSO QUASE PASSOU DESPERCEBIDO.
+   *
+   * A carga dos dados dependia de a gaveta ser aberta. Quando o painel virou
+   * tela, `aberto` continua falso para sempre: a tela montava e NUNCA buscava
+   * nada. O resultado enganava — em vez de erro, aparecia o estado de "ainda
+   * não configurado": certificado pedindo upload, nenhum serviço cadastrado,
+   * CNPJ em branco. O usuário viu isso e tentou cadastrar o certificado de
+   * novo, que já estava lá.
+   *
+   * Regra que fica: quando um componente ganha um modo novo de aparecer, todo
+   * efeito preso ao modo antigo precisa ser revisto. "Se abriu" virou "se está
+   * à mostra".
+   */
   useEffect(() => {
-    if (aberto) carregar();
-  }, [aberto, carregar]);
+    if (aberto || modoPagina) carregar();
+  }, [aberto, modoPagina, carregar]);
 
   /**
    * Pergunta o status direto à Efí, em vez de esperar o aviso automático.
@@ -307,7 +323,8 @@ export default function CobrancasPanel({
 
   return (
     <div className="w-full">
-      {/* CARD NA DASHBOARD */}
+      {/* CARD NA DASHBOARD — some quando o painel é aberto pelo menu lateral */}
+      {!semCartao && (
       <div
         onClick={() => (planType === "free" ? onTriggerUpgrade?.() : setAberto(true))}
         className="w-full bg-white p-6 rounded-3xl border border-slate-200/50 shadow-xs cursor-pointer hover:border-emerald-300 hover:shadow-md transition-all duration-300 flex items-center justify-between group"
@@ -339,6 +356,7 @@ export default function CobrancasPanel({
           <ChevronRight className="w-4 h-4 transform group-hover:translate-x-0.5 transition-transform" />
         </div>
       </div>
+      )}
 
       {/* GAVETA */}
       {(aberto || modoPagina) && (

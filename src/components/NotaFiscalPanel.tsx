@@ -130,6 +130,8 @@ export default function NotaFiscalPanel({
   // Envio do certificado
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [senha, setSenha] = useState("");
+  /** Deixa a pessoa conferir o que realmente está no campo. */
+  const [verSenha, setVerSenha] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [trocando, setTrocando] = useState(false);
   const inputArquivo = useRef<HTMLInputElement | null>(null);
@@ -210,9 +212,23 @@ export default function NotaFiscalPanel({
     }
   }, []);
 
+  /**
+   * ⚠️ EM MODO PÁGINA NÃO EXISTE "ABRIR" — E ISSO QUASE PASSOU DESPERCEBIDO.
+   *
+   * A carga dos dados dependia de a gaveta ser aberta. Quando o painel virou
+   * tela, `aberto` continua falso para sempre: a tela montava e NUNCA buscava
+   * nada. O resultado enganava — em vez de erro, aparecia o estado de "ainda
+   * não configurado": certificado pedindo upload, nenhum serviço cadastrado,
+   * CNPJ em branco. O usuário viu isso e tentou cadastrar o certificado de
+   * novo, que já estava lá.
+   *
+   * Regra que fica: quando um componente ganha um modo novo de aparecer, todo
+   * efeito preso ao modo antigo precisa ser revisto. "Se abriu" virou "se está
+   * à mostra".
+   */
   useEffect(() => {
-    if (aberto) carregar();
-  }, [aberto, carregar]);
+    if (aberto || modoPagina) carregar();
+  }, [aberto, modoPagina, carregar]);
 
   // O botão do topo levanta a bandeira; aqui a gaveta responde.
   useEffect(() => {
@@ -576,13 +592,38 @@ export default function NotaFiscalPanel({
                     <div className="relative mt-1.5">
                       <Lock className="w-4 h-4 text-slate-300 absolute left-3.5 top-1/2 -translate-y-1/2" />
                       <input
-                        type="password"
+                        /*
+                          ⚠️ `autoComplete="off"` NÃO SEGURA O CHROME.
+
+                          Em campo de senha ele ignora "off" e oferece o
+                          gerenciador de senhas — e basta um clique para o
+                          campo receber a senha DA CONTA em vez da senha do
+                          certificado. O servidor então responde "senha
+                          incorreta" e a pessoa jura que digitou a certa,
+                          porque digitou: só não foi essa que viajou.
+
+                          `new-password` é o valor que o Chrome respeita.
+                        */
+                        type={verSenha ? "text" : "password"}
+                        name="senha-do-certificado-a1"
                         value={senha}
                         onChange={(e) => setSenha(e.target.value)}
                         placeholder="A senha que a certificadora te deu"
-                        autoComplete="off"
-                        className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
+                        autoComplete="new-password"
+                        className="w-full pl-10 pr-20 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors"
                       />
+                      {/*
+                        Poder VER o que está no campo é o que resolve a dúvida
+                        em dois segundos — em vez de tentar três vezes e
+                        concluir que o sistema está quebrado.
+                      */}
+                      <button
+                        type="button"
+                        onClick={() => setVerSenha((v) => !v)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-500 hover:text-slate-800 px-2 py-1 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                      >
+                        {verSenha ? "Ocultar" : "Mostrar"}
+                      </button>
                     </div>
                   </div>
 
@@ -860,13 +901,13 @@ export default function NotaFiscalPanel({
                 Agora esta tela cuida de UMA coisa: deixar a emissão pronta
                 (certificado, dados fiscais, serviços) e emitir. Tudo que é
                 consultar nota já emitida — ver, imprimir, baixar o XML — vive
-                no Arquivo Digital, que é onde os documentos ficam guardados
+                em Arquivos Fiscais, que é onde os documentos ficam guardados
                 pelos cinco anos de qualquer jeito.
               */}
               <div className="bg-indigo-50/50 border border-indigo-100 rounded-3xl p-5 text-left flex items-start gap-3">
                 <Receipt className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
                 <div className="space-y-1">
-                  <h4 className="text-sm font-extrabold text-slate-800">Suas notas ficam no Arquivo Digital</h4>
+                  <h4 className="text-sm font-extrabold text-slate-800">Suas notas ficam em Arquivos Fiscais</h4>
                   <p className="text-[11px] text-slate-500 leading-relaxed">
                     Assim que uma nota é emitida, o PDF e o XML entram sozinhos na pasta do mês.
                     É lá que você abre, imprime e baixa — num lugar só, junto do resto dos seus documentos.

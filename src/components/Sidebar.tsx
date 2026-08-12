@@ -110,6 +110,20 @@ type ItemMenu = {
   bloqueado?: boolean;
   /** Título do grupo em que o item entra. */
   grupo: "trabalho" | "cadastro" | "fiscal";
+  /**
+   * ⚠️ NEM TODO ITEM DO MENU É UMA TELA.
+   *
+   * Nota Fiscal e Cobranças já tinham painel próprio, que abre por cima e
+   * funciona. Ao dar "caminho próprio" a eles eu criei uma SEGUNDA tela do
+   * mesmo assunto — e as duas apareceram juntas: a de trás pedindo o
+   * certificado que a da frente já mostrava cadastrado. Duplicar tela é pior
+   * que não ter caminho.
+   *
+   * Com `acao`, o item continua sendo um item do menu — some por permissão
+   * como qualquer outro — mas abre o painel que já existe em vez de navegar
+   * para uma cópia dele.
+   */
+  acao?: () => void;
 };
 
 export default function Sidebar({
@@ -128,7 +142,7 @@ export default function Sidebar({
     // O dia a dia
     { id: "home", rotulo: "Visão Geral", icone: LayoutDashboard, grupo: "trabalho" },
     { id: "orcamentos", rotulo: "Orçamentos", icone: FileText, grupo: "trabalho" },
-    { id: "cobrancas", rotulo: "Cobranças e boletos", icone: Barcode, grupo: "trabalho" },
+    { id: "cobrancas", rotulo: "Cobranças e boletos", icone: Barcode, grupo: "trabalho", acao: onEmitirBoleto },
     { id: "financeiro", rotulo: "Livro Caixa", icone: BookOpen, contador: totalLancamentos, grupo: "trabalho" },
 
     // Cadastros
@@ -136,7 +150,7 @@ export default function Sidebar({
     { id: "catalogo", rotulo: "Catálogo", icone: Package, bloqueado: planType === "free", grupo: "cadastro" },
 
     // Fiscal — cada serviço com caminho próprio, e não empilhado numa tela só
-    { id: "notafiscal", rotulo: "Nota fiscal", icone: Receipt, grupo: "fiscal" },
+    { id: "notafiscal", rotulo: "Nota fiscal", icone: Receipt, grupo: "fiscal", acao: onEmitirNota },
     { id: "arquivos", rotulo: "Arquivos Fiscais", icone: FolderArchive, bloqueado: planType === "free", grupo: "fiscal" },
     { id: "banco", rotulo: "Banco", icone: Landmark, grupo: "fiscal" },
   ];
@@ -155,43 +169,19 @@ export default function Sidebar({
 
   const abrir = (item: ItemMenu) => {
     if (item.bloqueado) return onUpgrade?.();
-    onSelecionar(item.id);
+    if (item.acao) item.acao();
+    else onSelecionar(item.id);
     onFechar?.();
   };
 
   const conteudo = (
     <div className="flex flex-col h-full">
       {/*
-        EMITIR — no topo, separado da navegação por uma linha.
+        Os dois botões grandes de emitir saíram daqui.
 
-        É o que a pessoa abre o sistema para fazer. Deixar isto só na Visão
-        Geral significava: estar em Clientes, querer emitir, ir para o início,
-        procurar o botão, emitir. Agora é um clique de qualquer lugar.
+        Com "Nota fiscal" e "Cobranças e boletos" abrindo os painéis direto do
+        menu, eles viraram o mesmo comando escrito duas vezes na mesma coluna.
       */}
-      {(onEmitirNota || onEmitirBoleto) && (
-        <div className="p-3 pb-0 space-y-1.5">
-          {onEmitirNota && (
-            <button
-              onClick={() => { onEmitirNota(); onFechar?.(); }}
-              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 transition-all cursor-pointer"
-            >
-              <FileText className="w-4 h-4 text-blue-400 shrink-0" />
-              <span className="truncate">Emitir nota fiscal</span>
-            </button>
-          )}
-          {onEmitirBoleto && (
-            <button
-              onClick={() => { onEmitirBoleto(); onFechar?.(); }}
-              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-800 text-sm font-semibold hover:bg-slate-50 hover:border-slate-300 transition-all cursor-pointer"
-            >
-              <Barcode className="w-4 h-4 text-slate-400 shrink-0" />
-              <span className="truncate">Emitir boleto</span>
-            </button>
-          )}
-          <div className="pt-2"><div className="border-t border-slate-100" /></div>
-        </div>
-      )}
-
       <nav className="p-3 space-y-1">
         {GRUPOS.map(({ chave, titulo }) => {
           const doGrupo = itens.filter((i) => i.grupo === chave);
@@ -206,7 +196,7 @@ export default function Sidebar({
               <div className="space-y-1">
                 {doGrupo.map((item) => {
           const Icone = item.icone;
-          const ativo = ativa === item.id && !item.bloqueado;
+          const ativo = ativa === item.id && !item.bloqueado && !item.acao;
           return (
             <button
               key={item.id}

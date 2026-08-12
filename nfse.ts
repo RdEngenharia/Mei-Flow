@@ -131,6 +131,24 @@ function abrirP12(b64Bruto: string, senha: string): Certificado {
       }
     }
   } catch (err: any) {
+    /**
+     * ⚠️ NEM TODA FALHA AQUI É SENHA ERRADA — E DIZER QUE É CUSTA CARO.
+     *
+     * A biblioteca que abre o .pfx (node-forge) só entende os algoritmos
+     * antigos de PKCS#12. Certificado exportado por OpenSSL 3 sai, por padrão,
+     * cifrado com AES-256 (PBES2) — e ela simplesmente não abre, com a senha
+     * certa na mão. Traduzir isso como "confira a senha" manda a pessoa tentar
+     * de novo a senha correta, três, quatro vezes, até concluir que o sistema
+     * está quebrado.
+     *
+     * A mensagem do forge nesses casos fala em "unsupported". Separar os dois
+     * casos aqui é o que transforma um beco sem saída numa instrução.
+     */
+    const motivo = String(err?.message || "");
+    if (/unsupported|not supported|unrecognized|algorithm/i.test(motivo)) {
+      console.warn("[NFS-e] PKCS#12 em formato não suportado:", motivo);
+      throw new Error("CERTIFICADO_FORMATO");
+    }
     // Senha errada e arquivo corrompido caem aqui — a mensagem do forge é
     // críptica, então traduzimos.
     throw new Error("SENHA_OU_ARQUIVO");
@@ -1155,6 +1173,9 @@ function explicar(err: any): { status: number; mensagem: string; detalhe?: any }
     SEM_CERTIFICADO: [428, "Envie seu certificado digital A1 antes de emitir notas."],
     SENHA_OU_ARQUIVO: [400, "Não consegui abrir o certificado. Confira a senha — e confirme que o arquivo é o .pfx (ou .p12) do seu certificado A1."],
     CERTIFICADO_INVALIDO: [400, "Não consegui abrir o certificado. Confira a senha e o arquivo."],
+    CERTIFICADO_FORMATO: [400,
+      "A senha pode estar certa: este arquivo foi exportado num formato mais novo (AES) que o sistema ainda não abre. " +
+      "Peça à sua certificadora um .pfx exportado no formato compatível, ou reexporte com a opção legada — o certificado é o mesmo, muda só o empacotamento."],
     CERTIFICADO_VENCIDO: [400, "Este certificado digital está vencido. Renove-o para continuar emitindo notas."],
     SEM_CHAVE_CRIPTO: [503, "O servidor está sem a chave de segurança NFSE_CRYPTO_KEY, então não pode guardar certificados."],
     COFRE_CORROMPIDO: [503, "O certificado guardado não pôde ser lido — provavelmente a chave de segurança do servidor mudou. Envie o certificado novamente."],
