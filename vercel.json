@@ -31,6 +31,10 @@
     {
       "source": "/api/equipe",
       "destination": "/api/mf?__rota=equipe"
+    },
+    {
+      "source": "/api/plano",
+      "destination": "/api/mf?__rota=plano"
     }
   ]
 }

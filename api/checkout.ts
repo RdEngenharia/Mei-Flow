@@ -4,11 +4,35 @@ import path from "path";
 import fs from "fs";
 import axios from "axios";
 
-// Fonte única de verdade para os valores cobrados (mesma referência usada em
-// /api/mercadopago/checkout.ts e /api/plans/pricing.ts).
+// ============================================================================
+// PREÇO DO PREMIUM — R$ 49,90 por mês
+// ============================================================================
+//
+// ⚠️ ESTE VALOR ESTÁ REPETIDO EM SEIS ARQUIVOS, E JÁ ESTEVE ERRADO EM TRÊS.
+//
+// Antes desta correção: a tela e a cobrança diziam R$ 14,90, o registro
+// pós-pagamento dizia R$ 14,00, e a nota fiscal da assinatura saía com
+// R$ 29,90 — um valor que ninguém pagou. Ao mexer no preço, MEXA NOS SEIS:
+//
+//   api/plans/pricing.ts        → o que a tela mostra
+//   api/checkout.ts             → o que é cobrado (Vercel)
+//   api/mercadopago/checkout.ts → o que é cobrado (Vercel, caminho antigo)
+//   api/mercadopago/webhook.ts  → o que é registrado depois de aprovado
+//   server.ts                   → tudo isso, quando roda na sua máquina
+//   src/components/UpgradeModal.tsx → o número que pisca antes da resposta chegar
+//
+// ----------------------------------------------------------------------------
+// O PLANO ANUAL SAIU DE CARTAZ
+//
+// O valor continua definido aqui de propósito: quem já assinou no anual tem
+// `billingCycle: "annual"` gravado, e a renovação lê esse campo. Apagar o
+// número quebraria esses cadastros. O que mudou é que ele não é mais OFERECIDO
+// — a tela não mostra o seletor, e o checkout recusa pedido novo de anual.
+const PREMIUM_ANUAL_DISPONIVEL = false;
+
 const PREMIUM_PRICING = {
-  monthly: 14.9,
-  annual: 14.9 * 12, // 178.80 — cobrança única equivalente a 12 meses
+  monthly: 49.9,
+  annual: 49.9 * 12, // 598,80 — só para assinaturas anuais antigas
 };
 
 // Securely initialize Firebase Admin in serverless environment
@@ -202,6 +226,17 @@ export default async function handler(req: any, res: any) {
     } = req.body;
 
     const cycle: "monthly" | "annual" = billingCycle === "annual" ? "annual" : "monthly";
+
+    // O anual saiu de cartaz. Recusar aqui, e não só esconder o botão na tela,
+    // porque a rota é pública: sem esta trava, bastaria mandar
+    // billingCycle:"annual" na mão para comprar doze meses por um preço que não
+    // está mais sendo oferecido.
+    if (cycle === "annual" && !PREMIUM_ANUAL_DISPONIVEL) {
+      return res.status(400).json({
+        success: false,
+        error: "O plano anual não está disponível. A assinatura é mensal.",
+      });
+    }
     const transactionAmount = cycle === "annual" ? PREMIUM_PRICING.annual : PREMIUM_PRICING.monthly;
     const planDescription = cycle === "annual"
       ? "Plano Premium MEI Flow - Pacote Anual (12 meses)"

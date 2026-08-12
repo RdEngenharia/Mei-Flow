@@ -145,25 +145,49 @@ export default function Sidebar({
    * regra de negócio é um campo, não um `{condição && (<button>…</button>)}`
    * envolvendo trinta linhas de JSX duplicado.
    */
+  /**
+   * ⚠️ O CADEADO AQUI É CONFORTO, NÃO TRAVA.
+   *
+   * Ele evita que a pessoa clique num botão que vai recusar — e só. Quem
+   * realmente barra é o servidor, em plano.ts: as rotas de emitir nota, emitir
+   * boleto, criar usuário e ler os documentos fiscais conferem o plano antes de
+   * fazer qualquer coisa. Se um dia esta linha aqui sumir por descuido, o
+   * sistema continua correto; só fica feio.
+   *
+   * A lista de quais recursos são do Premium é a mesma de plano.ts. Ela está
+   * repetida aqui porque o menu precisa desenhar antes de a resposta do
+   * servidor chegar — mas a rota /api/plano devolve essa lista, e é ela que
+   * manda quando as duas discordarem.
+   */
+  const free = planType === "free";
+
   const TODOS: ItemMenu[] = [
     // O dia a dia
     { id: "home", rotulo: "Visão Geral", icone: LayoutDashboard, grupo: "trabalho" },
     { id: "orcamentos", rotulo: "Orçamentos", icone: FileText, grupo: "trabalho" },
-    { id: "cobrancas", rotulo: "Cobranças e boletos", icone: Barcode, grupo: "trabalho", acao: onEmitirBoleto },
+    { id: "cobrancas", rotulo: "Cobranças e boletos", icone: Barcode, bloqueado: free, grupo: "trabalho", acao: onEmitirBoleto },
     { id: "financeiro", rotulo: "Livro Caixa", icone: BookOpen, contador: totalLancamentos, grupo: "trabalho" },
 
     // Cadastros
     { id: "clientes", rotulo: "Clientes", icone: Users, contador: totalClientes, grupo: "cadastro" },
-    { id: "catalogo", rotulo: "Catálogo", icone: Package, bloqueado: planType === "free", grupo: "cadastro" },
+    { id: "catalogo", rotulo: "Catálogo", icone: Package, bloqueado: free, grupo: "cadastro" },
 
     // Fiscal — cada serviço com caminho próprio, e não empilhado numa tela só
-    { id: "notafiscal", rotulo: "Nota fiscal", icone: Receipt, grupo: "fiscal", acao: onEmitirNota },
-    { id: "arquivos", rotulo: "Arquivos Fiscais", icone: FolderArchive, bloqueado: planType === "free", grupo: "fiscal" },
+    { id: "notafiscal", rotulo: "Nota fiscal", icone: Receipt, bloqueado: free, grupo: "fiscal", acao: onEmitirNota },
+    { id: "arquivos", rotulo: "Arquivos Fiscais", icone: FolderArchive, bloqueado: free, grupo: "fiscal" },
+    /*
+      Banco NÃO leva cadeado.
+
+      Cadastrar a conta é o passo que a pessoa dá ANTES de assinar, quando está
+      decidindo se vale a pena. Trancar aqui seria pedir que ela pague para
+      descobrir se o banco dela funciona. O que o gratuito não faz é EMITIR — e
+      isso quem impede é a rota do boleto, não este item.
+    */
     { id: "banco", rotulo: "Banco", icone: Landmark, grupo: "fiscal" },
 
     // Gestão de equipe é sempre exclusiva do dono — nem um membro com todas as
     // áreas marcadas entra aqui.
-    { id: "usuarios", rotulo: "Usuários", icone: UserCog, grupo: "empresa" },
+    { id: "usuarios", rotulo: "Usuários", icone: UserCog, bloqueado: free, grupo: "empresa" },
   ];
 
   /*

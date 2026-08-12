@@ -452,6 +452,55 @@ export default function App() {
     }, 4000);
   };
 
+  /**
+   * ==========================================================================
+   * QUANDO O SERVIDOR RECUSA POR CAUSA DO PLANO, A ASSINATURA ABRE SOZINHA
+   * ==========================================================================
+   *
+   * O servidor agora confere o plano nas rotas que custam dinheiro (emitir
+   * nota, emitir boleto, criar usuário, ler os documentos fiscais) e responde
+   * 428 com `erro: "PRECISA_PREMIUM"` — ver plano.ts.
+   *
+   * O jeito óbvio de tratar isso seria acrescentar um `if` em cada chamada.
+   * Só que as chamadas estão espalhadas por seis componentes diferentes, cada
+   * um com o seu `fetch` — e bastaria esquecer um para o usuário ver um erro
+   * seco onde deveria ver o convite. Então a checagem fica num lugar só.
+   *
+   * ⚠️ ESTE EFEITO ENVELOPA O `fetch` DO NAVEGADOR. Duas cautelas obrigatórias:
+   *
+   *   1. Ele NÃO consome a resposta. Lê uma cópia (`clone()`), e só quando o
+   *      código é 428. Se lesse a original, todo componente que faz `.json()`
+   *      depois receberia um corpo já vazio — o tipo de estrago que aparece
+   *      longe daqui e ninguém liga a este arquivo.
+   *
+   *   2. Ele DESFAZ o envelope ao sair (o `return`). Sem isso, cada montagem
+   *      empilharia um envelope sobre o anterior e a mesma resposta abriria a
+   *      janela várias vezes.
+   */
+  useEffect(() => {
+    const original = window.fetch;
+
+    window.fetch = async (...args: any[]) => {
+      const resposta = await original.apply(window, args as any);
+
+      if (resposta.status === 428) {
+        try {
+          const copia = await resposta.clone().json();
+          if (copia?.erro === "PRECISA_PREMIUM") {
+            setShowUpgradeModal(true);
+            if (copia.mensagem) triggerToast(`🔒 ${copia.mensagem}`);
+          }
+        } catch {
+          // 428 sem corpo JSON (ex.: "envie o certificado antes"): não é nosso.
+        }
+      }
+
+      return resposta;
+    };
+
+    return () => { window.fetch = original; };
+  }, []);
+
   // -------------------------------------------------------------------------
   // EFECTS DE SINCRONIZAÇÃO E ESCUTA DO FIREBASE (ISOLAMENTO MULTI-TENANT POR UID)
   // -------------------------------------------------------------------------
@@ -1290,6 +1339,24 @@ export default function App() {
       const d = await r.json();
 
       if (!r.ok) {
+        /**
+         * ⚠️ AGORA EXISTEM DOIS MOTIVOS DIFERENTES PARA UM 428.
+         *
+         * O antigo é "falta o certificado / faltam os dados fiscais", e a saída
+         * é abrir a tela de Nota Fiscal para a pessoa completar o cadastro.
+         * O novo é "isso é do plano Premium", e a saída é a assinatura — que o
+         * app já abre sozinho ao ver `erro: "PRECISA_PREMIUM"`.
+         *
+         * Se este `if` não separasse os dois, o mesmo clique abriria a tela de
+         * cadastro fiscal E a tela de assinatura, uma por cima da outra. Foi
+         * exatamente esse tipo de tela dupla que você me pediu para arrumar
+         * semana passada; não vou reintroduzir por descuido.
+         */
+        if (d.erro === "PRECISA_PREMIUM") {
+          setNotaEmAndamento(null);
+          return;
+        }
+
         // 428 = sem certificado; 400 com SEM_CONFIG = faltam dados fiscais.
         // Nos dois casos a saida e a mesma tela, entao abrimos ela.
         if (r.status === 428 || /certificado|dados fiscais|codigo do munic/i.test(d.mensagem || "")) {

@@ -12,7 +12,10 @@ import {
   ArrowLeft, 
   Clipboard, 
   QrCode, 
-  Lock 
+  Lock,
+  Receipt,
+  Barcode,
+  UserCog
 } from "lucide-react";
 import { auth } from "../firebase";
 import { getApiUrl } from "../utils/nativeFile";
@@ -63,10 +66,20 @@ export default function UpgradeModal({
 
   // Preços buscados dinamicamente do backend (fonte única de verdade em
   // /api/plans/pricing), em vez de hardcoded no front-end.
-  const [pricing, setPricing] = useState<{ monthly: number; annual: number; annualMonthlyEquivalent: number }>({
-    monthly: 14.9,
-    annual: 178.8,
-    annualMonthlyEquivalent: 14.9
+  const [pricing, setPricing] = useState<{
+    monthly: number;
+    annual: number;
+    annualMonthlyEquivalent: number;
+    /** O anual está à venda? Quem manda é o servidor — ver api/plans/pricing.ts. */
+    annualDisponivel: boolean;
+  }>({
+    // ⚠️ Estes números são só o que aparece no meio segundo antes da resposta do
+    //    servidor chegar. Se ficarem defasados, o usuário vê um preço e paga
+    //    outro. Ao mudar o preço, mude aqui também.
+    monthly: 49.9,
+    annual: 598.8,
+    annualMonthlyEquivalent: 49.9,
+    annualDisponivel: false
   });
   const [pricingLoaded, setPricingLoaded] = useState(false);
   
@@ -119,7 +132,8 @@ export default function UpgradeModal({
           setPricing({
             monthly: data.monthly,
             annual: data.annual,
-            annualMonthlyEquivalent: data.annualMonthlyEquivalent
+            annualMonthlyEquivalent: data.annualMonthlyEquivalent,
+            annualDisponivel: data.annualDisponivel === true
           });
         }
       } catch (err) {
@@ -460,7 +474,15 @@ export default function UpgradeModal({
               {checkoutStep === "details" && (
                 <div key="step-details" className="space-y-6 animate-fade-in" id="step-details">
 
-                  {/* Seletor de ciclo: Mensal (assinatura recorrente) ou Anual (cobrança única) */}
+                  {/*
+                    Seletor de ciclo — só aparece se o anual estiver à venda.
+
+                    Com um plano só, o seletor não é neutro: é uma pergunta sem
+                    resposta errada possível, que só atrasa quem já decidiu
+                    assinar. Quem manda é o servidor, então o dia em que o anual
+                    voltar, ele reaparece sozinho.
+                  */}
+                  {pricing.annualDisponivel && (
                   <div className="flex bg-slate-100 rounded-xl p-1 gap-1" role="tablist">
                     <button
                       type="button"
@@ -486,6 +508,7 @@ export default function UpgradeModal({
                       </span>
                     </button>
                   </div>
+                  )}
 
                   <div className="flex items-baseline gap-1.5 justify-center pb-2 border-b border-slate-100">
                     <span className="text-2xl font-extrabold text-slate-900">{currentPriceLabel}</span>
@@ -537,6 +560,63 @@ export default function UpgradeModal({
                         </p>
                       </div>
                     </div>
+                  </div>
+
+                  {/*
+                    ⚠️ ESTA LISTA ESTAVA MENTINDO POR OMISSÃO.
+
+                    Ela citava logo própria, arquivo digital e "sem anúncios" —
+                    e não citava as TRÊS coisas que realmente separam os planos:
+                    emitir nota fiscal, emitir boleto e criar usuários. Quem
+                    lia decidia se ia pagar R$ 49,90 sem saber o que ganhava.
+
+                    A ordem aqui é a do que faz dinheiro entrar, não a do que é
+                    mais fácil de explicar.
+                  */}
+                  <div className="space-y-4 pt-4 border-t border-slate-100">
+                    <div className="flex gap-3 text-left">
+                      <div className="w-9 h-9 bg-violet-50 text-violet-600 rounded-xl flex items-center justify-center shrink-0 border border-violet-100/50">
+                        <Receipt className="w-4.5 h-4.5" />
+                      </div>
+                      <div className="space-y-0.5 min-w-0">
+                        <span className="text-xs font-bold text-slate-800 block">Nota Fiscal Eletrônica (NFS-e)</span>
+                        <p className="text-[11px] text-slate-500 leading-normal">
+                          Emita pelo Padrão Nacional com o seu certificado digital A1, direto daqui — sem entrar no portal da prefeitura.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-3 text-left">
+                      <div className="w-9 h-9 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center shrink-0 border border-amber-100/50">
+                        <Barcode className="w-4.5 h-4.5" />
+                      </div>
+                      <div className="space-y-0.5 min-w-0">
+                        <span className="text-xs font-bold text-slate-800 block">Boleto e Carnê pelo seu banco</span>
+                        <p className="text-[11px] text-slate-500 leading-normal">
+                          Emita pela sua própria conta (Efí ou Asaas). Quando o cliente paga, o sistema baixa a cobrança e emite a nota sozinho.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-3 text-left">
+                      <div className="w-9 h-9 bg-rose-50 text-rose-600 rounded-xl flex items-center justify-center shrink-0 border border-rose-100/50">
+                        <UserCog className="w-4.5 h-4.5" />
+                      </div>
+                      <div className="space-y-0.5 min-w-0">
+                        <span className="text-xs font-bold text-slate-800 block">Usuários para a sua equipe</span>
+                        <p className="text-[11px] text-slate-500 leading-normal">
+                          Dê acesso a quem te ajuda, escolhendo área por área o que cada um enxerga. Certificado e banco continuam só com você.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                    <p className="text-[11px] text-slate-500 leading-normal text-left">
+                      <span className="font-bold text-slate-700">O plano gratuito continua de pé, sem prazo:</span>{" "}
+                      livro caixa, clientes, orçamentos em PDF, funil de vendas, relatório para o DASN e mensagens
+                      de cobrança pelo WhatsApp.
+                    </p>
                   </div>
 
                   <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100/50 flex items-center gap-3">

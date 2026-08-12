@@ -44,6 +44,7 @@
 import crypto from "crypto";
 import axios from "axios";
 import { exigirUsuarioCompleto, type UsuarioVerificado } from "./auth-firebase.js";
+import { exigirPremium, responderSePlano } from "./plano.js";
 
 const env = (k: string) => (process.env[k] || "").trim();
 
@@ -362,6 +363,10 @@ const MENSAGENS: Record<string, [number, string]> = {
 };
 
 function responderErro(res: any, err: any) {
+  // A recusa por causa do plano tem resposta própria (com o nome do recurso),
+  // definida em plano.ts — o mesmo formato das rotas de nota e de boleto.
+  if (responderSePlano(res, err)) return;
+
   const [status, mensagem] = MENSAGENS[err?.message] || [500, `Não foi possível concluir: ${err?.message || "erro"}`];
   if (status >= 500) console.error("[Equipe]", err?.message || err);
   res.status(status).json({ success: false, mensagem });
@@ -398,9 +403,18 @@ export function registrarRotasEquipe(app: any, db: any) {
     try {
       const acesso = await exigirMestre(req);
 
-      // O plano é conferido no SERVIDOR, e não só pelo botão escondido na tela.
-      const perfil = await db.collection("users").doc(acesso.empresaId).get();
-      if (perfil.exists && perfil.data()?.planType !== "premium") throw new Error("PRECISA_PREMIUM");
+      /**
+       * O plano é conferido no SERVIDOR, e não só pelo botão escondido na tela.
+       *
+       * ⚠️ ISTO AQUI OLHAVA SÓ O CAMPO `planType`, E ESSE ERA UM BUG CALADO.
+       *
+       * O perfil tem três jeitos de dizer "é Premium", herdados de versões
+       * diferentes: `planType`, o antigo `plan` e o `isPremium` que o Mercado
+       * Pago grava. Existe assinante em produção com só um dos três
+       * preenchido — e ele levava um "assine o Premium" na cara, já sendo
+       * assinante. Agora quem responde é o plano.ts, que olha os três.
+       */
+      await exigirPremium(db, acesso.empresaId, "usuarios");
 
       const membro = await criarMembro(db, acesso.empresaId, req.body || {});
       res.json({

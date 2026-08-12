@@ -30,15 +30,35 @@ function sanitizeDBError(err: any): string {
 // Global tracking of the latest paymentId mapped to userId for polling query fallback
 const userLastPaymentIdMap = new Map<string, string>();
 
-// ==========================================
-// CONFIGURAÇÃO DE PREÇOS DO PLANO PREMIUM
-// ==========================================
-// Fonte única de verdade para os valores cobrados. Qualquer alteração de preço
-// deve ser feita apenas aqui — o front-end (UpgradeModal) busca esses valores
-// dinamicamente via GET /api/plans/pricing, em vez de ter os valores hardcoded.
+// ============================================================================
+// PREÇO DO PREMIUM — R$ 49,90 por mês
+// ============================================================================
+//
+// ⚠️ ESTE VALOR ESTÁ REPETIDO EM SEIS ARQUIVOS, E JÁ ESTEVE ERRADO EM TRÊS.
+//
+// Antes desta correção: a tela e a cobrança diziam R$ 14,90, o registro
+// pós-pagamento dizia R$ 14,00, e a nota fiscal da assinatura saía com
+// R$ 29,90 — um valor que ninguém pagou. Ao mexer no preço, MEXA NOS SEIS:
+//
+//   api/plans/pricing.ts        → o que a tela mostra
+//   api/checkout.ts             → o que é cobrado (Vercel)
+//   api/mercadopago/checkout.ts → o que é cobrado (Vercel, caminho antigo)
+//   api/mercadopago/webhook.ts  → o que é registrado depois de aprovado
+//   server.ts                   → tudo isso, quando roda na sua máquina
+//   src/components/UpgradeModal.tsx → o número que pisca antes da resposta chegar
+//
+// ----------------------------------------------------------------------------
+// O PLANO ANUAL SAIU DE CARTAZ
+//
+// O valor continua definido aqui de propósito: quem já assinou no anual tem
+// `billingCycle: "annual"` gravado, e a renovação lê esse campo. Apagar o
+// número quebraria esses cadastros. O que mudou é que ele não é mais OFERECIDO
+// — a tela não mostra o seletor, e o checkout recusa pedido novo de anual.
+const PREMIUM_ANUAL_DISPONIVEL = false;
+
 const PREMIUM_PRICING = {
-  monthly: 14.0,
-  annual: 14.0 * 12, // 168.00 — cobrança única equivalente a 12 meses
+  monthly: 49.9,
+  annual: 49.9 * 12, // 598,80 — só para assinaturas anuais antigas
 };
 
 // Initialize Firebase Admin securely
@@ -950,7 +970,9 @@ async function startServer() {
           numero_rps: randomRps,
           serie_rps: "1",
           tipo_rps: "1",
-          valor_servicos: 29.90,
+          // ⚠️ ERA 29.90 FIXO — um valor que ninguém pagou. Nota fiscal com
+          // valor diferente do cobrado é problema fiscal, não de código.
+          valor_servicos: PREMIUM_PRICING.monthly,
           tomador: {
             ...tomadorBody,
             razao_social: cleanName,
@@ -958,7 +980,7 @@ async function startServer() {
           },
           servico: {
             aliquota: 0,
-            discriminacao: `Assinatura de Softwares e Serviços Premium MEI Flow - Faturamento Integrado Mensal. Referente ao pagamento aprovado de R$ 29,90.`,
+            discriminacao: `Assinatura de Softwares e Serviços Premium MEI Flow - Faturamento Integrado Mensal. Referente ao pagamento aprovado de R$ ${PREMIUM_PRICING.monthly.toFixed(2).replace('.', ',')}.`,
             codigo_municipio: "3550308",
             item_lista_servico: "01.01"
           }
@@ -2016,7 +2038,9 @@ async function startServer() {
                 numero_rps: randomRps,
                 serie_rps: "1",
                 tipo_rps: "1",
-                valor_servicos: 29.90,
+                // ⚠️ ERA 29.90 FIXO — um valor que ninguém pagou. Nota fiscal com
+          // valor diferente do cobrado é problema fiscal, não de código.
+          valor_servicos: PREMIUM_PRICING.monthly,
                 tomador: {
                   ...tomadorBody,
                   razao_social: cleanName,
@@ -2024,7 +2048,7 @@ async function startServer() {
                 },
                 servico: {
                   aliquota: 0,
-                  discriminacao: `Assinatura de Softwares e Serviços Premium MEI Flow - Faturamento Integrado Mensal. Referente ao pagamento aprovado de R$ 29,90.`,
+                  discriminacao: `Assinatura de Softwares e Serviços Premium MEI Flow - Faturamento Integrado Mensal. Referente ao pagamento aprovado de R$ ${PREMIUM_PRICING.monthly.toFixed(2).replace('.', ',')}.`,
                   codigo_municipio: "3550308",
                   item_lista_servico: "01.01"
                 }
@@ -2198,7 +2222,7 @@ async function startServer() {
           id: "pay_simulated_10293",
           customer: userData?.asaasCustomerId || "cus_simulated_49281",
           subscription: userData?.asaasSubscriptionId || "sub_simulated_98273",
-          value: 14.00,
+          value: PREMIUM_PRICING.monthly,
           externalReference: userId,
           status: event === "PAYMENT_RECEIVED" ? "RECEIVED" : "OVERDUE"
         }

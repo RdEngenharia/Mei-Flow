@@ -58,6 +58,7 @@ import crypto from "crypto";
 import forge from "node-forge";
 import { SignedXml } from "xml-crypto";
 import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
+import { exigirPremium, respostaDoPlano } from "./plano.js";
 import { desenharDanfse, type DadosDanfse, type ExtrasDanfse } from "./src/utils/danfsePdf.js";
 
 const env = (k: string) => (process.env[k] || "").trim();
@@ -1211,6 +1212,24 @@ function explicar(err: any): { status: number; mensagem: string; detalhe?: any }
   };
 }
 
+/**
+ * A resposta de erro das rotas, num lugar só.
+ *
+ * Antes, cada rota repetia as mesmas duas linhas — e eram treze. Isso importa
+ * agora porque a recusa por causa do plano precisa levar um campo a mais
+ * (`erro: "PRECISA_PREMIUM"` e o recurso), para a tela abrir a assinatura em
+ * vez de mostrar um erro seco. Com as treze cópias, eu teria que acertar
+ * treze — e bastaria esquecer uma para o usuário ver "falha desconhecida"
+ * onde deveria ver o convite.
+ */
+function responderNfse(res: any, err: any) {
+  const plano = respostaDoPlano(err);
+  if (plano) return res.status(plano.status).json(plano.corpo);
+
+  const { status, mensagem, detalhe } = explicar(err);
+  res.status(status).json({ success: false, mensagem, ...(detalhe ? { detalhe } : {}) });
+}
+
 // ============================================================================
 // EMISSÃO
 // ============================================================================
@@ -1543,6 +1562,9 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
   app.post("/api/nfse/certificado", async (req: any, res: any) => {
     try {
       const uid = await exigirUsuario(req);
+      // Guardar certificado de quem não pode emitir nota seria guardar o
+      // documento mais sensível do sistema sem nenhum motivo.
+      await exigirPremium(db, uid, "certificado");
       const arquivo = String(req.body?.arquivoBase64 || "").replace(/^data:[^,]*,/, "");
       const senha = String(req.body?.senha ?? "");
       if (!arquivo) throw new Error("SEM_CERTIFICADO");
@@ -1578,8 +1600,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
           mensagem: "Esse arquivo é grande demais para ser um certificado A1. Confira se você escolheu o arquivo certo.",
         });
       }
-      const { status, mensagem } = explicar(err);
-      res.status(status).json({ success: false, mensagem });
+      responderNfse(res, err);
     }
   });
 
@@ -1592,8 +1613,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
       console.log(`[NFS-e] Certificado removido para ${uid}.`);
       res.json({ success: true, configurado: false, mensagem: "Certificado removido." });
     } catch (err: any) {
-      const { status, mensagem } = explicar(err);
-      res.status(status).json({ success: false, mensagem });
+      responderNfse(res, err);
     }
   });
 
@@ -1613,8 +1633,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
       }
       res.json({ success: true, config: cfg, proximoNumero: proximo });
     } catch (err: any) {
-      const { status, mensagem } = explicar(err);
-      res.status(status).json({ success: false, mensagem });
+      responderNfse(res, err);
     }
   });
 
@@ -1738,8 +1757,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
 
       res.json({ success: true, config });
     } catch (err: any) {
-      const { status, mensagem } = explicar(err);
-      res.status(status).json({ success: false, mensagem });
+      responderNfse(res, err);
     }
   });
 
@@ -1747,6 +1765,9 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
   app.post("/api/nfse/emitir", async (req: any, res: any) => {
     try {
       const uid = await exigirUsuario(req);
+      // A trava do plano vem ANTES de qualquer trabalho: nada de consultar o
+      // banco, abrir certificado ou falar com o Portal para depois recusar.
+      await exigirPremium(db, uid, "notafiscal");
       const { cobrancaId } = req.body;
       if (!cobrancaId) {
         return res.status(400).json({ success: false, mensagem: "Informe a cobrança." });
@@ -1761,8 +1782,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
       res.json({ success: true, ...r });
     } catch (err: any) {
       console.error("[NFS-e Emitir]", err.response?.data || err.message);
-      const { status, mensagem, detalhe } = explicar(err);
-      res.status(status).json({ success: false, mensagem, detalhe });
+      responderNfse(res, err);
     }
   });
 
@@ -1780,6 +1800,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
   app.post("/api/nfse/avulsa", async (req: any, res: any) => {
     try {
       const uid = await exigirUsuario(req);
+      await exigirPremium(db, uid, "notafiscal");
       const { lancamentoId, clienteNome, clienteDocumento, valor, descricao, servicoId,
               observacao } = req.body || {};
 
@@ -1840,8 +1861,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
       res.json({ success: true, ...r, mensagem: `Nota ${r.numero} emitida com sucesso.` });
     } catch (err: any) {
       console.error("[NFS-e Avulsa]", JSON.stringify(err.response?.data || err.message));
-      const { status, mensagem, detalhe } = explicar(err);
-      res.status(status).json({ success: false, mensagem, detalhe });
+      responderNfse(res, err);
     }
   });
 
@@ -1849,6 +1869,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
   app.get("/api/nfse", async (req: any, res: any) => {
     try {
       const uid = await exigirUsuario(req);
+      await exigirPremium(db, uid, "arquivosfiscais");
       // Só as notas do ambiente atual. Misturar teste com real numa lista de
       // documento fiscal é convite para alguém contar errado.
       const ambienteAtual = ehProducao() ? "producao" : "homologacao";
@@ -1876,8 +1897,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         .sort((a: any, b: any) => String(b.emitidaEm).localeCompare(String(a.emitidaEm)));
       res.json({ success: true, ambiente: ambienteAtual, total: notas.length, notas });
     } catch (err: any) {
-      const { status, mensagem } = explicar(err);
-      res.status(status).json({ success: false, mensagem });
+      responderNfse(res, err);
     }
   });
 
@@ -1910,8 +1930,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
       res.setHeader("Content-Disposition", `attachment; filename="NFSe_${chave}.xml"`);
       res.send(xmlNota);
     } catch (err: any) {
-      const { status, mensagem } = explicar(err);
-      res.status(status).json({ success: false, mensagem });
+      responderNfse(res, err);
     }
   });
 
@@ -1942,8 +1961,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
       }
       res.json({ success: true, pdfBase64: pdf.toString("base64") });
     } catch (err: any) {
-      const { status, mensagem } = explicar(err);
-      res.status(status).json({ success: false, mensagem });
+      responderNfse(res, err);
     }
   });
 
@@ -1990,8 +2008,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
           : null,
       });
     } catch (err: any) {
-      const { status, mensagem } = explicar(err);
-      res.status(status).json({ success: false, mensagem });
+      responderNfse(res, err);
     }
   });
 
@@ -2009,6 +2026,8 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
   app.post("/api/nfse/arquivar-pendentes", async (req: any, res: any) => {
     try {
       const uid = await exigirUsuario(req);
+      // Quem chama esta rota é a tela de Arquivos Fiscais, que é do Premium.
+      await exigirPremium(db, uid, "arquivosfiscais");
       const snap = await db.collection("nfse_emitidas").where("userId", "==", uid).get();
 
       let arquivadas = 0;
@@ -2148,8 +2167,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
       });
     } catch (err: any) {
       console.error("[NFS-e Arquivar]", err.message);
-      const { status, mensagem } = explicar(err);
-      res.status(status).json({ success: false, mensagem });
+      responderNfse(res, err);
     }
   });
 
@@ -2169,8 +2187,7 @@ export function registrarRotasNfse(app: any, db: any, adminStorage: any, firebas
         xml: desempacotar(data?.nfseXmlGZipB64 || data?.NfseXmlGZipB64 || ""),
       });
     } catch (err: any) {
-      const { status, mensagem } = explicar(err);
-      res.status(status).json({ success: false, mensagem });
+      responderNfse(res, err);
     }
   });
 

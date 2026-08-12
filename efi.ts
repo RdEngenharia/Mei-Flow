@@ -55,6 +55,7 @@ import {
   lerCredenciaisBanco, registrarRotasBanco, tokenWebhookConfere,
 } from "./bancoCofre.js";
 import { emitirBoletoAsaas, consultarCobrancaAsaas, situacaoAsaas } from "./bancoAsaas.js";
+import { exigirPremium, responderSePlano } from "./plano.js";
 
 /** URL pública do sistema — usada em webhooks e no retorno do banco. */
 export const APP_URL = process.env.APP_URL || "https://meiflow.rdhomologacao.com.br";
@@ -705,6 +706,8 @@ export function registrarRotasEfi(
   app.post("/api/efi/boleto", async (req: any, res: any) => {
     try {
       const uid = await exigirUsuarioAutenticado(req);
+      // Antes de tocar no cofre de credenciais e de falar com o banco.
+      await exigirPremium(db, uid, "boleto");
       const { customerId, itens, vencimento, mensagem, juros, multa } = req.body;
 
       if (!customerId || !vencimento || !Array.isArray(itens) || itens.length === 0) {
@@ -954,6 +957,10 @@ export function registrarRotasEfi(
         status: cobranca.status,
       });
     } catch (err: any) {
+      // Recusa por causa do plano vem primeiro: a tela lê o 428 e abre a
+      // assinatura, em vez de mostrar "erro ao gerar boleto".
+      if (responderSePlano(res, err)) return;
+
       // Falta de conta cadastrada não é "erro do sistema": é uma etapa que o
       // usuário ainda não fez. Responde com a instrução, não com um 500.
       if (
@@ -1005,6 +1012,7 @@ export function registrarRotasEfi(
   app.post("/api/efi/carne", async (req: any, res: any) => {
     try {
       const uid = await exigirUsuarioAutenticado(req);
+      await exigirPremium(db, uid, "boleto");
 
       // O carnê é um recurso da Efí — a Asaas tem parcelamento, mas com outro
       // formato, ainda não implementado. Dizer isso aqui evita a mensagem
@@ -1173,6 +1181,7 @@ export function registrarRotasEfi(
         primeiroVencimento,
       });
     } catch (err: any) {
+      if (responderSePlano(res, err)) return;
       if (
         err.message === "SEM_CREDENCIAIS_USUARIO" ||
         err.message === "BANCO_SEM_EMISSAO" ||
