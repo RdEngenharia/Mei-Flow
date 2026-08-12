@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { X, Building, Check, Search, Sparkles, KeyRound, ChevronRight } from "lucide-react";
+import { MENSAGENS_PADRAO } from "../utils/reguaContato";
 
 export interface DadosEndereco {
   cep?: string;
@@ -18,6 +19,8 @@ export interface DadosDaEmpresa {
   email: string;
   endereco: DadosEndereco;
   logo?: string;
+  /** Os três textos do acompanhamento de orçamento. Vazio = usa o padrão. */
+  mensagensContato?: { 1?: string; 2?: string; 3?: string };
 }
 
 interface MeiConfigModalProps {
@@ -27,6 +30,7 @@ interface MeiConfigModalProps {
   currentTelefone: string;
   currentEmail: string;
   currentEndereco: DadosEndereco;
+  currentMensagens?: { 1?: string; 2?: string; 3?: string };
   planType: "free" | "premium";
   companyLogo: string;
   onClose: () => void;
@@ -50,6 +54,7 @@ export default function MeiConfigModal({
   currentTelefone,
   currentEmail,
   currentEndereco,
+  currentMensagens,
   planType,
   companyLogo,
   onClose,
@@ -76,6 +81,16 @@ export default function MeiConfigModal({
   const [bairro, setBairro] = useState(currentEndereco?.bairro || "");
   const [cidade, setCidade] = useState(currentEndereco?.cidade || "");
   const [uf, setUf] = useState(currentEndereco?.uf || "");
+
+  /*
+    Os três textos do acompanhamento. Começam vazios de propósito: campo em
+    branco quer dizer "use o padrão", e a tela mostra o padrão como sugestão do
+    lado de fora. Se começassem preenchidos com o texto de fábrica, a pessoa
+    nunca saberia se aquilo é dela ou nosso — e apagar viraria uma dúvida.
+  */
+  const [msg1, setMsg1] = useState(currentMensagens?.[1] || "");
+  const [msg2, setMsg2] = useState(currentMensagens?.[2] || "");
+  const [msg3, setMsg3] = useState(currentMensagens?.[3] || "");
   const [logoBase64, setLogoBase64] = useState(companyLogo);
   const [loading, setLoading] = useState(false);
   const [searchingCnpj, setSearchingCnpj] = useState(false);
@@ -167,6 +182,7 @@ export default function MeiConfigModal({
       name, cnpj, inscricao, telefone, email,
       endereco: { cep, logradouro, numero, bairro, cidade, uf },
       logo: logoBase64,
+      mensagensContato: { 1: msg1.trim(), 2: msg2.trim(), 3: msg3.trim() },
     });
     setLoading(false);
   };
@@ -381,6 +397,48 @@ export default function MeiConfigModal({
                 )}
               </div>
             )}
+          </div>
+
+          {/*
+            MENSAGENS DO ACOMPANHAMENTO
+
+            O sistema lembra você de falar com quem recebeu orçamento e não
+            respondeu — no 2º, no 5º e no 11º dia. O texto sugerido é neutro de
+            propósito, porque serve para qualquer ramo; e é exatamente por isso
+            que ele soa impessoal. Quem conhece o próprio cliente escreve
+            melhor. Aqui é onde você escreve.
+          */}
+          <div className="pt-2 border-t border-slate-100 space-y-3">
+            <div>
+              <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
+                Mensagens do WhatsApp
+              </label>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                Use <span className="font-mono bg-slate-100 px-1 rounded">{"{nome}"}</span> onde
+                deve entrar o primeiro nome do cliente. Deixe em branco para usar o texto sugerido.
+              </p>
+            </div>
+
+            {[
+              { n: 1, valor: msg1, set: setMsg1, quando: "2º dia — confirmar que recebeu" },
+              { n: 2, valor: msg2, set: setMsg2, quando: "5º dia — oferecer ajuste" },
+              { n: 3, valor: msg3, set: setMsg3, quando: "11º dia — encerrar sem pressão" },
+            ].map((m) => (
+              <div key={m.n}>
+                <label className="block text-[10px] font-bold text-slate-600 mb-1">
+                  {m.n}ª mensagem
+                  <span className="font-normal text-slate-400"> · {m.quando}</span>
+                </label>
+                <textarea
+                  value={m.valor}
+                  onChange={(e) => m.set(e.target.value)}
+                  rows={3}
+                  maxLength={700}
+                  placeholder={MENSAGENS_PADRAO[m.n - 1]}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-[11px] text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition resize-y"
+                />
+              </div>
+            ))}
           </div>
 
           {/* SEGURANÇA DA CONTA */}

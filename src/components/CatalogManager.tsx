@@ -148,15 +148,6 @@ export default function CatalogManager({
   if (planType !== "premium") {
     return (
       <div className="space-y-8 animate-fade-in text-left">
-        <div className="flex items-center gap-2 mb-2">
-          <button 
-            onClick={onGoBack}
-            className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-950 transition-all bg-white px-4 py-2 border border-slate-200 rounded-xl shadow-xs cursor-pointer"
-          >
-            <span>&larr; Voltar para o Início (Home)</span>
-          </button>
-        </div>
-
         <div className="bg-white rounded-3xl border border-slate-200/50 shadow-md p-10 md:p-16 text-center max-w-2xl mx-auto space-y-6">
           <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center mx-auto border border-blue-100 shadow-xs">
             <Sparkles className="w-8 h-8 text-indigo-600 animate-pulse" />
@@ -186,7 +177,7 @@ export default function CatalogManager({
               onClick={onTriggerUpgrade}
               className="px-8 py-3.5 bg-slate-950 hover:bg-slate-900 text-white rounded-xl font-bold text-xs transition-all tracking-wider uppercase cursor-pointer shadow-lg"
             >
-              Liberar Catálogo com Premium (R$ 29,90/mês) ✨
+              Liberar Catálogo com o Premium ✨
             </button>
             <button
               onClick={onGoBack}
@@ -206,15 +197,6 @@ export default function CatalogManager({
 
   return (
     <div className="space-y-8 animate-fade-in text-left">
-      <div className="flex items-center gap-2 mb-2">
-        <button 
-          onClick={onGoBack}
-          className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-950 transition-all bg-white px-4 py-2 border border-slate-200 rounded-xl shadow-xs cursor-pointer"
-        >
-          <span>&larr; Voltar para o Início (Home)</span>
-        </button>
-      </div>
-
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 pb-6 border-b border-slate-100">
         <div>
           <h1 className="text-3xl md:text-4xl font-display font-light text-slate-900 tracking-tight flex items-center gap-2">

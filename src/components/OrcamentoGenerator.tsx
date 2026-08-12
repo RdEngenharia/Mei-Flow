@@ -14,6 +14,7 @@ import { desenharOrcamento, nomeArquivoOrcamento } from "../utils/orcamentoPdf";
 import { carregarLogoBase64 } from "../utils/logoImagem";
 import {
   tarefasDeHoje, proximoContato, rotuloDoPrazo, registrarContato, linkWhatsApp,
+  type MensagensContato,
 } from "../utils/reguaContato";
 import { CatalogItem, Cliente, Orcamento, ItemOrcamento, SituacaoOrcamento } from "../types";
 
@@ -65,6 +66,8 @@ interface OrcamentoGeneratorProps {
    * Devolve o id da venda criada, ou null se não deu.
    */
   onConverterEmVenda?: (orc: Orcamento) => Promise<string | null>;
+  /** Textos dos 3 contatos, escritos pelo usuário. Vazio = padrão. */
+  mensagensContato?: MensagensContato;
 }
 
 const brl = (n: number) =>
@@ -110,6 +113,7 @@ export default function OrcamentoGenerator({
   onGoBack,
   triggerToast,
   onConverterEmVenda,
+  mensagensContato,
 }: OrcamentoGeneratorProps) {
   const [activeTab, setActiveTab] = useState<"criar" | "funil">("criar");
   const [historico, setHistorico] = useState<Orcamento[]>([]);
@@ -462,7 +466,7 @@ export default function OrcamentoGenerator({
    * paralelo para ficar desatualizado. Se o usuário marcar um contato, o item
    * some da lista na hora, porque a régua reconta.
    */
-  const paraFazerHoje = tarefasDeHoje(historico);
+  const paraFazerHoje = tarefasDeHoje(historico, undefined, mensagensContato);
 
   const porEtapa = (chave: SituacaoOrcamento) =>
     historico.filter((o) => (o.situacao || "enviado") === chave);
@@ -1116,7 +1120,7 @@ export default function OrcamentoGenerator({
                                 para o funil continuar legível de relance.
                               */}
                               {(() => {
-                                const c = proximoContato(orc);
+                                const c = proximoContato(orc, undefined, mensagensContato);
                                 if (!c) {
                                   return orc.acompanhamentoEncerrado ? (
                                     <span className="inline-flex items-center gap-1 bg-slate-50 text-slate-400 border border-slate-200 px-1.5 py-0.5 rounded font-bold">

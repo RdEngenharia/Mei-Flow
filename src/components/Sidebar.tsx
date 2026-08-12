@@ -1,7 +1,7 @@
 import React from "react";
 import {
   LayoutDashboard, Users, BookOpen, FileText, Package,
-  Building, Calendar, Receipt, X, Crown,
+  Building, Calendar, Receipt, X, Crown, Barcode,
 } from "lucide-react";
 
 /**
@@ -45,6 +45,16 @@ interface Props {
   planType?: "free" | "premium";
   onUpgrade?: () => void;
 
+  /**
+   * As duas ações que fazem dinheiro entrar.
+   *
+   * Ficam no topo do menu, e não junto da navegação, porque não são lugares —
+   * são o trabalho. Antes moravam só na Visão Geral, o que obrigava a voltar
+   * para lá toda vez que a pessoa quisesse emitir algo estando em outra tela.
+   */
+  onEmitirNota?: () => void;
+  onEmitirBoleto?: () => void;
+
   /** Obrigações do MEI — são ações recorrentes, não telas. */
   onDas?: () => void;
   onDasn?: () => void;
@@ -70,7 +80,7 @@ type ItemMenu = {
 
 export default function Sidebar({
   ativa, onSelecionar, totalClientes, totalLancamentos,
-  planType = "free", onUpgrade, onDas, onDasn,
+  planType = "free", onUpgrade, onEmitirNota, onEmitirBoleto, onDas, onDasn,
   meiName, cnpj, onConfig, aberto = false, onFechar,
 }: Props) {
   /**
@@ -96,6 +106,37 @@ export default function Sidebar({
 
   const conteudo = (
     <div className="flex flex-col h-full">
+      {/*
+        EMITIR — no topo, separado da navegação por uma linha.
+
+        É o que a pessoa abre o sistema para fazer. Deixar isto só na Visão
+        Geral significava: estar em Clientes, querer emitir, ir para o início,
+        procurar o botão, emitir. Agora é um clique de qualquer lugar.
+      */}
+      {(onEmitirNota || onEmitirBoleto) && (
+        <div className="p-3 pb-0 space-y-1.5">
+          {onEmitirNota && (
+            <button
+              onClick={() => { onEmitirNota(); onFechar?.(); }}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 transition-all cursor-pointer"
+            >
+              <FileText className="w-4 h-4 text-blue-400 shrink-0" />
+              <span className="truncate">Emitir nota fiscal</span>
+            </button>
+          )}
+          {onEmitirBoleto && (
+            <button
+              onClick={() => { onEmitirBoleto(); onFechar?.(); }}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-800 text-sm font-semibold hover:bg-slate-50 hover:border-slate-300 transition-all cursor-pointer"
+            >
+              <Barcode className="w-4 h-4 text-slate-400 shrink-0" />
+              <span className="truncate">Emitir boleto</span>
+            </button>
+          )}
+          <div className="pt-2"><div className="border-t border-slate-100" /></div>
+        </div>
+      )}
+
       <nav className="p-3 space-y-1">
         {itens.map((item) => {
           const Icone = item.icone;

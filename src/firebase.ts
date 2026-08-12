@@ -834,6 +834,11 @@ export async function saveUserProfileToFirebase(
     companyLogo?: string;
     emailPrestador?: string;
     enderecoPrestador?: { cep?: string; logradouro?: string; numero?: string; bairro?: string; cidade?: string; uf?: string };
+    /**
+     * Os três textos da régua de contato, escritos pelo próprio usuário.
+     * Vazio significa "use o padrão" — e não "mande mensagem em branco".
+     */
+    mensagensContato?: { 1?: string; 2?: string; 3?: string };
     isCpfEmissor?: boolean;
   }
 ): Promise<void> {
@@ -882,7 +887,8 @@ export async function saveUserProfileToFirebase(
       asaasAccessToken: profileData.asaasAccessToken || '',
       companyLogo: safeCompanyLogo,
       emailPrestador: profileData.emailPrestador || '',
-      enderecoPrestador: profileData.enderecoPrestador || {}
+      enderecoPrestador: profileData.enderecoPrestador || {},
+      mensagensContato: profileData.mensagensContato || {}
     };
 
     await setDoc(docRef, dataToSave, { merge: true });
@@ -912,6 +918,7 @@ export async function fetchUserProfileFromFirebase(userId: string): Promise<{
   companyLogo?: string;
   emailPrestador?: string;
   enderecoPrestador?: { cep?: string; logradouro?: string; numero?: string; bairro?: string; cidade?: string; uf?: string };
+  mensagensContato?: { 1?: string; 2?: string; 3?: string };
   isCpfEmissor?: boolean;
   invoiceLimit?: number;
   invoiceUsed?: number;
@@ -932,6 +939,7 @@ export async function fetchUserProfileFromFirebase(userId: string): Promise<{
         companyLogo: data.logoUrl || data.companyLogo || '',
         emailPrestador: data.emailPrestador || '',
         enderecoPrestador: data.enderecoPrestador || {},
+        mensagensContato: data.mensagensContato || {},
         isCpfEmissor: data.isCpfEmissor || false,
         invoiceLimit: data.invoiceLimit !== undefined ? data.invoiceLimit : 30,
         invoiceUsed: data.invoiceUsed !== undefined ? data.invoiceUsed : 0
@@ -953,6 +961,7 @@ export async function fetchUserProfileFromFirebase(userId: string): Promise<{
         companyLogo: data.companyLogo || '',
         emailPrestador: data.emailPrestador || '',
         enderecoPrestador: data.enderecoPrestador || {},
+        mensagensContato: data.mensagensContato || {},
         isCpfEmissor: data.isCpfEmissor || false,
         invoiceLimit: data.invoiceLimit !== undefined ? data.invoiceLimit : 30,
         invoiceUsed: data.invoiceUsed !== undefined ? data.invoiceUsed : 0

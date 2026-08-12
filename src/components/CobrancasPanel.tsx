@@ -32,6 +32,15 @@ interface Props {
    * saldo na tela inicial".
    */
   onRecebimento?: () => void;
+  /**
+   * Abre a gaveta a partir de fora — hoje, do botão "Emitir boleto" do menu
+   * lateral. Mesma ideia já usada no painel de Nota Fiscal: o botão que a
+   * pessoa procura fica onde ela olha, e o painel continua morando onde mora.
+   */
+  abrirExterno?: boolean;
+  onFechado?: () => void;
+  /** Já entra com o formulário de emissão aberto, sem um clique a mais. */
+  emitirDireto?: boolean;
 }
 
 type Item = {
@@ -61,8 +70,22 @@ async function comToken(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${t}`, "Content-Type": "application/json" };
 }
 
-export default function CobrancasPanel({ clientes, planType = "free", onTriggerUpgrade, triggerToast, onRecebimento }: Props) {
+export default function CobrancasPanel({
+  clientes, planType = "free", onTriggerUpgrade, triggerToast, onRecebimento,
+  abrirExterno, onFechado, emitirDireto,
+}: Props) {
   const [aberto, setAberto] = useState(false);
+
+  /*
+    Abertura vinda de fora. O plano gratuito continua caindo na tela de
+    assinatura — a porta de entrada muda, a regra não.
+  */
+  useEffect(() => {
+    if (!abrirExterno) return;
+    if (planType === "free") return onTriggerUpgrade?.();
+    setAberto(true);
+    if (emitirDireto) setShowForm(true);
+  }, [abrirExterno, emitirDireto, planType]);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [resumo, setResumo] = useState<any>(null);
@@ -322,7 +345,7 @@ export default function CobrancasPanel({ clientes, planType = "free", onTriggerU
                   <RefreshCw className={`w-4 h-4 ${carregando || sincronizando ? "animate-spin" : ""}`} />
                 </button>
                 <button
-                  onClick={() => { setAberto(false); setShowForm(false); setGerado(null); }}
+                  onClick={() => { setAberto(false); setShowForm(false); setGerado(null); onFechado?.(); }}
                   className="w-9 h-9 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-full flex items-center justify-center transition-colors cursor-pointer"
                 >
                   <X className="w-5 h-5" />

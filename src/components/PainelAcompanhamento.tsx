@@ -3,6 +3,7 @@ import { BellRing, X, ChevronRight, MessageCircle, Copy, CheckCheck, Clock } fro
 import { Orcamento } from "../types";
 import {
   tarefasDeHoje, rotuloDoPrazo, registrarContato, linkWhatsApp, PASSOS,
+  type MensagensContato,
 } from "../utils/reguaContato";
 import { fetchOrcamentosFromFirebase, saveOrcamentoToFirebase } from "../firebase";
 
@@ -37,6 +38,11 @@ import { fetchOrcamentosFromFirebase, saveOrcamentoToFirebase } from "../firebas
  */
 
 interface Props {
+  /**
+   * Os textos que o usuário escreveu para os três contatos. Vazio = usa o
+   * padrão. Passa reto por aqui: este painel não decide redação, só mostra.
+   */
+  mensagens?: MensagensContato;
   userId: string;
   /** Avisa o resto do app quando um contato é registrado, para as telas recarregarem. */
   onAtualizou?: () => void;
@@ -48,7 +54,7 @@ const brl = (n: number) =>
 
 const hojeISO = () => new Date().toISOString().slice(0, 10);
 
-export default function PainelAcompanhamento({ userId, onAtualizou, triggerToast }: Props) {
+export default function PainelAcompanhamento({ userId, onAtualizou, triggerToast, mensagens}: Props) {
   const [orcamentos, setOrcamentos] = useState<Orcamento[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [aberto, setAberto] = useState(true);
@@ -75,7 +81,7 @@ export default function PainelAcompanhamento({ userId, onAtualizou, triggerToast
     return () => { vivo = false; };
   }, [userId]);
 
-  const tarefas = tarefasDeHoje(orcamentos);
+  const tarefas = tarefasDeHoje(orcamentos, undefined, mensagens);
 
   const minimizar = () => {
     setAberto(false);

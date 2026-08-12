@@ -88,18 +88,52 @@ export function primeiroNome(nome?: string): string {
  * solar, e uma mensagem que fala em "projeto solar" para um cabeleireiro é pior
  * do que mensagem nenhuma.
  */
-export function mensagemDoContato(etapa: number, nome?: string): string {
-  const quem = primeiroNome(nome);
-  if (etapa === 1) {
-    return `Olá, ${quem}! Confirmando se você conseguiu abrir o arquivo do orçamento. ` +
-      `Ficou alguma dúvida inicial sobre a proposta?`;
-  }
-  if (etapa === 2) {
-    return `Olá, ${quem}, tudo bem? Como os prazos e os preços de tabela costumam oscilar, ` +
-      `passando só para saber se você quer fazer alguma adaptação no projeto para alinharmos os próximos passos.`;
-  }
-  return `Olá, ${quem}! Imagino que sua rotina esteja corrida por aí. Para não te incomodar com mensagens, ` +
-    `vou guardar a sua proposta por aqui. Quando decidir retomar, é só me chamar. Um abraço!`;
+export const MENSAGENS_PADRAO: [string, string, string] = [
+  "Olá, {nome}! Confirmando se você conseguiu abrir o arquivo do orçamento. " +
+    "Ficou alguma dúvida inicial sobre a proposta?",
+  "Olá, {nome}, tudo bem? Como os prazos e os preços de tabela costumam oscilar, " +
+    "passando só para saber se você quer fazer alguma adaptação no projeto para alinharmos os próximos passos.",
+  "Olá, {nome}! Imagino que sua rotina esteja corrida por aí. Para não te incomodar com mensagens, " +
+    "vou guardar a sua proposta por aqui. Quando decidir retomar, é só me chamar. Um abraço!",
+];
+
+/** Os textos que o usuário pode ter escrito por conta própria. */
+export type MensagensContato = Partial<Record<1 | 2 | 3, string>>;
+
+/**
+ * Troca as marcações do modelo pelos dados reais.
+ *
+ * Só existe uma marcação, `{nome}`, e isso é de propósito: quanto mais
+ * marcações, mais chance de a pessoa errar uma e mandar "{nome}" literal para
+ * o cliente. Uma só, escrita na tela ao lado do campo, ninguém erra.
+ */
+export function aplicarModelo(modelo: string, nome?: string): string {
+  return String(modelo || "").replace(/\{nome\}/gi, primeiroNome(nome));
+}
+
+/**
+ * O texto da mensagem daquela etapa.
+ *
+ * ⚠️ OS TEXTOS PADRÃO SÃO PONTO DE PARTIDA, NÃO REGRA.
+ *
+ * A redação de fábrica é neutra quanto ao ramo de propósito — o MEI Flow não é
+ * só de energia solar, e falar em "projeto solar" para um cabeleireiro é pior
+ * do que não mandar nada. Mas neutro também quer dizer impessoal, e quem
+ * conhece o próprio cliente escreve melhor que qualquer texto genérico. Por
+ * isso os três são editáveis; o padrão entra só enquanto ninguém escreveu o
+ * seu.
+ *
+ * Modelo em branco cai no padrão — apagar o texto não pode virar mensagem
+ * vazia enviada ao cliente.
+ */
+export function mensagemDoContato(
+  etapa: number,
+  nome?: string,
+  modelos?: MensagensContato
+): string {
+  const i = etapa >= 1 && etapa <= 3 ? (etapa as 1 | 2 | 3) : 3;
+  const escolhido = String(modelos?.[i] || "").trim() || MENSAGENS_PADRAO[i - 1];
+  return aplicarModelo(escolhido, nome);
 }
 
 /** Data em ISO curto, sem hora — a régua conta dias, não minutos. */
@@ -141,7 +175,11 @@ export type ProximoContato = {
  * acompanhamento foi encerrado, os três contatos já foram feitos, ou não há
  * data de envio para contar a partir.
  */
-export function proximoContato(orc: OrcamentoParaRegua, hojeISO?: string): ProximoContato | null {
+export function proximoContato(
+  orc: OrcamentoParaRegua,
+  hojeISO?: string,
+  modelos?: MensagensContato
+): ProximoContato | null {
   const hoje = soDia(hojeISO || new Date().toISOString());
   const situacao = String(orc.situacao || "enviado");
   if (!EM_JOGO.includes(situacao)) return null;
@@ -174,7 +212,7 @@ export function proximoContato(orc: OrcamentoParaRegua, hojeISO?: string): Proxi
     venceEm,
     diasDeAtraso: diasEntre(venceEm, hoje),
     vencido: diasEntre(venceEm, hoje) >= 0,
-    mensagem: mensagemDoContato(passo.etapa, orc.clienteNome),
+    mensagem: mensagemDoContato(passo.etapa, orc.clienteNome, modelos),
     diasDesdeOEnvio: orc.createdAt ? diasEntre(orc.createdAt, hoje) : 0,
   };
 }
@@ -186,10 +224,11 @@ export function proximoContato(orc: OrcamentoParaRegua, hojeISO?: string): Proxi
  */
 export function tarefasDeHoje<T extends OrcamentoParaRegua>(
   orcamentos: T[],
-  hojeISO?: string
+  hojeISO?: string,
+  modelos?: MensagensContato
 ): { orcamento: T; contato: ProximoContato }[] {
   return (orcamentos || [])
-    .map((o) => ({ orcamento: o, contato: proximoContato(o, hojeISO) }))
+    .map((o) => ({ orcamento: o, contato: proximoContato(o, hojeISO, modelos) }))
     .filter((x): x is { orcamento: T; contato: ProximoContato } => !!x.contato && x.contato.vencido)
     .sort((a, b) => b.contato.diasDeAtraso - a.contato.diasDeAtraso);
 }

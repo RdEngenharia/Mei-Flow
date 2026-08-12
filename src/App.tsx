@@ -109,7 +109,9 @@ export default function App() {
    * celular isso significa fechar o aplicativo. A única saída era achar o botão
    * "Voltar para o Início" dentro da tela.
    *
-   * A correção tem duas metades, e as duas são necessárias:
+   * A correção tem duas metades, e as duas são necessárias — e o botão
+   * "Voltar para o Início" saiu de todas as telas, porque o menu lateral está
+   * sempre à vista e faz esse papel melhor.
    *
    *   1. Ao ENTRAR numa tela, empilhamos uma entrada no histórico do navegador
    *      (`pushState`). Passa a existir um "atrás" para onde voltar.
@@ -128,16 +130,25 @@ export default function App() {
     setCurrentView((atual) => {
       if (atual === tela) return atual;
       try {
-        if (tela === "home") {
-          // Voltar para o início é o mesmo que desfazer: se há histórico
-          // nosso, desempilha em vez de empilhar mais.
-          if (window.history.state?.meiflow && window.history.state.tela !== "home") {
-            window.history.back();
-            return atual; // o popstate abaixo é quem muda a tela
-          }
-        } else {
-          window.history.pushState({ meiflow: true, tela }, "");
-        }
+        /**
+         * ⚠️ AQUI HAVIA UM BUG, E ELE VEIO DE UMA ESPERTEZA.
+         *
+         * "Visão Geral" era tratada como DESFAZER: em vez de ir para lá, o
+         * código chamava `history.back()`. Fazia sentido quando o único jeito
+         * de voltar era um botão "Voltar para o Início" dentro da tela — ir
+         * para trás e ir para o início eram a mesma coisa.
+         *
+         * Com o menu lateral deixaram de ser. Quem entra em Catálogo, depois
+         * em Orçamentos, e clica em "Visão Geral", pedia para IR ao início — e
+         * o sistema desempilhava um passo, caindo em Orçamentos. Cada clique
+         * andava um degrau para trás em vez de chegar ao destino. Foi
+         * exatamente o relato.
+         *
+         * Agora toda tela é destino: empilha e vai. Quem quiser desfazer usa a
+         * seta do navegador, que é para isso que ela serve — e continua
+         * funcionando, porque o `popstate` abaixo não mudou.
+         */
+        window.history.pushState({ meiflow: true, tela }, "");
       } catch { /* navegador sem history API: a tela troca do mesmo jeito */ }
       return tela;
     });
@@ -155,6 +166,9 @@ export default function App() {
   // a gaveta do NotaFiscalPanel, que fica bem mais abaixo na pagina.
   /** Gaveta do menu no celular. No computador o menu fica sempre visível. */
   const [menuAberto, setMenuAberto] = useState(false);
+
+  /** Levantada pelo botão "Emitir boleto" do menu lateral. */
+  const [abrirBoleto, setAbrirBoleto] = useState(false);
 
   const [abrirNotaFiscal, setAbrirNotaFiscal] = useState(false);
   // Qual lancamento esta com a nota sendo emitida agora (para o botao virar
@@ -220,6 +234,23 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem("meiflow_endereco_prestador") || "{}"); }
     catch { return {}; }
   });
+  /**
+   * Os três textos do acompanhamento, escritos pelo usuário.
+   *
+   * Guardados também no navegador para o painel já abrir com a redação certa
+   * antes de o perfil chegar da nuvem — senão a pessoa veria o texto padrão
+   * piscar e ser trocado pelo dela.
+   */
+  const [mensagensContato, setMensagensContato] = useState<{ 1?: string; 2?: string; 3?: string }>(() => {
+    try { return JSON.parse(localStorage.getItem("meiflow_mensagens_contato") || "{}"); }
+    catch { return {}; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem("meiflow_mensagens_contato", JSON.stringify(mensagensContato || {})); }
+    catch { /* navegador sem armazenamento: segue com o que veio da nuvem */ }
+  }, [mensagensContato]);
+
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
   // ESTADOS DE AUTENTICAÇÃO INTEGRADA EMAIL e SENHA
@@ -443,6 +474,9 @@ export default function App() {
             if (profile.emailPrestador !== undefined) {
               setEmailPrestador(profile.emailPrestador || "");
               localStorage.setItem("meiflow_email_prestador", profile.emailPrestador || "");
+              // A nuvem é a fonte da verdade: se o usuário editou os textos em
+              // outro aparelho, é a versão de lá que vale.
+              setMensagensContato(profile.mensagensContato || {});
             }
             if (profile.enderecoPrestador) {
               setEnderecoPrestador(profile.enderecoPrestador);
@@ -712,6 +746,7 @@ export default function App() {
     email: string;
     endereco: { cep?: string; logradouro?: string; numero?: string; bairro?: string; cidade?: string; uf?: string };
     logo?: string;
+    mensagensContato?: { 1?: string; 2?: string; 3?: string };
   }) => {
     const newName = dados.name;
     const newCnpj = dados.cnpj;
@@ -725,6 +760,7 @@ export default function App() {
       setTelefonePrestador(newTelefone);
       setEmailPrestador(dados.email || "");
       setEnderecoPrestador(dados.endereco || {});
+      setMensagensContato(dados.mensagensContato || {});
       setIsCpfEmissor(false);
 
       /**
@@ -817,6 +853,7 @@ export default function App() {
           companyLogo: resolvedLogoUrl,
           emailPrestador: dados.email || "",
           enderecoPrestador: dados.endereco || {},
+          mensagensContato: dados.mensagensContato || {},
           isCpfEmissor: false
         });
 
@@ -1680,6 +1717,75 @@ ${meiName}`;
     setShowVendaModal(false);
   };
 
+  /**
+   * ==========================================================================
+   * ORÇAMENTO ACEITO VIRA VENDA
+   * ==========================================================================
+   *
+   * ⚠️ ESTA FUNÇÃO FALTAVA — E SÓ ELA.
+   *
+   * O gerador de orçamentos já sabia fazer tudo: mostra o botão "lançar no
+   * faturamento" na coluna dos aceitos, pergunta se o cliente já pagou e grava
+   * o `vendaId` no orçamento para não lançar duas vezes. Só que essa
+   * capacidade era opcional (`onConverterEmVenda?`) e o App nunca a passou.
+   * Sem a função, o botão simplesmente não renderizava — a tela ficava
+   * perfeita e o recurso, invisível.
+   *
+   * Lição para o resto do sistema: prop opcional que some sem avisar é o mesmo
+   * que funcionalidade morta.
+   *
+   * Devolve o id da venda, que o gerador guarda no orçamento.
+   */
+  const converterOrcamentoEmVenda = async (orc: any): Promise<string | null> => {
+    const valor = Number(orc?.total || 0);
+    if (!valor || valor <= 0) {
+      triggerToast("⚠ Este orçamento está sem valor. Confira os itens antes de lançar.");
+      return null;
+    }
+
+    const hoje = new Date();
+    const dataBR = `${String(hoje.getDate()).padStart(2, "0")}/${String(hoje.getMonth() + 1).padStart(2, "0")}/${hoje.getFullYear()}`;
+
+    /*
+      O identificador vem do orçamento, não do relógio.
+
+      Mesma regra já corrigida no recebimento de boleto: se dois cliques
+      chegarem juntos, gravar por cima da mesma linha é seguro; gerar id novo
+      duplicaria o faturamento.
+    */
+    const novaVenda: Transacao = {
+      id: `tx_orc_${String(orc.id).replace(/[^A-Za-z0-9_-]/g, "")}`,
+      tipo: "entrada",
+      valor,
+      data: dataBR,
+      descricao: orc?.numero
+        ? `Orçamento nº ${orc.numero} — ${orc.clienteNome || "cliente"}`
+        : `Orçamento aceito — ${orc?.clienteNome || "cliente"}`,
+      categoria: "Serviços",
+      clienteId: orc?.clienteId,
+      clienteNome: orc?.clienteNome || "Consumidor Geral",
+      clienteDocumento: orc?.clienteDocumento,
+      formaPagamento: "A combinar",
+    };
+
+    try {
+      if (user) await saveVendaToFirebase(user.uid, novaVenda);
+      setTransacoes((prev) => {
+        // Lançar de novo o mesmo orçamento substitui, não soma.
+        const semDuplicata = prev.filter((t) => t.id !== novaVenda.id);
+        return [novaVenda, ...semDuplicata];
+      });
+      triggerToast(
+        `✓ Venda de ${valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} lançada no Livro Caixa.`
+      );
+      return novaVenda.id;
+    } catch (err: any) {
+      console.error("[MEI Flow] Falha ao lançar a venda do orçamento:", err);
+      triggerToast("⚠ Não consegui lançar a venda. Tente de novo.");
+      return null;
+    }
+  };
+
   const handleAddDespesa = (e: React.FormEvent) => {
     e.preventDefault();
     if (!despesaValor || !despesaDescricao) return;
@@ -1894,6 +2000,8 @@ ${meiName}`;
             totalLancamentos={transacoes.length}
             planType={planType}
             onUpgrade={() => setShowUpgradeModal(true)}
+            onEmitirNota={handleEmitirNotaHeader}
+            onEmitirBoleto={() => setAbrirBoleto(true)}
             onDas={() => setShowDasModal(true)}
             onDasn={() => setShowDasnModal(true)}
             meiName={meiName}
@@ -2032,7 +2140,7 @@ ${meiName}`;
                   </div>
                   <div className="space-y-0.5 text-left">
                     <h3 className="font-extrabold tracking-tight text-white text-sm sm:text-base">
-                      ✨ Evolua para o Premium: sua logo nos documentos e Arquivo Digital de comprovantes!
+                      ✨ Evolua para o Premium: sua logo nos documentos e Arquivos Fiscais de comprovantes!
                     </h3>
                     <p className="text-xs text-slate-300">
                       Desbloqueie todo o potencial financeiro e profissional do seu MEI por apenas R$ 14,00/mês. Clique para saber mais.
@@ -2100,15 +2208,11 @@ ${meiName}`;
                 tela de Clientes, que é onde a pessoa está quando precisa dele.
               */}
               <div className="flex flex-wrap items-center gap-2.5">
-                <button
-                  onClick={handleEmitirNotaHeader}
-                  className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
-                  id="btn-emitir-nota-header"
-                >
-                  <FileText className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Emitir nota fiscal</span>
-                </button>
-
+                {/*
+                  "Emitir nota fiscal" subiu para o menu lateral, junto com
+                  "Emitir boleto". Aqui ficam só as duas ações que pertencem ao
+                  saldo — que é do que esta tela trata.
+                */}
                 <button
                   onClick={() => setShowVendaModal(true)}
                   className="px-4 py-2.5 bg-white border border-slate-200/70 hover:bg-slate-50 hover:border-slate-300 text-slate-800 text-xs font-semibold rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
@@ -2268,6 +2372,9 @@ ${meiName}`;
                   usuário apertar F5, o que parece que o sistema não fez nada.
                 */
                 onRecebimento={recarregarLancamentos}
+                abrirExterno={abrirBoleto}
+                onFechado={() => setAbrirBoleto(false)}
+                emitirDireto
               />
             </div>
 
@@ -2276,7 +2383,7 @@ ${meiName}`;
               {/*
                 As props de emissor e clientes saíram: este painel não desenha
                 mais a nota. A folha é desenhada uma vez só, no servidor, e vive
-                no Arquivo Digital — logo abaixo nesta mesma tela.
+                no Arquivos Fiscais — logo abaixo nesta mesma tela.
               */}
               <NotaFiscalPanel triggerToast={triggerToast} />
             </div>
@@ -2384,7 +2491,7 @@ ${meiName}`;
                   <div className="space-y-1 min-w-0">
                     <h3 className="text-lg font-extrabold tracking-tight">Sua marca, seus documentos.</h3>
                     <p className="text-xs text-indigo-100 leading-relaxed">
-                      No Premium, recibos e orçamentos saem com a sua logo, você guarda comprovantes no Arquivo Digital e navega sem anúncios — por R$ 14,00/mês.
+                      No Premium, recibos e orçamentos saem com a sua logo, você guarda comprovantes no Arquivos Fiscais e navega sem anúncios — por R$ 14,00/mês.
                     </p>
                   </div>
                 </div>
@@ -2769,6 +2876,8 @@ ${meiName}`;
             clientes={clientes}
             onTriggerUpgrade={() => setShowUpgradeModal(true)}
             onGoBack={() => irPara("home")}
+            onConverterEmVenda={converterOrcamentoEmVenda}
+            mensagensContato={mensagensContato}
             triggerToast={triggerToast}
           />
         )}
@@ -2856,6 +2965,7 @@ ${meiName}`;
         <PainelAcompanhamento
           userId={user.uid}
           triggerToast={triggerToast}
+          mensagens={mensagensContato}
         />
       )}
 
@@ -3842,6 +3952,7 @@ ${meiName}`;
           currentTelefone={telefonePrestador}
           currentEmail={emailPrestador}
           currentEndereco={enderecoPrestador}
+          currentMensagens={mensagensContato}
           planType={planType}
           companyLogo={companyLogo || ""}
           onClose={() => setShowMeiConfigModal(false)}

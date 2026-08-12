@@ -309,7 +309,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
           </div>
 
           <div class="header">
-            <h1 class="title">Arquivo Digital Digitalizado</h1>
+            <h1 class="title">Arquivos Fiscais</h1>
             <p class="subtitle">Guarda Documental de Conformidade do Contribuinte MEI (Prazo Legal de 5 Anos)</p>
           </div>
           
@@ -750,7 +750,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
           </div>
           <div className="text-left space-y-0.5">
             <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-              <span>Arquivo Digital do MEI</span>
+              <span>Arquivos Fiscais</span>
               {planType === "free" ? (
                 <span className="inline-flex items-center gap-1 bg-amber-100/60 text-amber-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">
                   🔒 Premium
@@ -772,7 +772,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
         </div>
       </div>
 
-      {/* 1B. MODAL DE UPSELL — exibido quando o plano free clica no Arquivo Digital */}
+      {/* 1B. MODAL DE UPSELL — exibido quando o plano free clica no Arquivos Fiscais */}
       {showFreeLockModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-sm w-full shadow-2xl border border-slate-200 overflow-hidden text-center my-auto">
@@ -787,7 +787,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
               <div className="w-12 h-12 bg-indigo-500/20 rounded-2xl flex items-center justify-center mx-auto mb-3 border border-indigo-400/30">
                 <Folder className="w-6 h-6 text-indigo-300" />
               </div>
-              <h3 className="text-lg font-extrabold tracking-tight">Arquivo Digital é Premium</h3>
+              <h3 className="text-lg font-extrabold tracking-tight">Arquivos Fiscais é Premium</h3>
               <p className="text-xs text-slate-300 mt-1.5 max-w-xs mx-auto">
                 Guarde notas fiscais e comprovantes na nuvem por 5 anos, organizados por mês e prontos para baixar quando precisar.
               </p>
@@ -831,7 +831,7 @@ export default function ArquivoDigitalMei({ userId, userProfile, planType = "fre
                 </div>
                 <div className="text-left">
                   <h3 className="font-display font-bold text-xl text-slate-900 tracking-tight">
-                    Arquivo Digital
+                    Arquivos Fiscais
                   </h3>
                   <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest mt-0.5">
                     Guarda Digital de Comprovantes (5 anos)
