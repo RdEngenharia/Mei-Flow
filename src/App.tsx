@@ -1596,11 +1596,27 @@ export default function App() {
         doc.text("Conformidade fiscal ativa", 113, 99);
       }
       
+      /**
+       * A DATA SAI SEMPRE EM DD/MM/AAAA — NÃO IMPORTA COMO FOI DIGITADA.
+       *
+       * O campo de data da despesa é texto livre. Quem digita "2026-06-10" tem
+       * o relatório impresso com esse texto, do lado de um "10/06/2026" vindo
+       * de outro lançamento: duas datas no mesmo formato de coluna, escritas de
+       * jeitos diferentes. Num relatório que acompanha a DASN, isso parece
+       * erro de escrituração mesmo quando os dois valores estão certos.
+       *
+       * Aqui só a EXIBIÇÃO é normalizada; o que está gravado não é tocado.
+       */
+      const dataBonita = (bruta: string) => {
+        const d = parseTransactionDate(bruta);
+        return d ? d.toLocaleDateString("pt-BR") : (bruta || "");
+      };
+
       // Table body mapping
       const tableRows = filteredTransactions.map(t => {
         const isEnt = t.tipo === "entrada";
         return [
-          t.data,
+          dataBonita(t.data),
           isEnt ? "Receita (+)" : "Despesa (-)",
           t.descricao,
           t.categoria,
@@ -1608,7 +1624,7 @@ export default function App() {
           `R$ ${t.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
         ];
       });
-      
+
       autoTable(doc, {
         startY: 110,
         margin: { left: 15, right: 15 },
@@ -1617,7 +1633,11 @@ export default function App() {
         theme: "striped",
         styles: {
           fontSize: 8.5,
-          cellPadding: 3.5,
+          // Era 3.5, e a soma das colunas passava 10 mm da largura útil da
+          // folha — o jsPDF avisava "table content could not fit page" e
+          // espremia tudo por conta própria. Com 3 sobra espaço, e o negrito
+          // do tipo e do valor cabe sem quebrar linha.
+          cellPadding: 3,
           valign: "middle"
         },
         headStyles: {
@@ -1625,14 +1645,56 @@ export default function App() {
           textColor: 255,
           fontStyle: "bold"
         },
+        // 22 + 24 + 42 + 28 + 38 + 26 = 180 mm, que é exatamente a largura
+        // entre as margens (210 - 15 - 15). Ao mexer numa, tire da outra.
         columnStyles: {
           0: { cellWidth: 22 },
-          1: { cellWidth: 22 },
-          2: { cellWidth: 50 },
-          3: { cellWidth: 30 },
-          4: { cellWidth: 40 },
+          1: { cellWidth: 24 },
+          2: { cellWidth: 42 },
+          3: { cellWidth: 28 },
+          4: { cellWidth: 38 },
           5: { cellWidth: 26, halign: "right" }
-        }
+        },
+
+        /**
+         * ====================================================================
+         * VENDA EM AZUL, DESPESA EM VERMELHO
+         * ====================================================================
+         *
+         * O relatório saía inteiro em preto: para saber se uma linha era
+         * entrada ou saída era preciso LER a coluna "Tipo", linha por linha.
+         * Num livro caixa com cinquenta lançamentos, isso é trabalho de
+         * conferência que a cor resolve de graça.
+         *
+         * ⚠️ POR QUE O TIPO NÃO É LIDO DO TEXTO DA CÉLULA.
+         *
+         * Seria mais curto conferir se a célula diz "Receita (+)". Mas aí o dia
+         * em que alguém trocar esse rótulo — e ele já mudou uma vez — a cor
+         * some sem nenhum erro aparecer, e ninguém liga uma coisa à outra. Por
+         * isso a origem é o próprio lançamento, pelo índice da linha.
+         *
+         * O `theme: "striped"` continua pintando o fundo alternado; a cor entra
+         * só no texto, então as duas coisas convivem.
+         */
+        didParseCell: (dados: any) => {
+          if (dados.section !== "body") return;
+
+          const lancamento = filteredTransactions[dados.row.index];
+          if (!lancamento) return;
+
+          const entrada = lancamento.tipo === "entrada";
+
+          // Azul-700 e vermelho-700: escuros o bastante para continuarem
+          // legíveis impressos em preto e branco, onde viram dois cinzas
+          // diferentes em vez de duas manchas claras iguais.
+          dados.cell.styles.textColor = entrada ? [29, 78, 216] : [185, 28, 28];
+
+          // O tipo e o valor em negrito: são as duas colunas que o olho
+          // procura. O resto da linha fica colorido, mas sem gritar.
+          if (dados.column.index === 1 || dados.column.index === 5) {
+            dados.cell.styles.fontStyle = "bold";
+          }
+        },
       });
       
       // Legal & Signature Area below table
