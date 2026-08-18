@@ -1054,6 +1054,7 @@ export async function saveItemEstoqueToFirebase(userId: string, item: ItemEstoqu
           data: m.data,
           custoUnitario: Number(m.custoUnitario) || 0,
           valorTotal: Number(m.valorTotal) || 0,
+          frete: typeof m.frete === 'number' && m.frete > 0 ? m.frete : undefined,
           clienteId: m.clienteId || undefined,
           clienteNome: m.clienteNome || undefined,
           vendaId: m.vendaId || undefined,

@@ -83,8 +83,15 @@ export function valorTotalEstoque(itens: ItemEstoque[]): number {
 
 export type EntradaInfo = {
   quantidade: number;
-  /** O que foi pago por unidade nesta compra. */
+  /** O que foi pago por unidade nesta compra — sem o frete, ele vai à parte. */
   custoUnitario: number;
+  /**
+   * Frete TOTAL pago nesta compra (não por unidade). Opcional — ausente ou
+   * zero é "sem frete". Ele é rateado pela quantidade e entra no custo médio
+   * ponderado junto com o resto: comprar com frete deixa o item mais caro de
+   * verdade, e o custo médio precisa refletir isso.
+   */
+  frete?: number;
   /** dd/mm/aaaa — hoje se ausente. */
   data?: string;
   observacao?: string;
@@ -95,14 +102,20 @@ export type EntradaInfo = {
  *
  * Recalcula o custo médio ponderado e soma a quantidade. Chame sempre que
  * registrar uma compra — nunca some `quantidadeAtual` direto.
+ *
+ * O frete desta compra (se houver) entra no custo ANTES de ratear por
+ * unidade — por isso `movimento.custoUnitario` sai diferente do
+ * `info.custoUnitario` digitado quando há frete: ele já vem com o frete
+ * embutido, porque é esse o número que precisa entrar no custo médio.
  */
 export function registrarEntrada(item: ItemEstoque, info: EntradaInfo): ItemEstoque {
   const quantidade = arredondar(info.quantidade);
   const custoUnitario = arredondar(info.custoUnitario);
   if (quantidade <= 0) return item;
+  const frete = arredondar(info.frete || 0);
 
   const custoTotalAntigo = item.quantidadeAtual * item.custoMedio;
-  const custoTotalNovo = quantidade * custoUnitario;
+  const custoTotalNovo = quantidade * custoUnitario + frete;
   const quantidadeAtual = arredondar(item.quantidadeAtual + quantidade);
   const custoMedio = quantidadeAtual > 0 ? arredondar((custoTotalAntigo + custoTotalNovo) / quantidadeAtual) : 0;
 
@@ -111,8 +124,9 @@ export function registrarEntrada(item: ItemEstoque, info: EntradaInfo): ItemEsto
     tipo: "entrada",
     quantidade,
     data: info.data || hojeBR(),
-    custoUnitario,
+    custoUnitario: arredondar(custoTotalNovo / quantidade),
     valorTotal: arredondar(custoTotalNovo),
+    frete: frete > 0 ? frete : undefined,
     observacao: info.observacao?.trim() || undefined,
   };
 

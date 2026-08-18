@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Boxes, Plus, Search, ArrowDownCircle, ArrowUpCircle, AlertTriangle,
   ChevronDown, ChevronRight, Trash2, X, Cloud, CloudOff, Users, Calendar,
-  Package, Loader2,
+  Package, Loader2, Pencil,
 } from "lucide-react";
 import type { Cliente, ItemEstoque, MovimentoEstoque, Transacao, UnidadeEstoque } from "../types";
 import {
@@ -229,9 +229,16 @@ function AbaItens({
   const [categoriaNova, setCategoriaNova] = useState("");
   const [minimoNovo, setMinimoNovo] = useState("");
 
+  const [itemEditando, setItemEditando] = useState<ItemEstoque | null>(null);
+  const [nomeEdicao, setNomeEdicao] = useState("");
+  const [unidadeEdicao, setUnidadeEdicao] = useState<UnidadeEstoque>("un");
+  const [categoriaEdicao, setCategoriaEdicao] = useState("");
+  const [minimoEdicao, setMinimoEdicao] = useState("");
+
   const [itemEntrada, setItemEntrada] = useState<ItemEstoque | null>(null);
   const [qtdEntrada, setQtdEntrada] = useState("");
   const [custoEntrada, setCustoEntrada] = useState("");
+  const [freteEntrada, setFreteEntrada] = useState("");
   const [dataEntrada, setDataEntrada] = useState(hojeBR());
 
   const listaFiltrada = buscarItens(itens, busca);
@@ -256,18 +263,49 @@ function AbaItens({
     setShowNovoItem(false);
   };
 
+  const abrirEdicao = (item: ItemEstoque) => {
+    setItemEditando(item);
+    setNomeEdicao(item.nome);
+    setUnidadeEdicao(item.unidade);
+    setCategoriaEdicao(item.categoria || "");
+    setMinimoEdicao(typeof item.estoqueMinimo === "number" ? String(item.estoqueMinimo) : "");
+  };
+
+  const handleEditarItem = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!itemEditando) return;
+    const nome = nomeEdicao.trim();
+    if (!nome) return;
+    if (itens.some((i) => i.id !== itemEditando.id && i.nome.trim().toLowerCase() === nome.toLowerCase())) {
+      triggerToast("⚠ Já existe um item com esse nome.");
+      return;
+    }
+    const atualizado: ItemEstoque = {
+      ...itemEditando,
+      nome,
+      unidade: unidadeEdicao,
+      categoria: categoriaEdicao.trim() || undefined,
+      estoqueMinimo: minimoEdicao ? Number(minimoEdicao) : undefined,
+      atualizadoEm: new Date().toISOString(),
+    };
+    persistirItem(atualizado);
+    triggerToast(`✓ "${atualizado.nome}" atualizado.`);
+    setItemEditando(null);
+  };
+
   const handleRegistrarEntrada = (e: React.FormEvent) => {
     e.preventDefault();
     if (!itemEntrada) return;
     const quantidade = Number(String(qtdEntrada).replace(",", "."));
     const custoUnitario = Number(String(custoEntrada).replace(",", "."));
+    const frete = Number(String(freteEntrada || "0").replace(",", "."));
     if (!quantidade || quantidade <= 0) { triggerToast("⚠ Informe a quantidade comprada."); return; }
     if (!custoUnitario || custoUnitario <= 0) { triggerToast("⚠ Informe quanto pagou por unidade."); return; }
 
-    const atualizado = registrarEntrada(itemEntrada, { quantidade, custoUnitario, data: dataEntrada });
+    const atualizado = registrarEntrada(itemEntrada, { quantidade, custoUnitario, frete, data: dataEntrada });
     persistirItem(atualizado);
-    triggerToast(`✓ +${quantidade} ${itemEntrada.unidade} de "${itemEntrada.nome}" no estoque.`);
-    setItemEntrada(null); setQtdEntrada(""); setCustoEntrada(""); setDataEntrada(hojeBR());
+    triggerToast(`✓ +${quantidade} ${itemEntrada.unidade} de "${itemEntrada.nome}" no estoque${frete > 0 ? ` (com ${emReais(frete)} de frete)` : ""}.`);
+    setItemEntrada(null); setQtdEntrada(""); setCustoEntrada(""); setFreteEntrada(""); setDataEntrada(hojeBR());
   };
 
   const handleExcluirItem = async (item: ItemEstoque) => {
@@ -376,11 +414,19 @@ function AbaItens({
                       </div>
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); setItemEntrada(item); }}
+                        onClick={(e) => { e.stopPropagation(); setItemEntrada(item); setQtdEntrada(""); setCustoEntrada(""); setFreteEntrada(""); setDataEntrada(hojeBR()); }}
                         className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[10px] font-bold flex items-center gap-1 transition-all"
                         title="Registrar compra"
                       >
                         <ArrowDownCircle className="w-3.5 h-3.5" /> Comprei mais
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); abrirEdicao(item); }}
+                        className="p-1.5 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+                        title="Editar item"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
                       </button>
                       {item.movimentos.length === 0 && (
                         <button
@@ -455,6 +501,52 @@ function AbaItens({
         </div>
       )}
 
+      {/* Modal: editar item (nome digitado errado, trocar unidade/categoria/mínimo) */}
+      {itemEditando && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden my-auto">
+            <div className="px-6 pt-5 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+              <h3 className="font-bold text-slate-800">Editar item</h3>
+              <button onClick={() => setItemEditando(null)} className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleEditarItem} className="p-6 space-y-4">
+              <div>
+                <label className={rotuloCampo}>Nome do item</label>
+                <input type="text" required autoFocus placeholder="Ex.: Disjuntor 20A"
+                  value={nomeEdicao} onChange={(e) => setNomeEdicao(e.target.value)} className={campo} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={rotuloCampo}>Unidade</label>
+                  <select value={unidadeEdicao} onChange={(e) => setUnidadeEdicao(e.target.value as UnidadeEstoque)} className={`${campo} bg-white`}>
+                    {UNIDADES.map((u) => <option key={u.valor} value={u.valor}>{u.rotulo}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={rotuloCampo}>Categoria (opcional)</label>
+                  <input type="text" placeholder="Ex.: Elétrica" value={categoriaEdicao} onChange={(e) => setCategoriaEdicao(e.target.value)} className={campo} />
+                </div>
+              </div>
+              <div>
+                <label className={rotuloCampo}>Estoque mínimo (opcional)</label>
+                <input type="number" step="0.01" min="0" placeholder="Avisa quando chegar aqui" value={minimoEdicao} onChange={(e) => setMinimoEdicao(e.target.value)} className={campo} />
+              </div>
+              {itemEditando.movimentos.length > 0 && (
+                <p className="text-[11px] text-slate-400">
+                  Este item já tem {itemEditando.movimentos.length} movimentação{itemEditando.movimentos.length > 1 ? "ões" : ""}. Trocar nome, categoria ou
+                  mínimo não mexe no histórico — só a quantidade e o custo médio continuam vindo dele.
+                </p>
+              )}
+              <button type="submit" className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition-all cursor-pointer uppercase tracking-wider">
+                Salvar alterações
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Modal: registrar entrada (compra) */}
       {itemEntrada && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto">
@@ -479,10 +571,29 @@ function AbaItens({
                   <input type="number" step="0.01" min="0" required value={custoEntrada} onChange={(e) => setCustoEntrada(e.target.value)} className={`${campo} font-bold`} />
                 </div>
               </div>
-              <div>
-                <label className={rotuloCampo}>Data da compra</label>
-                <input type="text" placeholder="dd/mm/aaaa" value={dataEntrada} onChange={(e) => setDataEntrada(e.target.value)} className={`${campo} font-mono`} />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={rotuloCampo}>Frete desta compra (R$, opcional)</label>
+                  <input type="number" step="0.01" min="0" placeholder="0" value={freteEntrada} onChange={(e) => setFreteEntrada(e.target.value)} className={`${campo} font-bold`} />
+                </div>
+                <div>
+                  <label className={rotuloCampo}>Data da compra</label>
+                  <input type="text" placeholder="dd/mm/aaaa" value={dataEntrada} onChange={(e) => setDataEntrada(e.target.value)} className={`${campo} font-mono`} />
+                </div>
               </div>
+              {(() => {
+                const qtdNum = Number(String(qtdEntrada).replace(",", "."));
+                const custoNum = Number(String(custoEntrada).replace(",", "."));
+                const freteNum = Number(String(freteEntrada || "0").replace(",", "."));
+                if (!qtdNum || !custoNum || !freteNum) return null;
+                const custoComFrete = (qtdNum * custoNum + freteNum) / qtdNum;
+                return (
+                  <p className="text-[11px] text-sky-700 bg-sky-50 border border-sky-200 rounded-xl p-2.5">
+                    Com o frete rateado, cada {itemEntrada.unidade} sai por {emReais(custoComFrete)} — é esse valor
+                    (não o custo digitado sozinho) que entra no custo médio do item.
+                  </p>
+                );
+              })()}
               {itemEntrada.quantidadeAtual > 0 && (
                 <p className="text-[11px] text-slate-400">
                   Já tem {itemEntrada.quantidadeAtual} {itemEntrada.unidade} a {emReais(itemEntrada.custoMedio)}/{itemEntrada.unidade}. O custo médio será recalculado com esta compra.
@@ -507,7 +618,9 @@ function MovimentoLinha({ m, unidade }: { m: MovimentoEstoque; unidade: string }
         {entrada ? <ArrowDownCircle className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> : <ArrowUpCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />}
         <span className="font-mono text-slate-400 shrink-0">{m.data}</span>
         <span className="text-slate-600 truncate">
-          {entrada ? `+${m.quantidade} ${unidade} comprado` : `-${m.quantidade} ${unidade} usado${m.clienteNome ? ` — ${m.clienteNome}` : ""}`}
+          {entrada
+            ? `+${m.quantidade} ${unidade} comprado${m.frete ? ` (frete ${emReais(m.frete)})` : ""}`
+            : `-${m.quantidade} ${unidade} usado${m.clienteNome ? ` — ${m.clienteNome}` : ""}`}
         </span>
       </div>
       <span className={`font-bold shrink-0 ${entrada ? "text-emerald-700" : "text-rose-600"}`}>
@@ -602,6 +715,88 @@ function SeletorCliente({
                   className={`px-3.5 py-2 text-xs cursor-pointer hover:bg-blue-50 ${c.id === value ? "bg-blue-50 font-bold text-blue-700" : "text-slate-700"}`}
                 >
                   {c.nome}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================================
+   SELETOR DE ITEM DO ESTOQUE — mesma ideia, com busca por nome
+   ============================================================================
+   O consumo de material sofre do mesmo problema do cliente: uma instalação
+   grande usa dezenas de itens diferentes, e rolar um <select> comum para achar
+   "Cabo 2.5mm" no meio de parafuso, disjuntor, fita isolante etc. é lento.
+*/
+
+function SeletorItem({
+  itens,
+  value,
+  onChange,
+}: {
+  itens: ItemEstoque[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [aberto, setAberto] = useState(false);
+  const [busca, setBusca] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  const selecionado = itens.find((i) => i.id === value);
+
+  useEffect(() => {
+    const fechar = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setAberto(false);
+    };
+    document.addEventListener("mousedown", fechar);
+    return () => document.removeEventListener("mousedown", fechar);
+  }, []);
+
+  const filtrados = buscarItens(itens, busca);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => { setAberto((a) => !a); setBusca(""); }}
+        className={`${campo} bg-white text-left flex items-center justify-between gap-2 cursor-pointer`}
+      >
+        <span className={selecionado ? "text-slate-800 truncate" : "text-slate-400 truncate"}>
+          {selecionado ? selecionado.nome : "Selecione..."}
+        </span>
+        <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+      </button>
+
+      {aberto && (
+        <div className="absolute z-30 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+          <div className="p-2 border-b border-slate-100">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                autoFocus
+                type="text"
+                placeholder="Buscar item por nome..."
+                value={busca}
+                onChange={(e) => setBusca(e.target.value)}
+                className="w-full pl-8 pr-2.5 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+          <div className="max-h-52 overflow-y-auto">
+            {filtrados.length === 0 ? (
+              <p className="px-3.5 py-3 text-xs text-slate-400 text-center">Nenhum item encontrado.</p>
+            ) : (
+              filtrados.map((i) => (
+                <div
+                  key={i.id}
+                  onClick={() => { onChange(i.id); setAberto(false); }}
+                  className={`px-3.5 py-2 text-xs cursor-pointer hover:bg-blue-50 ${i.id === value ? "bg-blue-50 font-bold text-blue-700" : "text-slate-700"}`}
+                >
+                  {i.nome} — {i.quantidadeAtual} {i.unidade} disponível
                 </div>
               ))
             )}
@@ -716,12 +911,7 @@ function AbaConsumo({
               <div className="grid grid-cols-1 sm:grid-cols-[1fr_8rem] gap-2.5 items-end">
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Item</label>
-                  <select value={linha.itemId} onChange={(e) => alterarLinha(linha.id, { itemId: e.target.value })} className={`${campo} bg-white`}>
-                    <option value="">Selecione...</option>
-                    {itens.map((i) => (
-                      <option key={i.id} value={i.id}>{i.nome} — {i.quantidadeAtual} {i.unidade} disponível</option>
-                    ))}
-                  </select>
+                  <SeletorItem itens={itens} value={linha.itemId} onChange={(id) => alterarLinha(linha.id, { itemId: id })} />
                 </div>
                 <div className="flex items-end gap-2">
                   <div className="flex-1">

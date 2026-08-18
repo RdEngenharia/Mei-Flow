@@ -75,6 +75,25 @@ t("saída de quantidade zero não faz nada", registrarSaida(item, { quantidade: 
 
 t("estoqueSuficiente diz a verdade antes de baixar", estoqueSuficiente(item, 20) && !estoqueSuficiente(item, 21));
 
+/* ========================================================================== */
+bloco("Entrada — frete rateado no custo médio");
+
+let itemFrete = criarItemEstoque({ nome: "Cabo 4mm", unidade: "m" });
+itemFrete = registrarEntrada(itemFrete, { quantidade: 10, custoUnitario: 20, frete: 50, data: "01/08/2026" });
+// custo total = 10*20 + 50 = 250 → 25/un
+t("frete entra no custo por unidade", itemFrete.quantidadeAtual === 10 && itemFrete.custoMedio === 25, itemFrete);
+t("guarda o frete desta compra na movimentação", itemFrete.movimentos.at(-1)?.frete === 50);
+t("valorTotal do movimento inclui o frete", itemFrete.movimentos.at(-1)?.valorTotal === 250);
+t("custoUnitario do movimento já vem com o frete embutido", itemFrete.movimentos.at(-1)?.custoUnitario === 25);
+
+itemFrete = registrarEntrada(itemFrete, { quantidade: 10, custoUnitario: 20, data: "05/08/2026" });
+// (10*25 + 10*20) / 20 = 22.5 — segunda compra sem frete não carrega o frete da primeira
+t("compra seguinte sem frete não herda o frete da anterior", itemFrete.custoMedio === 22.5, itemFrete);
+t("movimento sem frete não guarda o campo", itemFrete.movimentos.at(-1)?.frete === undefined);
+
+let semFrete = registrarEntrada(criarItemEstoque({ nome: "Parafuso", unidade: "un" }), { quantidade: 5, custoUnitario: 10, frete: 0 });
+t("frete zero é o mesmo que sem frete", semFrete.custoMedio === 10 && semFrete.movimentos.at(-1)?.frete === undefined);
+
 let saldoNegativo = registrarSaida(item, { quantidade: 999, clienteNome: "Cliente ansioso" });
 t("saldo pode ficar negativo — é a verdade, não um bug escondido", saldoNegativo.quantidadeAtual < 0, saldoNegativo.quantidadeAtual);
 

@@ -353,10 +353,20 @@ export interface MovimentoEstoque {
   quantidade: number;
   /** dd/mm/aaaa */
   data: string;
-  /** Entrada: o que foi pago por unidade. Saída: o custo médio no momento, congelado. */
+  /**
+   * Entrada: o que foi pago por unidade, JÁ COM o frete desta compra rateado
+   * dentro (ver `frete` abaixo). Saída: o custo médio no momento, congelado.
+   */
   custoUnitario: number;
   /** quantidade × custoUnitario, congelado — não recalcula se o custo médio mudar depois. */
   valorTotal: number;
+  /**
+   * Só em entrada: quanto do valor pago nesta compra foi frete (não por
+   * unidade — o total pago no frete desta compra). Informativo — o valor já
+   * está embutido em `custoUnitario`/`valorTotal` e por isso no custo médio;
+   * este campo existe só para o histórico mostrar "dos quais X de frete".
+   */
+  frete?: number;
   /** Só em saída: para quem foi usado. */
   clienteId?: string;
   clienteNome?: string;
