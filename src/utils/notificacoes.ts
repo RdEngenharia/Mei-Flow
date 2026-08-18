@@ -28,7 +28,7 @@
  * prontos e decide o texto e a severidade.
  */
 
-export type CategoriaNotificacao = "das" | "recebimento" | "certificado" | "cobranca" | "limite";
+export type CategoriaNotificacao = "das" | "recebimento" | "certificado" | "cobranca" | "limite" | "estoque";
 export type SeveridadeNotificacao = "aviso" | "urgente";
 
 export type Notificacao = {
@@ -259,6 +259,31 @@ export function notificacaoCobrancasVencidas(quantidade: number, valorTotal: num
 }
 
 /* ==========================================================================
+   6. ESTOQUE NO LIMITE MÍNIMO
+   ==========================================================================
+   Agregado numa linha só, mesmo raciocínio do aviso de boletos vencidos: um
+   aviso por item lotaria o sino em quem tem várias peças cadastradas. Quem
+   quer o detalhe clica e vai para a tela de Estoque.
+   ========================================================================== */
+
+export function notificacaoEstoqueBaixo(itensBaixo: { nome: string }[]): Notificacao[] {
+  const quantidade = (itensBaixo || []).length;
+  if (quantidade <= 0) return [];
+
+  const nomes = itensBaixo.slice(0, 3).map((i) => `"${i.nome}"`).join(", ");
+  const resto = quantidade > 3 ? ` e mais ${quantidade - 3}` : "";
+
+  return [{
+    id: "estoque_baixo",
+    categoria: "estoque",
+    severidade: "aviso",
+    titulo: quantidade === 1 ? "1 item no limite do estoque" : `${quantidade} itens no limite do estoque`,
+    detalhe: `${nomes}${resto} — no mínimo ou abaixo. Hora de comprar mais.`,
+    acao: "Ver estoque",
+  }];
+}
+
+/* ==========================================================================
    ORDENAÇÃO PARA A LISTA FINAL
    ========================================================================== */
 
@@ -268,6 +293,7 @@ const PESO_CATEGORIA: Record<CategoriaNotificacao, number> = {
   certificado: 2,
   cobranca: 3,
   limite: 4,
+  estoque: 5,
 };
 
 /** Urgente antes de aviso; dentro da mesma severidade, a ordem das categorias acima. */

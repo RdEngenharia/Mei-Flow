@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { Bell, X, AlertTriangle, Clock, FileWarning, Receipt, Gauge, ChevronRight } from "lucide-react";
-import { auth } from "../firebase";
+import { Bell, X, AlertTriangle, Clock, FileWarning, Receipt, Gauge, ChevronRight, Boxes } from "lucide-react";
+import { auth, fetchEstoqueFromFirebase } from "../firebase";
 import { getApiUrl } from "../utils/nativeFile";
 import type { Transacao } from "../types";
 import { recebimentosDa, paraISO } from "../utils/recebimentos";
+import { itensComEstoqueBaixo } from "../utils/estoque";
 import {
   type Notificacao,
   notificacaoDas,
@@ -11,6 +12,7 @@ import {
   notificacaoLimiteMei,
   notificacaoCertificado,
   notificacaoCobrancasVencidas,
+  notificacaoEstoqueBaixo,
   ordenarNotificacoes,
 } from "../utils/notificacoes";
 
@@ -63,11 +65,14 @@ type Props = {
   cnpjPrestador: string;
   isCpfEmissor: boolean;
   logado: boolean;
+  /** Para buscar o próprio estoque, do mesmo jeito que EstoquePanel busca o dele. */
+  userId: string;
 
   onAbrirDas: () => void;
   onAbrirCertificado: () => void;
   onAbrirCobrancasVencidas: () => void;
   onAbrirRecebimento: (vendaId: string, parcelaId: string) => void;
+  onAbrirEstoque: () => void;
 };
 
 const ICONE: Record<Notificacao["categoria"], React.ElementType> = {
@@ -76,6 +81,7 @@ const ICONE: Record<Notificacao["categoria"], React.ElementType> = {
   certificado: AlertTriangle,
   cobranca: Receipt,
   limite: Gauge,
+  estoque: Boxes,
 };
 
 export default function CentralNotificacoes({
@@ -89,10 +95,12 @@ export default function CentralNotificacoes({
   cnpjPrestador,
   isCpfEmissor,
   logado,
+  userId,
   onAbrirDas,
   onAbrirCertificado,
   onAbrirCobrancasVencidas,
   onAbrirRecebimento,
+  onAbrirEstoque,
 }: Props) {
   /**
    * Certificado A1 — só faz sentido buscar quem pode ter um: logado,
@@ -158,6 +166,29 @@ export default function CentralNotificacoes({
   }, [logado]);
 
   /**
+   * Estoque no limite mínimo — busca a lista de itens do usuário, do mesmo
+   * jeito self-contained que EstoquePanel.tsx já faz, e filtra localmente com
+   * a mesma função pura (`itensComEstoqueBaixo`) que a tela de Estoque usa.
+   * Não guardamos o estoque inteiro em estado global só para isto rodar.
+   */
+  const [estoqueBaixo, setEstoqueBaixo] = useState<{ nome: string }[]>([]);
+
+  useEffect(() => {
+    let vivo = true;
+    if (!logado || !userId) { setEstoqueBaixo([]); return; }
+    (async () => {
+      try {
+        const itens = await fetchEstoqueFromFirebase(userId);
+        if (vivo) setEstoqueBaixo(itensComEstoqueBaixo(itens).map((i) => ({ nome: i.nome })));
+      } catch {
+        // Sem conexão: o aviso de estoque simplesmente não aparece desta vez,
+        // mesmo padrão do certificado e das cobranças acima.
+      }
+    })();
+    return () => { vivo = false; };
+  }, [logado, userId]);
+
+  /**
    * TRANSAÇÃO → PARCELA "CRUA" PARA A REGRA PURA.
    *
    * `utils/notificacoes.ts` não conhece `Transacao` nem `Recebimento` — só um
@@ -183,6 +214,7 @@ export default function CentralNotificacoes({
     ...notificacaoLimiteMei(faturamentoBrutoTotal, limiteAnual),
     ...notificacaoCertificado(certificado?.diasRestantes, certificado?.validoAte),
     ...notificacaoCobrancasVencidas(cobrancasVencidas.quantidade, cobrancasVencidas.valor),
+    ...notificacaoEstoqueBaixo(estoqueBaixo),
   ]);
 
   // Reporta a contagem para o sino no cabeçalho. Preso ao tamanho da lista, não
@@ -198,9 +230,10 @@ export default function CentralNotificacoes({
     if (n.categoria === "das") onAbrirDas();
     else if (n.categoria === "certificado") onAbrirCertificado();
     else if (n.categoria === "cobranca") onAbrirCobrancasVencidas();
+    else if (n.categoria === "estoque") onAbrirEstoque();
     else if (n.categoria === "recebimento" && n.vendaId && n.parcelaId) onAbrirRecebimento(n.vendaId, n.parcelaId);
     onFechar();
-  }, [onAbrirDas, onAbrirCertificado, onAbrirCobrancasVencidas, onAbrirRecebimento, onFechar]);
+  }, [onAbrirDas, onAbrirCertificado, onAbrirCobrancasVencidas, onAbrirEstoque, onAbrirRecebimento, onFechar]);
 
   if (!aberto) return null;
 

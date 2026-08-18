@@ -192,6 +192,57 @@ export function registrarSaida(item: ItemEstoque, info: SaidaInfo): ItemEstoque 
 }
 
 /* ==========================================================================
+   DESFAZER — corrigir o último lançamento errado
+   ==========================================================================
+   Só a ÚLTIMA movimentação pode ser desfeita, nunca uma do meio: o custo
+   médio ponderado é cumulativo, então desfazer uma do meio bagunçaria a conta
+   de tudo que veio depois dela. Como só a última pode sair, a operação é
+   sempre exata — não é um "ajuste estimado", é literalmente voltar ao estado
+   de antes daquele lançamento.
+   ========================================================================== */
+
+/**
+ * Remove a última movimentação (entrada ou saída) e devolve o item exatamente
+ * como estava antes dela — para corrigir quantidade, custo ou cliente digitado
+ * errado sem deixar rastro de um "ajuste manual" escondendo o erro.
+ *
+ * Saída: só devolve a quantidade — saída nunca mexe no custo médio.
+ * Entrada: reconstrói o custo médio de antes a partir do que a própria
+ * movimentação guardou (`quantidade` e `custoUnitario`, já com frete embutido
+ * quando houve) — não precisa nada além do item atual e da última movimentação
+ * para chegar exatamente no número de antes.
+ */
+export function removerUltimoMovimento(item: ItemEstoque): ItemEstoque {
+  const ultimo = item.movimentos.at(-1);
+  if (!ultimo) return item;
+
+  const movimentos = item.movimentos.slice(0, -1);
+
+  if (ultimo.tipo === "saida") {
+    return {
+      ...item,
+      quantidadeAtual: arredondar(item.quantidadeAtual + ultimo.quantidade),
+      movimentos,
+      atualizadoEm: new Date().toISOString(),
+    };
+  }
+
+  const quantidadeAtual = arredondar(item.quantidadeAtual - ultimo.quantidade);
+  const custoTotalAtual = item.quantidadeAtual * item.custoMedio;
+  const custoTotalDestaEntrada = ultimo.quantidade * ultimo.custoUnitario;
+  const custoTotalAntigo = custoTotalAtual - custoTotalDestaEntrada;
+  const custoMedio = quantidadeAtual > 0 ? arredondar(custoTotalAntigo / quantidadeAtual) : 0;
+
+  return {
+    ...item,
+    quantidadeAtual,
+    custoMedio,
+    movimentos,
+    atualizadoEm: new Date().toISOString(),
+  };
+}
+
+/* ==========================================================================
    CONSULTA — a lista e a busca por nome
    ========================================================================== */
 

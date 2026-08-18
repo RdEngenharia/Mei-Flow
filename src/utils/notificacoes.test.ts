@@ -21,6 +21,7 @@ import {
   notificacaoLimiteMei,
   notificacaoCertificado,
   notificacaoCobrancasVencidas,
+  notificacaoEstoqueBaixo,
   ordenarNotificacoes,
 } from "./notificacoes";
 
@@ -99,6 +100,20 @@ bloco("Boletos vencidos");
 t("zero vencidos não avisa", notificacaoCobrancasVencidas(0, 0).length === 0);
 t("um vencido usa singular", notificacaoCobrancasVencidas(1, 150).length === 1 && notificacaoCobrancasVencidas(1, 150)[0].titulo === "1 boleto vencido");
 t("vários usa plural com quantidade", notificacaoCobrancasVencidas(5, 750)[0].titulo === "5 boletos vencidos");
+
+/* ========================================================================== */
+bloco("Estoque no limite mínimo");
+
+t("sem itens baixos não avisa", notificacaoEstoqueBaixo([]).length === 0);
+t("um item usa singular", notificacaoEstoqueBaixo([{ nome: "Disjuntor 20A" }])[0]?.titulo === "1 item no limite do estoque");
+t("vários usa plural com quantidade", notificacaoEstoqueBaixo([{ nome: "A" }, { nome: "B" }, { nome: "C" }])[0]?.titulo === "3 itens no limite do estoque");
+t("cita o nome do item quando é só um", notificacaoEstoqueBaixo([{ nome: "Cabo 2.5mm" }])[0]?.detalhe.includes("Cabo 2.5mm"));
+t("com mais de 3, mostra só os 3 primeiros e soma o resto", (() => {
+  const muitos = ["A", "B", "C", "D", "E"].map((nome) => ({ nome }));
+  const detalhe = notificacaoEstoqueBaixo(muitos)[0]?.detalhe || "";
+  return detalhe.includes("A") && detalhe.includes("B") && detalhe.includes("C") && !detalhe.includes('"D"') && detalhe.includes("e mais 2");
+})());
+t("severidade é sempre aviso, nunca urgente", notificacaoEstoqueBaixo([{ nome: "X" }])[0]?.severidade === "aviso");
 
 /* ========================================================================== */
 bloco("Ordenação final");

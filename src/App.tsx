@@ -2485,9 +2485,11 @@ ${meiName}`;
           cnpjPrestador={cnpjPrestador || ""}
           isCpfEmissor={isCpfEmissor}
           logado={!!user}
+          userId={user?.uid || userId}
           onAbrirDas={() => setShowDasModal(true)}
           onAbrirCertificado={() => setAbrirNotaFiscal(true)}
           onAbrirCobrancasVencidas={() => setAbrirBoletoDrawer(true)}
+          onAbrirEstoque={() => irPara("estoque")}
           onAbrirRecebimento={(vendaId, parcelaId) => {
             const venda = transacoes.find((tx) => tx.id === vendaId);
             const parcela = venda ? recebimentosDa(venda).find((r) => r.id === parcelaId) : undefined;

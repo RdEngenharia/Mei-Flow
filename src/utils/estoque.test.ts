@@ -16,6 +16,7 @@ import {
   criarItemEstoque,
   registrarEntrada,
   registrarSaida,
+  removerUltimoMovimento,
   estoqueSuficiente,
   valorEmEstoque,
   valorTotalEstoque,
@@ -96,6 +97,36 @@ t("frete zero é o mesmo que sem frete", semFrete.custoMedio === 10 && semFrete.
 
 let saldoNegativo = registrarSaida(item, { quantidade: 999, clienteNome: "Cliente ansioso" });
 t("saldo pode ficar negativo — é a verdade, não um bug escondido", saldoNegativo.quantidadeAtual < 0, saldoNegativo.quantidadeAtual);
+
+/* ========================================================================== */
+bloco("Desfazer o último lançamento");
+
+t("item sem movimentação nenhuma não quebra (no-op)", removerUltimoMovimento(criarItemEstoque({ nome: "X", unidade: "un" })).movimentos.length === 0);
+
+// Duas entradas por preço diferente, desfazer a última volta exatamente à primeira.
+let desfazer = criarItemEstoque({ nome: "Disjuntor", unidade: "un" });
+desfazer = registrarEntrada(desfazer, { quantidade: 10, custoUnitario: 20 });
+desfazer = registrarEntrada(desfazer, { quantidade: 10, custoUnitario: 30 });
+t("antes de desfazer: pesou as duas (25)", desfazer.custoMedio === 25);
+desfazer = removerUltimoMovimento(desfazer);
+t("desfazer a última entrada volta exatamente ao estado da primeira", desfazer.quantidadeAtual === 10 && desfazer.custoMedio === 20 && desfazer.movimentos.length === 1, desfazer);
+
+// Desfazer uma saída só devolve a quantidade — custo médio não muda.
+desfazer = registrarSaida(desfazer, { quantidade: 4, clienteNome: "Carlos" });
+t("saída desconta", desfazer.quantidadeAtual === 6);
+desfazer = removerUltimoMovimento(desfazer);
+t("desfazer a saída devolve a quantidade sem mexer no custo médio", desfazer.quantidadeAtual === 10 && desfazer.custoMedio === 20 && desfazer.movimentos.length === 1, desfazer);
+
+// Desfazer a única entrada que existe zera tudo — não pode sobrar custo médio "fantasma".
+t("desfazer a única entrada zera quantidade e custo médio", removerUltimoMovimento(desfazer).quantidadeAtual === 0 && removerUltimoMovimento(desfazer).custoMedio === 0);
+
+// Com frete: desfazer precisa reverter o custo médio JÁ COM o frete embutido, não o custoUnitario digitado puro.
+let desfazerFrete = criarItemEstoque({ nome: "Cabo 4mm", unidade: "m" });
+desfazerFrete = registrarEntrada(desfazerFrete, { quantidade: 10, custoUnitario: 20 }); // custoMedio 20
+desfazerFrete = registrarEntrada(desfazerFrete, { quantidade: 10, custoUnitario: 20, frete: 50 }); // (200+250)/20 = 22.5
+t("com frete embutido: custo médio pondera certo antes de desfazer", desfazerFrete.custoMedio === 22.5, desfazerFrete);
+desfazerFrete = removerUltimoMovimento(desfazerFrete);
+t("desfazer a entrada com frete volta exatamente ao estado sem ela", desfazerFrete.quantidadeAtual === 10 && desfazerFrete.custoMedio === 20, desfazerFrete);
 
 /* ========================================================================== */
 bloco("Valor em estoque");

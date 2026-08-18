@@ -2,17 +2,18 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Boxes, Plus, Search, ArrowDownCircle, ArrowUpCircle, AlertTriangle,
   ChevronDown, ChevronRight, Trash2, X, Cloud, CloudOff, Users, Calendar,
-  Package, Loader2, Pencil,
+  Package, Loader2, Pencil, Undo2, TrendingUp,
 } from "lucide-react";
 import type { Cliente, ItemEstoque, MovimentoEstoque, Transacao, UnidadeEstoque } from "../types";
 import {
   fetchEstoqueFromFirebase, saveItemEstoqueToFirebase, deleteItemEstoqueFromFirebase,
 } from "../firebase";
 import {
-  criarItemEstoque, registrarEntrada, registrarSaida, estoqueSuficiente,
+  criarItemEstoque, registrarEntrada, registrarSaida, removerUltimoMovimento, estoqueSuficiente,
   valorEmEstoque, valorTotalEstoque, itensComEstoqueBaixo, buscarItens,
-  baixasNoPeriodo, totalBaixasPorCliente,
+  baixasNoPeriodo, totalBaixasPorCliente, custoMaterialDaVenda,
 } from "../utils/estoque";
+import { temMaterial, margemComMaterial } from "../utils/composicaoValor";
 import { hojeBR, paraISO } from "../utils/recebimentos";
 
 /**
@@ -38,7 +39,7 @@ import { hojeBR, paraISO } from "../utils/recebimentos";
  * prontos do App.tsx.
  */
 
-type Aba = "itens" | "consumo" | "relatorio";
+type Aba = "itens" | "consumo" | "relatorio" | "margem";
 
 const UNIDADES: { valor: UnidadeEstoque; rotulo: string }[] = [
   { valor: "un", rotulo: "Unidade (un)" },
@@ -129,6 +130,7 @@ export default function EstoquePanel({
             ["itens", "Itens"],
             ["consumo", "Consumo de Material"],
             ["relatorio", "Relatório"],
+            ["margem", "Margem"],
           ] as [Aba, string][]).map(([id, rotulo]) => (
             <button
               key={id}
@@ -153,6 +155,7 @@ export default function EstoquePanel({
             {aba === "itens" && "O material que você comprou e ainda tem guardado."}
             {aba === "consumo" && "Dê baixa no que foi usado numa instalação, vinculado ao cliente."}
             {aba === "relatorio" && "Para onde foi cada baixa, por cliente e por período."}
+            {aba === "margem" && "O que sobrou de cada venda depois do material que você comprou e usou de verdade."}
           </p>
         </div>
         <div className="shrink-0">
@@ -195,6 +198,7 @@ export default function EstoquePanel({
             />
           )}
           {aba === "relatorio" && <AbaRelatorio itens={itens} clientes={clientes} />}
+          {aba === "margem" && <AbaMargem itens={itens} transacoes={transacoes} />}
         </>
       )}
     </div>
@@ -306,6 +310,17 @@ function AbaItens({
     persistirItem(atualizado);
     triggerToast(`✓ +${quantidade} ${itemEntrada.unidade} de "${itemEntrada.nome}" no estoque${frete > 0 ? ` (com ${emReais(frete)} de frete)` : ""}.`);
     setItemEntrada(null); setQtdEntrada(""); setCustoEntrada(""); setFreteEntrada(""); setDataEntrada(hojeBR());
+  };
+
+  const handleDesfazerUltimo = (item: ItemEstoque) => {
+    const ultimo = item.movimentos.at(-1);
+    if (!ultimo) return;
+    const msg = ultimo.tipo === "entrada"
+      ? `Desfazer a compra de ${ultimo.quantidade} ${item.unidade} de "${item.nome}"? O custo médio volta a ser o que era antes desta compra.`
+      : `Desfazer a baixa de ${ultimo.quantidade} ${item.unidade} de "${item.nome}"${ultimo.clienteNome ? ` para ${ultimo.clienteNome}` : ""}? A quantidade volta para o estoque.`;
+    if (!window.confirm(msg)) return;
+    persistirItem(removerUltimoMovimento(item));
+    triggerToast(`✓ Última movimentação de "${item.nome}" desfeita.`);
   };
 
   const handleExcluirItem = async (item: ItemEstoque) => {
@@ -447,8 +462,13 @@ function AbaItens({
                         <p className="text-[11px] text-slate-400 py-2">Nenhuma movimentação ainda.</p>
                       ) : (
                         <div className="space-y-1 pt-2">
-                          {ultimosMovimentos.map((m) => (
-                            <MovimentoLinha key={m.id} m={m} unidade={item.unidade} />
+                          {ultimosMovimentos.map((m, idx) => (
+                            <MovimentoLinha
+                              key={m.id}
+                              m={m}
+                              unidade={item.unidade}
+                              onDesfazer={idx === 0 ? () => handleDesfazerUltimo(item) : undefined}
+                            />
                           ))}
                         </div>
                       )}
@@ -610,7 +630,16 @@ function AbaItens({
   );
 }
 
-function MovimentoLinha({ m, unidade }: { m: MovimentoEstoque; unidade: string }) {
+function MovimentoLinha({
+  m,
+  unidade,
+  onDesfazer,
+}: {
+  m: MovimentoEstoque;
+  unidade: string;
+  /** Só a última movimentação do item recebe isto — ver comentário em utils/estoque.ts. */
+  onDesfazer?: () => void;
+}) {
   const entrada = m.tipo === "entrada";
   return (
     <div className="flex items-center justify-between gap-3 text-[11px] py-1.5">
@@ -623,9 +652,21 @@ function MovimentoLinha({ m, unidade }: { m: MovimentoEstoque; unidade: string }
             : `-${m.quantidade} ${unidade} usado${m.clienteNome ? ` — ${m.clienteNome}` : ""}`}
         </span>
       </div>
-      <span className={`font-bold shrink-0 ${entrada ? "text-emerald-700" : "text-rose-600"}`}>
-        {entrada ? "" : "−"}{emReais(m.valorTotal)}
-      </span>
+      <div className="flex items-center gap-2 shrink-0">
+        <span className={`font-bold ${entrada ? "text-emerald-700" : "text-rose-600"}`}>
+          {entrada ? "" : "−"}{emReais(m.valorTotal)}
+        </span>
+        {onDesfazer && (
+          <button
+            type="button"
+            onClick={onDesfazer}
+            className="p-1 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-md transition-all"
+            title="Desfazer este lançamento (o mais recente)"
+          >
+            <Undo2 className="w-3 h-3" />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1029,6 +1070,91 @@ function AbaRelatorio({ itens, clientes }: { itens: ItemEstoque[]; clientes: Cli
                 <span className="text-sm font-bold text-rose-600 shrink-0">−{emReais(movimento.valorTotal)}</span>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
+   ABA 4 — MARGEM: o que sobrou de cada venda depois do material de verdade
+   ============================================================================
+   Cruza duas contas que já existiam separadas: quanto foi baixado do estoque
+   para cada venda (`custoMaterialDaVenda`, aqui) e a margem líquida
+   (`margemComMaterial`, em utils/composicaoValor.ts). Só entram vendas em que
+   VOCÊ comprou o material — repasse ao fornecedor fica de fora de propósito:
+   ali o material nunca foi seu dinheiro, então não existe margem de material
+   nenhuma para calcular.
+*/
+
+function AbaMargem({ itens, transacoes }: { itens: ItemEstoque[]; transacoes: Transacao[] }) {
+  const linhas = (transacoes || [])
+    .filter((t) => t.tipo === "entrada" && temMaterial(t.composicao) && !t.repasse?.ativo)
+    .map((t) => {
+      const custoMaterial = custoMaterialDaVenda(t.id, itens);
+      const margem = margemComMaterial(t.valor, t.comissao?.valor, custoMaterial);
+      return { tx: t, custoMaterial, margem };
+    })
+    .sort((a, b) => paraISO(b.tx.data).localeCompare(paraISO(a.tx.data)));
+
+  const totalRecebido = linhas.reduce((s, l) => s + l.tx.valor, 0);
+  const totalCusto = linhas.reduce((s, l) => s + l.custoMaterial, 0);
+  const totalMargem = linhas.reduce((s, l) => s + l.margem, 0);
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-white rounded-2xl border border-slate-200/60 p-5">
+          <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 block">Total recebido</span>
+          <span className="text-xl font-bold font-mono text-slate-800">{emReais(totalRecebido)}</span>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200/60 p-5">
+          <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 block">Custo de material baixado</span>
+          <span className="text-xl font-bold font-mono text-slate-800">{emReais(totalCusto)}</span>
+        </div>
+        <div className="bg-slate-900 text-white rounded-2xl p-5">
+          <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 block">Margem líquida</span>
+          <span className={`text-xl font-bold font-mono ${totalMargem < 0 ? "text-rose-400" : "text-emerald-400"}`}>{emReais(totalMargem)}</span>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-3xl border border-slate-200/60 shadow-xs overflow-hidden">
+        {linhas.length === 0 ? (
+          <div className="text-center py-16 text-slate-400">
+            <TrendingUp className="w-8 h-8 mx-auto mb-2 text-slate-300" />
+            <p className="text-sm font-medium">Nenhuma venda com material comprado por você ainda.</p>
+            <p className="text-xs text-slate-400 mt-1 max-w-xs mx-auto">
+              Vendas com repasse ao fornecedor não entram aqui — o material delas nunca foi seu dinheiro.
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100 max-h-[32rem] overflow-y-auto">
+            {linhas.map(({ tx, custoMaterial, margem }) => {
+              const baixaPendente = custoMaterial === 0;
+              return (
+                <div key={tx.id} className="px-6 py-3.5 flex items-center justify-between gap-4 hover:bg-slate-50/50">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-800 truncate">{tx.clienteNome || tx.descricao}</p>
+                    <p className="text-[11px] text-slate-400 truncate">
+                      {tx.data} · recebido {emReais(tx.valor)}
+                      {tx.comissao?.valor ? ` · comissão ${emReais(tx.comissao.valor)}` : ""}
+                      {" · material "}
+                      {baixaPendente ? (
+                        <span className="text-amber-600 font-semibold inline-flex items-center gap-0.5">
+                          <AlertTriangle className="w-2.5 h-2.5" /> baixa ainda não lançada
+                        </span>
+                      ) : (
+                        emReais(custoMaterial)
+                      )}
+                    </p>
+                  </div>
+                  <span className={`text-sm font-bold shrink-0 ${margem < 0 ? "text-rose-600" : "text-emerald-700"}`}>
+                    {emReais(margem)}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
