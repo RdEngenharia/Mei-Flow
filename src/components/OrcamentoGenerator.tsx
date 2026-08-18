@@ -17,6 +17,8 @@ import {
   type MensagensContato,
 } from "../utils/reguaContato";
 import { CatalogItem, Cliente, Orcamento, ItemOrcamento, SituacaoOrcamento } from "../types";
+import BlocoCondicaoPagamento, { condicaoVazia, condicaoParaSalvar, type CondicaoForm } from "./BlocoCondicaoPagamento";
+import { entradaDaCondicao, textoDaCondicao, calcularComissao, arredondar } from "../utils/recebimentos";
 
 /**
  * ============================================================================
@@ -145,6 +147,8 @@ export default function OrcamentoGenerator({
   const [itens, setItens] = useState<ItemOrcamento[]>([novoItem()]);
   const [desconto, setDesconto] = useState("");
   const [observacoes, setObservacoes] = useState("");
+  /** Entrada/saldo e comissão prevista desta proposta. Ver BlocoCondicaoPagamento.tsx. */
+  const [condicao, setCondicao] = useState<CondicaoForm>(condicaoVazia);
   const [validade, setValidade] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 15);
@@ -312,6 +316,8 @@ export default function OrcamentoGenerator({
     const totalFinal = Math.max(0, somaItens(limpos) - descontoNum);
     const proximoNumero = Math.max(0, ...historico.map((o) => Number(o.numero) || 0)) + 1;
 
+    const condicaoPagamento = condicaoParaSalvar(condicao);
+
     const novo: Orcamento = {
       id: "orc_" + Date.now(),
       numero: proximoNumero,
@@ -327,6 +333,17 @@ export default function OrcamentoGenerator({
       validade,
       situacao: "enviado",
       createdAt: new Date().toISOString(),
+      condicaoPagamento,
+      comissao: calcularComissao(
+        {
+          beneficiario: condicao.comBeneficiario,
+          base: condicao.comBase,
+          percentual: Number(condicao.comPercentual.replace(",", ".")) || 0,
+          valorFixo: arredondar(condicao.comValor.replace(",", ".")),
+          sobre: "total",
+        },
+        { total: totalFinal, recebido: 0 }
+      ),
     };
 
     setSalvando(true);
@@ -351,6 +368,7 @@ export default function OrcamentoGenerator({
     setClienteNome(""); setClienteDocumento(""); setClienteEmail(""); setClienteTelefone("");
     setItens([novoItem()]);
     setDesconto(""); setObservacoes("");
+    setCondicao(condicaoVazia);
   };
 
   // --------------------------------------------------------------------------
@@ -528,6 +546,10 @@ export default function OrcamentoGenerator({
         observacoes: activePreviewQuote.observacoes,
         desconto: Number(activePreviewQuote.desconto) || 0,
         total: Number(activePreviewQuote.total) || subtotalFolha,
+        // Mesma frase da prévia na tela — uma função só decide o texto.
+        condicaoPagamentoTexto: activePreviewQuote.condicaoPagamento
+          ? textoDaCondicao(Number(activePreviewQuote.total) || subtotalFolha, activePreviewQuote.condicaoPagamento)
+          : undefined,
       };
 
       desenharOrcamento(doc, dados, {
@@ -852,6 +874,14 @@ export default function OrcamentoGenerator({
                 </div>
               </div>
             </div>
+
+            {/*
+              CONDIÇÃO DE PAGAMENTO E COMISSÃO — o mesmo recurso do registro de
+              venda, aqui como previsão. Some sozinho da venda (fica "à vista")
+              quando a proposta não tem nada marcado, então propostas simples —
+              a maioria — não ganham um campo a mais para preencher.
+            */}
+            <BlocoCondicaoPagamento total={total} form={condicao} onChange={setCondicao} />
 
             <button
               type="submit"
@@ -1468,6 +1498,28 @@ export default function OrcamentoGenerator({
                   <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block">Observações</span>
                   <p className="text-[11px] text-slate-600 leading-relaxed whitespace-pre-line">
                     {activePreviewQuote.observacoes}
+                  </p>
+                </div>
+              )}
+
+              {/*
+                CONDIÇÃO DE PAGAMENTO — impressa na proposta quando existe.
+
+                `textoDaCondicao` é a mesma função que a tela de edição usa
+                para mostrar a prévia ao lado do formulário: o texto que o
+                cliente lê aqui é garantidamente o mesmo que foi combinado, sem
+                reescrita manual em dois lugares.
+              */}
+              {activePreviewQuote.condicaoPagamento && (
+                <div className="text-left rounded-2xl bg-blue-50 border border-blue-100 p-4">
+                  <span className="text-[9px] font-extrabold text-blue-700/70 uppercase tracking-widest block mb-1">
+                    Condição de pagamento
+                  </span>
+                  <p className="text-xs font-semibold text-blue-900">
+                    {textoDaCondicao(
+                      Number(activePreviewQuote.total) || subtotalFolha,
+                      activePreviewQuote.condicaoPagamento
+                    )}
                   </p>
                 </div>
               )}

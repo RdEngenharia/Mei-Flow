@@ -42,6 +42,8 @@ import {
 // Carrega as configurações geradas pelo console do AI Studio / Firebase Blueprints
 import firebaseConfigImport from '../firebase-applet-config.json';
 import { Cliente, Transacao, Orcamento, ItemOrcamento } from './types';
+// Converte a venda gravada em qualquer época para o formato atual, na leitura.
+import { normalizarVenda } from './utils/recebimentos';
 import { cadastrarEmpresaFocusNFe, CadastroEmpresaPayload } from './focusNFeService';
 
 // Garante que o objeto process e process.env existam no ambiente de execução (browser/Vite) para evitar erros de referência críticos.
@@ -331,7 +333,8 @@ export async function fetchTransacoesFromFirebase(meiUid: string): Promise<Trans
         clienteId: data.clienteId || undefined,
         clienteNome: data.clienteNome || undefined,
         clienteDocumento: data.clienteDocumento || undefined,
-        formaPagamento: data.formaPagamento || 'Pix'
+        formaPagamento: data.formaPagamento || 'Pix',
+        vendaOrigemId: data.vendaOrigemId || undefined
       } as Transacao;
     });
 
@@ -429,7 +432,11 @@ export async function saveTransacaoToFirebase(meiUid: string, tx: Transacao): Pr
       clienteId: tx.clienteId || '',
       clienteNome: tx.clienteNome || '',
       clienteDocumento: tx.clienteDocumento || '',
-      formaPagamento: tx.formaPagamento || 'Pix'
+      formaPagamento: tx.formaPagamento || 'Pix',
+      // Despesa de comissão aponta para a venda que a originou. Sem isto, uma
+      // saída de R$ 3.000 chamada "Comissão — Carlos" não tem como voltar para
+      // a venda de onde saiu quando alguém for conferir.
+      vendaOrigemId: tx.vendaOrigemId || ''
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
@@ -616,8 +623,37 @@ export async function changeUserPassword(currentPassword: string, newPassword: s
   }
 }
 
+/* ==========================================================================
+   VENDAS — e o cuidado que campo novo exige aqui
+
+   ⚠️ As duas funções abaixo montam o documento CAMPO A CAMPO, nos dois
+   sentidos. Campo que não estiver escrito nas duas listas não existe: some ao
+   gravar, ou some ao ler. Foi assim que o acompanhamento do orçamento passou
+   semanas voltando do zero (ver saveOrcamentoToFirebase, mais abaixo).
+
+   Ao acrescentar qualquer coisa à venda, acrescente NOS DOIS lugares.
+   ========================================================================== */
+
+/**
+ * O Firestore RECUSA `undefined` — a gravação inteira falha, não só o campo.
+ * As parcelas têm vários campos opcionais (previsão, gatilho, forma), então
+ * cada uma passa por aqui antes de subir.
+ */
+function limparIndefinidos<T extends Record<string, any>>(obj: T): T {
+  const saida: any = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) saida[k] = v;
+  }
+  return saida;
+}
+
 /**
  * SALVAR NOVA VENDA: Grava uma venda na subcoleção do usuário logado: usuarios/{userId}/vendas
+ *
+ * ⚠️ `null` em vez de omitir, nos campos novos. Com `{ merge: true }`, omitir um
+ *    campo o PRESERVA como estava — então uma venda parcelada que voltasse a ser
+ *    à vista continuaria carregando o plano antigo no banco, invisível na tela e
+ *    pronto para ressuscitar na próxima leitura. `null` apaga de verdade.
  */
 export async function saveVendaToFirebase(userId: string, tx: Transacao): Promise<void> {
   const path = `usuarios/${userId}/vendas/${tx.id}`;
@@ -626,6 +662,8 @@ export async function saveVendaToFirebase(userId: string, tx: Transacao): Promis
     await setDoc(docRef, {
       id: tx.id,
       tipo: 'entrada',
+      // Lembrete: em venda parcelada isto é O QUE JÁ ENTROU NO CAIXA.
+      // O valor cheio está em valorTotal. Ver src/utils/recebimentos.ts.
       valor: tx.valor,
       data: tx.data,
       descricao: tx.descricao,
@@ -634,15 +672,56 @@ export async function saveVendaToFirebase(userId: string, tx: Transacao): Promis
       clienteNome: tx.clienteNome || '',
       clienteDocumento: tx.clienteDocumento || '',
       formaPagamento: tx.formaPagamento || 'Pix',
-      createdAt: new Date().toISOString()
-    });
+
+      // ---- campos do recebimento parcelado e da comissão ----
+      valorTotal: typeof tx.valorTotal === 'number' ? tx.valorTotal : null,
+      recebimentos: Array.isArray(tx.recebimentos)
+        ? tx.recebimentos.map(r => limparIndefinidos({
+            id: r.id,
+            valor: Number(r.valor) || 0,
+            situacao: r.situacao === 'aguardando' ? 'aguardando' : 'recebido',
+            rotulo: r.rotulo || undefined,
+            forma: r.forma || undefined,
+            dataRecebimento: r.dataRecebimento || undefined,
+            previsao: r.previsao || undefined,
+            gatilho: r.gatilho || undefined,
+            cobrancaId: r.cobrancaId || undefined,
+          }))
+        : null,
+      comissao: tx.comissao
+        ? limparIndefinidos({
+            beneficiario: String(tx.comissao.beneficiario || ''),
+            base: tx.comissao.base === 'fixo' ? 'fixo' : 'percentual',
+            percentual: typeof tx.comissao.percentual === 'number' ? tx.comissao.percentual : undefined,
+            sobre: tx.comissao.sobre === 'recebido' ? 'recebido' : 'total',
+            valor: Number(tx.comissao.valor) || 0,
+            situacao: tx.comissao.situacao === 'paga' ? 'paga' : 'aPagar',
+            dataPagamento: tx.comissao.dataPagamento || undefined,
+            formaPagamento: tx.comissao.formaPagamento || undefined,
+            despesaId: tx.comissao.despesaId || undefined,
+            observacao: tx.comissao.observacao || undefined,
+          })
+        : null,
+      orcamentoId: tx.orcamentoId || null,
+
+      // O createdAt de quem já existe não pode ser reescrito a cada baixa de
+      // parcela: com merge, passar o valor antigo o preserva, e a ausência dele
+      // numa venda nova cai no agora.
+      createdAt: (tx as any).createdAt || new Date().toISOString(),
+      atualizadoEm: new Date().toISOString(),
+    }, { merge: true });
   } catch (error) {
+    // handleFirestoreError já lança — quem chamou trata no .catch().
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
 /**
  * BUSCAR TODAS AS VENDAS: Lista todas as vendas gravadas na subcoleção do usuário: usuarios/{userId}/vendas
+ *
+ * `normalizarVenda` converte na leitura, como `normalizarOrcamento` já fazia:
+ * a venda gravada antes deste recurso vira uma parcela única já recebida, e
+ * continua somando exatamente o que somava. Nada é migrado no banco.
  */
 export async function fetchVendasFromFirebase(userId: string): Promise<Transacao[]> {
   const path = `usuarios/${userId}/vendas`;
@@ -651,18 +730,25 @@ export async function fetchVendasFromFirebase(userId: string): Promise<Transacao
     const snapshot = await getDocs(colRef);
     return snapshot.docs.map(docSnap => {
       const data = docSnap.data();
-      return {
+      return normalizarVenda({
         id: docSnap.id,
         tipo: 'entrada',
-        valor: data.valor,
+        valor: Number(data.valor) || 0,
         data: data.data,
         descricao: data.descricao,
         categoria: data.categoria,
         clienteId: data.clienteId || undefined,
         clienteNome: data.clienteNome || undefined,
         clienteDocumento: data.clienteDocumento || undefined,
-        formaPagamento: data.formaPagamento || 'Pix'
-      } as Transacao;
+        formaPagamento: data.formaPagamento || 'Pix',
+        valorTotal: typeof data.valorTotal === 'number' ? data.valorTotal : undefined,
+        recebimentos: Array.isArray(data.recebimentos) && data.recebimentos.length
+          ? data.recebimentos
+          : undefined,
+        comissao: data.comissao && data.comissao.beneficiario ? data.comissao : undefined,
+        orcamentoId: data.orcamentoId || undefined,
+        createdAt: data.createdAt || undefined,
+      } as any) as Transacao;
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, path);
@@ -741,6 +827,19 @@ export function normalizarOrcamento(o: any): Orcamento {
           .filter((c: any) => c.etapa >= 1 && c.etapa <= 3 && c.quando)
       : [],
     acompanhamentoEncerrado: !!o?.acompanhamentoEncerrado,
+
+    // Condição de pagamento combinada (entrada + saldo) e comissão prevista.
+    condicaoPagamento: o?.condicaoPagamento && typeof o.condicaoPagamento === "object"
+      ? {
+          entradaPercentual: Number(o.condicaoPagamento.entradaPercentual) || undefined,
+          entradaValor: Number(o.condicaoPagamento.entradaValor) || undefined,
+          formaEntrada: o.condicaoPagamento.formaEntrada || undefined,
+          formaSaldo: o.condicaoPagamento.formaSaldo || undefined,
+          gatilhoSaldo: o.condicaoPagamento.gatilhoSaldo || undefined,
+          previsaoSaldo: o.condicaoPagamento.previsaoSaldo || undefined,
+        }
+      : undefined,
+    comissao: o?.comissao && o.comissao.beneficiario ? o.comissao : undefined,
   };
 }
 
@@ -813,6 +912,30 @@ export async function saveOrcamentoToFirebase(userId: string, orc: Orcamento): P
           }))
         : [],
       acompanhamentoEncerrado: !!orc.acompanhamentoEncerrado,
+
+      // Condição de pagamento e comissão prevista — mesmo cuidado do bloco
+      // acima: `null` para apagar de verdade quando a pessoa remove o combinado.
+      condicaoPagamento: orc.condicaoPagamento
+        ? limparIndefinidos({
+            entradaPercentual: Number(orc.condicaoPagamento.entradaPercentual) || undefined,
+            entradaValor: Number(orc.condicaoPagamento.entradaValor) || undefined,
+            formaEntrada: orc.condicaoPagamento.formaEntrada || undefined,
+            formaSaldo: orc.condicaoPagamento.formaSaldo || undefined,
+            gatilhoSaldo: orc.condicaoPagamento.gatilhoSaldo || undefined,
+            previsaoSaldo: orc.condicaoPagamento.previsaoSaldo || undefined,
+          })
+        : null,
+      comissao: orc.comissao
+        ? limparIndefinidos({
+            beneficiario: String(orc.comissao.beneficiario || ''),
+            base: orc.comissao.base === 'fixo' ? 'fixo' : 'percentual',
+            percentual: typeof orc.comissao.percentual === 'number' ? orc.comissao.percentual : undefined,
+            sobre: orc.comissao.sobre === 'recebido' ? 'recebido' : 'total',
+            valor: Number(orc.comissao.valor) || 0,
+            situacao: 'aPagar',
+            observacao: orc.comissao.observacao || undefined,
+          })
+        : null,
 
       createdAt: orc.createdAt || new Date().toISOString(),
       atualizadoEm: new Date().toISOString(),

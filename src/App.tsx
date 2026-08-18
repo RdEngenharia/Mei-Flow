@@ -45,8 +45,33 @@ import {
   Calendar
 } from "lucide-react";
 
-import { Cliente, Transacao, CatalogItem, Orcamento } from "./types";
+import { Cliente, Transacao, CatalogItem, Orcamento, Recebimento } from "./types";
 import ReceiptModal from "./components/ReceiptModal";
+import BlocoRecebimentoVenda, { planoVendaVazio, type PlanoVendaForm } from "./components/BlocoRecebimentoVenda";
+import PainelAReceber from "./components/PainelAReceber";
+import ModalBaixaRecebimento from "./components/ModalBaixaRecebimento";
+/*
+ * ⚠️ TODA conta de "quanto recebi" e "quanto falta receber" mora em um arquivo
+ * só, com teste. Não recalcule nenhuma delas aqui dentro: o preço da assinatura
+ * já ensinou a este projeto o que acontece quando o mesmo número existe em
+ * cinco lugares e três discordam.
+ */
+import {
+  aplicarRecebimentos,
+  arredondar,
+  calcularComissao,
+  confirmarParcela,
+  despesaDaComissao,
+  hojeBR,
+  montarPlano,
+  planoDoOrcamento,
+  receberParcialmente,
+  situacaoDaVenda,
+  totalAReceber,
+  totalDaVenda,
+  tocaOPeriodo,
+  valorNoPeriodo,
+} from "./utils/recebimentos";
 import MeiConfigModal from "./components/MeiConfigModal";
 import ChangePasswordModal from "./components/ChangePasswordModal";
 import UpgradeModal from "./components/UpgradeModal";
@@ -193,8 +218,26 @@ export default function App() {
   // qual antes de emitir; com um só, emite direto sem atrapalhar.
   const [servicosNfse, setServicosNfse] = useState<any[] | null>(null);
   // Nota em conferencia: o lancamento, o servico escolhido e a observacao.
+  /**
+   * `valorEmitir` existe por causa da venda parcelada.
+   *
+   * Uma venda de R$ 30.000 recebida em duas vezes tem dois valores plausíveis
+   * para a nota: o combinado inteiro (o serviço prestado vale isso, ponto) ou
+   * só o que já entrou (nota por recebimento, prática comum quando o cliente
+   * exige documento a cada pagamento). Em venda à vista os dois são iguais, e
+   * a escolha nem aparece na tela — ver o cálculo logo abaixo, em
+   * `abrirEmissaoNota`.
+   */
   const [notaEmAndamento, setNotaEmAndamento] = useState<
-    { tx: Transacao; servicoId: string; observacao: string; descricao: string } | null
+    {
+      tx: Transacao;
+      servicoId: string;
+      observacao: string;
+      descricao: string;
+      valorEmitir: number;
+      /** Presente quando a escolha foi "só esta parcela" — vira sufixo do lancamentoId. */
+      parcelaEmitirId?: string;
+    } | null
   >(null);
 
   // State e Credenciais de Autenticação MEI
@@ -398,19 +441,42 @@ export default function App() {
   const [focusNfeActiveTab, setFocusNfeActiveTab] = useState<"emissao" | "src">("emissao");
   const [showTechnicalLogs, setShowTechnicalLogs] = useState(false);
 
+  /*
+   * ⚠️ A DATA NASCE HOJE, NÃO EM 10/06/2026.
+   *
+   * Estava chumbada numa data fixa: quem não reparava salvava a venda com a
+   * data errada, e o lançamento ia parar no mês errado do relatório. Data
+   * padrão tem que ser hoje — é o único palpite que acerta na maioria das vezes.
+   */
   // Campos de novas Vendas (Date defaults to manual typed string format)
   const [vendaValor, setVendaValor] = useState("");
   const [vendaDescricao, setVendaDescricao] = useState("");
   const [vendaCategoria, setVendaCategoria] = useState("Consultoria");
   const [vendaClienteId, setVendaClienteId] = useState("");
-  const [vendaData, setVendaData] = useState("10/06/2026");
+  const [vendaData, setVendaData] = useState(hojeBR());
   const [vendaFormaPagamento, setVendaFormaPagamento] = useState("Pix");
+
+  /**
+   * Plano de recebimento e comissão do formulário de venda.
+   *
+   * Um objeto só em vez de doze useState soltos: o formulário é resetado
+   * inteiro ao salvar, e resetar doze estados um a um é exatamente como a
+   * categoria e a data ficavam para trás e a venda seguinte nascia com os dados
+   * da anterior.
+   */
+  const [planoVenda, setPlanoVenda] = useState<PlanoVendaForm>(planoVendaVazio);
+
+  /** Parcela em processo de baixa. Nulo = nenhuma janela aberta. */
+  const [baixaEmAndamento, setBaixaEmAndamento] = useState<{
+    venda: Transacao;
+    parcela: Recebimento;
+  } | null>(null);
 
   // Campos de novas Despesas
   const [despesaValor, setDespesaValor] = useState("");
   const [despesaDescricao, setDespesaDescricao] = useState("");
   const [despesaCategoria, setDespesaCategoria] = useState("Infraestrutura");
-  const [despesaData, setDespesaData] = useState("10/06/2026");
+  const [despesaData, setDespesaData] = useState(hojeBR());
   const [despesaFormaPagamento, setDespesaFormaPagamento] = useState("Pix");
 
   // Campos de novos clientes
@@ -1301,6 +1367,9 @@ export default function App() {
         servicoId: String(habitual?.codigo || ""),
         observacao: String(cliente?.observacaoNfse || ""),
         descricao: String(habitual?.descricao || habitual?.apelido || tx.descricao || ""),
+        // Padrão: o valor cheio da venda. Em venda à vista, totalDaVenda(tx)
+        // é o próprio tx.valor — comportamento idêntico ao de antes.
+        valorEmitir: totalDaVenda(tx),
       });
     } catch (e: any) {
       triggerToast(`⚠ ${e.message}`);
@@ -1321,14 +1390,27 @@ export default function App() {
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error("Faca login novamente.");
 
+      const { valorEmitir, parcelaEmitirId } = notaEmAndamento;
+
       const r = await fetch(getApiUrl("/api/nfse/avulsa"), {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          lancamentoId: tx.id,
+          /*
+           * ⚠️ O SUFIXO É O QUE PERMITE "UMA NOTA POR PARCELA" SEM TOCAR NO SERVIDOR.
+           *
+           * A trava de duplicidade do /api/nfse/avulsa é por `lancamentoId`
+           * exato (ver nfse.ts). Emitir pelo total usa o id do lançamento, tal
+           * como sempre foi — clicar duas vezes continua devolvendo a mesma
+           * nota. Emitir só uma parcela usa um id próprio para ELA
+           * (`${tx.id}__${parcelaId}`): a nota da entrada não bloqueia a nota
+           * do saldo, mas clicar duas vezes na MESMA parcela ainda cai na
+           * mesma trava — o comportamento continua idempotente.
+           */
+          lancamentoId: parcelaEmitirId ? `${tx.id}__${parcelaEmitirId}` : tx.id,
           clienteNome: tx.clienteNome || "",
           clienteDocumento: tx.clienteDocumento || "",
-          valor: tx.valor,
+          valor: valorEmitir,
           // O que o usuário escreveu na janela — e não o texto automático do
           // lançamento, que costuma ser "Recebimento de FULANO".
           descricao: (descricao || "").trim() || tx.descricao || "",
@@ -1509,14 +1591,24 @@ export default function App() {
         69
       );
       
-      // Calculate totals specifically for the filtered transactions in the report/period
+      /*
+       * Calculate totals specifically for the filtered transactions in the report/period
+       *
+       * ⚠️ `valorNoPeriodo` no lugar de `curr.valor`.
+       *
+       * Sem isso, a venda de julho com saldo recebido em setembro somaria os
+       * R$ 30.000 inteiros no relatório de julho E no de setembro — o mesmo
+       * dinheiro contado duas vezes, num documento que é a base da DASN-SIMEI.
+       * Com período em branco (relatório de tudo) a função devolve exatamente
+       * `curr.valor`, então o relatório completo não mudou em nada.
+       */
       const reportEntradas = filteredTransactions
         .filter(t => t.tipo === "entrada")
-        .reduce((acc, curr) => acc + curr.valor, 0);
+        .reduce((acc, curr) => acc + valorNoPeriodo(curr, filterStartDate, filterEndDate), 0);
 
       const reportSaidas = filteredTransactions
         .filter(t => t.tipo === "saida")
-        .reduce((acc, curr) => acc + curr.valor, 0);
+        .reduce((acc, curr) => acc + valorNoPeriodo(curr, filterStartDate, filterEndDate), 0);
 
       const reportSaldo = reportEntradas - reportSaidas;
       
@@ -1856,7 +1948,7 @@ ${meiName}`;
 
     const selectedClient = clientes.find(c => c.id === vendaClienteId);
 
-    const novaVenda: Transacao = {
+    let novaVenda: Transacao = {
       id: `tx_${Date.now().toString().slice(-6)}`,
       tipo: "entrada",
       valor: valorNum,
@@ -1868,6 +1960,50 @@ ${meiName}`;
       clienteDocumento: selectedClient?.documento,
       formaPagamento: vendaFormaPagamento
     };
+
+    /*
+     * ==========================================================================
+     * O PLANO DE RECEBIMENTO
+     * ==========================================================================
+     *
+     * `valorNum` é o valor CHEIO da venda — foi o que a pessoa digitou. Quem
+     * decide o que vai para o caixa é `aplicarRecebimentos`, e só ela: em venda
+     * parcelada `novaVenda.valor` passa a ser apenas a entrada.
+     *
+     * Venda à vista não entra aqui e sai deste bloco exatamente como entrou —
+     * sem `recebimentos`, sem `valorTotal`, idêntica a tudo que já foi gravado
+     * antes deste recurso existir.
+     */
+    if (planoVenda.parcelada) {
+      novaVenda = aplicarRecebimentos(
+        novaVenda,
+        montarPlano({
+          total: valorNum,
+          entrada: arredondar(String(planoVenda.entradaValor).replace(",", ".")),
+          formaEntrada: planoVenda.formaEntrada,
+          formaSaldo: planoVenda.formaSaldo,
+          dataEntrada: vendaData,
+          previsaoSaldo: planoVenda.previsaoSaldo.trim() || undefined,
+          gatilhoSaldo: planoVenda.gatilhoSaldo.trim() || undefined,
+        })
+      );
+    }
+
+    // A comissão nasce "a pagar": não mexe no caixa hoje. Ver a baixa em
+    // `handlePagarComissao`.
+    if (planoVenda.comissaoAtiva) {
+      const comissao = calcularComissao(
+        {
+          beneficiario: planoVenda.comBeneficiario,
+          base: planoVenda.comBase,
+          percentual: Number(String(planoVenda.comPercentual).replace(",", ".")) || 0,
+          valorFixo: arredondar(String(planoVenda.comValor).replace(",", ".")),
+          sobre: planoVenda.comSobre,
+        },
+        { total: valorNum, recebido: novaVenda.valor }
+      );
+      if (comissao) novaVenda.comissao = comissao;
+    }
 
     if (user) {
       // Se autenticado, grava de forma resiliente diretamente na nuvem
@@ -1885,12 +2021,114 @@ ${meiName}`;
       triggerToast("✓ Venda adicionada e sincronizada localmente com sucesso!");
     }
 
-    // Reset formulário
+    // Reset formulário. A categoria e a data também — a venda seguinte não pode
+    // nascer com os dados da anterior.
     setVendaValor("");
     setVendaDescricao("");
     setVendaClienteId("");
+    setVendaCategoria("Consultoria");
+    setVendaData(hojeBR());
     setVendaFormaPagamento("Pix");
+    setPlanoVenda(planoVendaVazio);
     setShowVendaModal(false);
+  };
+
+  /* ==========================================================================
+     BAIXA DE RECEBIMENTO — a parcela que caiu na conta
+     ==========================================================================
+
+     Uma única porta para o dinheiro entrar: `confirmarParcela` quando o cliente
+     pagou tudo, `receberParcialmente` quando mandou menos. As duas mantêm o
+     invariante (valor = soma dos recebidos) e as duas são idempotentes —
+     confirmar de novo não soma de novo.
+     ========================================================================== */
+
+  const confirmarRecebimento = async (dados: { valor: number; data: string; forma: string }) => {
+    if (!baixaEmAndamento) return;
+    const { venda, parcela } = baixaEmAndamento;
+
+    const atualizada =
+      dados.valor >= parcela.valor
+        ? confirmarParcela(venda, parcela.id, { data: dados.data, forma: dados.forma })
+        : receberParcialmente(venda, parcela.id, dados.valor, {
+            data: dados.data,
+            forma: dados.forma,
+          });
+
+    // A tela muda primeiro: a espera do Firestore não pode dar a impressão de
+    // que o clique não funcionou.
+    setTransacoes((prev) => prev.map((t) => (t.id === atualizada.id ? atualizada : t)));
+    setBaixaEmAndamento(null);
+
+    try {
+      if (user) await saveVendaToFirebase(user.uid, atualizada);
+      const restante = totalAReceber(atualizada);
+      triggerToast(
+        restante > 0
+          ? `✓ Recebimento registrado. Ainda faltam ${restante.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}.`
+          : "✓ Recebimento registrado. Venda quitada!"
+      );
+    } catch (err) {
+      console.error("[MEI Flow] Falha ao gravar o recebimento:", err);
+      // Desfaz na tela: mostrar como recebido o que não subiu para a nuvem é
+      // pior do que mostrar o erro — some no próximo carregamento sem aviso.
+      setTransacoes((prev) => prev.map((t) => (t.id === venda.id ? venda : t)));
+      triggerToast("⚠ Não consegui gravar o recebimento. Tente de novo.");
+    }
+  };
+
+  /* ==========================================================================
+     COMISSÃO PAGA — e só agora ela vira despesa
+     ==========================================================================
+
+     ⚠️ O id da despesa vem da venda (`idDespesaComissao`), nunca do relógio.
+     Dois cliques no botão "Paguei" gravam por cima da MESMA linha; com id novo
+     a cada clique, o caixa levaria duas saídas idênticas e o usuário só
+     descobriria conferindo o extrato.
+     ========================================================================== */
+
+  const handlePagarComissao = async (venda: Transacao) => {
+    const comissao = venda.comissao;
+    if (!comissao || comissao.situacao === "paga") return;
+
+    const quando = prompt(
+      `Em que data você pagou a comissão de ${comissao.beneficiario}?\n(dd/mm/aaaa)`,
+      hojeBR()
+    );
+    if (!quando) return;
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(quando.trim())) {
+      triggerToast("⚠ Escreva a data no formato dd/mm/aaaa.");
+      return;
+    }
+
+    const paga = {
+      ...comissao,
+      situacao: "paga" as const,
+      dataPagamento: quando.trim(),
+    };
+    const despesa = despesaDaComissao(venda, paga);
+    const vendaAtualizada: Transacao = { ...venda, comissao: { ...paga, despesaId: despesa.id } };
+
+    setTransacoes((prev) => {
+      const semDuplicata = prev.filter((t) => t.id !== despesa.id);
+      return [despesa, ...semDuplicata.map((t) => (t.id === venda.id ? vendaAtualizada : t))];
+    });
+
+    try {
+      if (user) {
+        await saveTransacaoToFirebase(user.uid, despesa);
+        await saveVendaToFirebase(user.uid, vendaAtualizada);
+      }
+      triggerToast(
+        `✓ Comissão de ${paga.valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} lançada como despesa.`
+      );
+    } catch (err) {
+      console.error("[MEI Flow] Falha ao lançar a comissão:", err);
+      setTransacoes((prev) =>
+        prev.filter((t) => t.id !== despesa.id).map((t) => (t.id === venda.id ? venda : t))
+      );
+      triggerToast("⚠ Não consegui lançar a comissão. Tente de novo.");
+    }
   };
 
   /**
@@ -1929,7 +2167,7 @@ ${meiName}`;
       chegarem juntos, gravar por cima da mesma linha é seguro; gerar id novo
       duplicaria o faturamento.
     */
-    const novaVenda: Transacao = {
+    let novaVenda: Transacao = {
       id: `tx_orc_${String(orc.id).replace(/[^A-Za-z0-9_-]/g, "")}`,
       tipo: "entrada",
       valor,
@@ -1942,7 +2180,29 @@ ${meiName}`;
       clienteNome: orc?.clienteNome || "Consumidor Geral",
       clienteDocumento: orc?.clienteDocumento,
       formaPagamento: "A combinar",
+      orcamentoId: String(orc?.id || "") || undefined,
     };
+
+    /*
+     * A CONDIÇÃO DE PAGAMENTO DA PROPOSTA VIRA O PLANO DA VENDA.
+     *
+     * ⚠️ E nasce INTEIRA como "a receber", inclusive a entrada. Aceitar a
+     * proposta não é o mesmo que o dinheiro cair na conta, e um sistema que
+     * confunde as duas coisas lança faturamento que não existe — o erro que já
+     * custou caro neste projeto quando um boleto foi marcado como pago sem
+     * nunca ter sido conferido no banco.
+     *
+     * Orçamento sem condição de pagamento continua se comportando como antes:
+     * entra cheio no Livro Caixa, como sempre entrou.
+     */
+    if (orc?.condicaoPagamento) {
+      novaVenda = aplicarRecebimentos(novaVenda, planoDoOrcamento(valor, orc.condicaoPagamento));
+    }
+
+    // A comissão prevista na proposta vira comissão a pagar de verdade.
+    if (orc?.comissao?.beneficiario && Number(orc.comissao.valor) > 0) {
+      novaVenda.comissao = { ...orc.comissao, situacao: "aPagar", despesaId: undefined };
+    }
 
     try {
       if (user) await saveVendaToFirebase(user.uid, novaVenda);
@@ -2118,22 +2378,18 @@ ${meiName}`;
     
     const matchesType = filterTipo === "todos" || t.tipo === filterTipo;
 
-    let matchesPeriod = true;
-    const txDate = parseTransactionDate(t.data);
-    if (txDate) {
-      if (filterStartDate) {
-        const start = new Date(filterStartDate);
-        start.setHours(0, 0, 0, 0);
-        txDate.setHours(0, 0, 0, 0);
-        if (txDate < start) matchesPeriod = false;
-      }
-      if (filterEndDate) {
-        const end = new Date(filterEndDate);
-        end.setHours(23, 59, 59, 999);
-        txDate.setHours(0, 0, 0, 0);
-        if (txDate > end) matchesPeriod = false;
-      }
-    }
+    /*
+     * ⚠️ O PERÍODO PASSOU A OLHAR TAMBÉM AS PARCELAS.
+     *
+     * Antes bastava comparar `t.data`. Com venda parcelada isso esconderia
+     * dinheiro: a venda foi fechada em julho e o saldo caiu em setembro —
+     * filtrar setembro devolveria uma lista sem a linha que trouxe o dinheiro
+     * de setembro. `tocaOPeriodo` inclui a venda quando a data da venda OU a
+     * data de qualquer recebimento confirmado cai na faixa.
+     *
+     * Venda à vista e despesa respondem exatamente o que respondiam antes.
+     */
+    const matchesPeriod = tocaOPeriodo(t, filterStartDate, filterEndDate);
 
     return matchesSearch && matchesType && matchesPeriod;
   });
@@ -2476,6 +2732,20 @@ ${meiName}`;
               </div>
 
             </div>
+
+            {/*
+              A RECEBER E COMISSÕES A PAGAR
+
+              Fica logo abaixo do faturamento de propósito: o número de cima é o
+              que já entrou, e este é o que ainda vai mexer no caixa. Ver os dois
+              juntos é o que evita a conta de cabeça que todo mundo erra. O
+              painel some sozinho quando não há nada pendente.
+            */}
+            <PainelAReceber
+              transacoes={transacoes}
+              onBaixar={(venda, parcela) => setBaixaEmAndamento({ venda, parcela })}
+              onPagarComissao={handlePagarComissao}
+            />
 
             {/* REGULARIDADE TRIBUTÁRIA MEI (DAS & DASN-SIMEI) */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
@@ -2909,6 +3179,22 @@ ${meiName}`;
                     ) : (
                       filteredTransactions.map((tx) => {
                         const isEnt = tx.tipo === "entrada";
+                        /*
+                          ⚠️ EM VENDA PARCELADA, `tx.valor` É O QUE JÁ ENTROU.
+
+                          Mostrar só ele daria a impressão de que a venda de
+                          R$ 30.000 foi de R$ 15.000. Mostrar só o total mentiria
+                          sobre o caixa. A linha mostra os dois: o que entrou, em
+                          destaque, e o que falta, ao lado. Uma venda ainda sem
+                          nenhum centavo aparece como R$ 0,00 — e é por isso que
+                          ela ganha o selo "aguardando", senão pareceria uma
+                          venda de valor zero.
+                        */
+                        const aReceber = isEnt ? totalAReceber(tx) : 0;
+                        const situacao = isEnt ? situacaoDaVenda(tx) : "quitada";
+                        const parcelasAbertas = isEnt
+                          ? (tx.recebimentos || []).filter((r) => r.situacao === "aguardando")
+                          : [];
                         return (
                           <tr
                             key={tx.id}
@@ -2935,6 +3221,22 @@ ${meiName}`;
                                   {tx.clienteDocumento && (
                                     <span className="text-[10px] text-slate-400 font-mono mt-0.5">{tx.clienteDocumento}</span>
                                   )}
+                                  {/*
+                                    SELO DE SITUAÇÃO — só aparece em venda parcelada.
+                                    Venda à vista (a esmagadora maioria) não ganha
+                                    nenhum selo novo na tela: fica idêntica a antes.
+                                  */}
+                                  {situacao !== "quitada" && (
+                                    <span
+                                      className={`inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded-md text-[9px] font-bold w-fit uppercase tracking-wide ${
+                                        situacao === "aberta"
+                                          ? "bg-slate-100 text-slate-500"
+                                          : "bg-amber-50 text-amber-700"
+                                      }`}
+                                    >
+                                      {situacao === "aberta" ? "Aguardando recebimento" : "Parcial"}
+                                    </span>
+                                  )}
                                 </div>
                               ) : (
                                 <span className="text-slate-400 italic text-xs">Despesa Geral</span>
@@ -2944,6 +3246,23 @@ ${meiName}`;
                               <span className={`font-semibold text-sm ${isEnt ? "text-slate-900" : "text-rose-500"}`}>
                                 {isEnt ? "+" : "-"} R$ {tx.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                               </span>
+                              {/*
+                                O que falta, ao lado do que já entrou — nunca no
+                                lugar dele. Clicar chama a mesma baixa do painel
+                                "A Receber", sem precisar rolar até lá.
+                              */}
+                              {aReceber > 0 && parcelasAbertas[0] && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setBaixaEmAndamento({ venda: tx, parcela: parcelasAbertas[0] });
+                                  }}
+                                  className="block ml-auto mt-0.5 text-[10px] font-bold text-amber-700 hover:text-amber-900 hover:underline"
+                                  title="Registrar recebimento desta parcela"
+                                >
+                                  falta {aReceber.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                                </button>
+                              )}
                             </td>
                             <td className="px-8 py-5" onClick={(e) => e.stopPropagation()}>
                               <div className="flex items-center justify-center gap-1.5">
@@ -3205,10 +3524,72 @@ ${meiName}`;
             <div className="text-left">
               <h3 className="font-bold text-lg text-slate-900">Emitir nota fiscal</h3>
               <p className="text-xs text-slate-400 font-medium mt-0.5">
-                {notaEmAndamento.tx.clienteNome || "Cliente não identificado"} — {Number(notaEmAndamento.tx.valor || 0)
-                  .toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                {notaEmAndamento.tx.clienteNome || "Cliente não identificado"} —{" "}
+                {notaEmAndamento.valorEmitir.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
               </p>
             </div>
+
+            {/*
+              QUAL VALOR VAI NA NOTA — só aparece em venda parcelada.
+
+              Venda à vista nunca mostra esta escolha: o valor da nota sempre
+              foi o valor da venda, e continua sendo, sem nenhum clique extra.
+            */}
+            {(() => {
+              const parcelasRecebidas = (notaEmAndamento.tx.recebimentos || []).filter(
+                (r) => r.situacao === "recebido"
+              );
+              if (parcelasRecebidas.length < 1 || !notaEmAndamento.tx.valorTotal) return null;
+
+              const total = totalDaVenda(notaEmAndamento.tx);
+              const ehTotal = !notaEmAndamento.parcelaEmitirId;
+
+              return (
+                <div className="text-left">
+                  <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                    Valor a emitir — venda parcelada
+                  </label>
+                  <div className="mt-1.5 space-y-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setNotaEmAndamento({ ...notaEmAndamento, valorEmitir: total, parcelaEmitirId: undefined })
+                      }
+                      className={`w-full text-left rounded-xl p-2.5 border text-xs transition-colors ${
+                        ehTotal ? "bg-indigo-50 border-indigo-400" : "bg-slate-50 border-slate-200 hover:border-slate-300"
+                      }`}
+                    >
+                      <span className="font-bold text-slate-800">Valor total do serviço</span>
+                      <span className="float-right font-mono text-slate-600">
+                        {total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                      </span>
+                    </button>
+                    {parcelasRecebidas.map((r) => (
+                      <button
+                        key={r.id}
+                        type="button"
+                        onClick={() =>
+                          setNotaEmAndamento({ ...notaEmAndamento, valorEmitir: r.valor, parcelaEmitirId: r.id })
+                        }
+                        className={`w-full text-left rounded-xl p-2.5 border text-xs transition-colors ${
+                          notaEmAndamento.parcelaEmitirId === r.id
+                            ? "bg-indigo-50 border-indigo-400"
+                            : "bg-slate-50 border-slate-200 hover:border-slate-300"
+                        }`}
+                      >
+                        <span className="font-bold text-slate-800">Só {r.rotulo || "esta parcela"}</span>
+                        <span className="float-right font-mono text-slate-600">
+                          {r.valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1.5 leading-relaxed">
+                    Emitir por parcela gasta uma nota da sua cota Premium a cada recebimento.
+                  </p>
+                </div>
+              );
+            })()}
 
             {/* Servico: so aparece a escolha quando ele cadastrou mais de um */}
             {(servicosNfse || []).length > 1 ? (
@@ -3418,22 +3799,37 @@ ${meiName}`;
                 </select>
               </div>
 
-              {/* Forma de Pagamento */}
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Forma de Pagamento</label>
-                <select
-                  value={vendaFormaPagamento}
-                  onChange={(e) => setVendaFormaPagamento(e.target.value)}
-                  className="w-full border border-slate-200 rounded-xl py-2.5 px-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
-                >
-                  <option value="Pix">Pix</option>
-                  <option value="Dinheiro">Dinheiro</option>
-                  <option value="Cartão de Crédito">Cartão de Crédito</option>
-                  <option value="Cartão de Débito">Cartão de Débito</option>
-                  <option value="Boleto Bancário">Boleto Bancário</option>
-                  <option value="Transferência">Transferência Bancária (TED/DOC)</option>
-                </select>
-              </div>
+              {/*
+                Forma de Pagamento — só faz sentido na venda à vista.
+
+                Com recebimento parcelado cada parcela tem a sua forma (a
+                entrada em Pix, o saldo em boleto), e manter este seletor aqui
+                daria duas respostas para a mesma pergunta na mesma tela.
+              */}
+              {!planoVenda.parcelada && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Forma de Pagamento</label>
+                  <select
+                    value={vendaFormaPagamento}
+                    onChange={(e) => setVendaFormaPagamento(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl py-2.5 px-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                  >
+                    <option value="Pix">Pix</option>
+                    <option value="Dinheiro">Dinheiro</option>
+                    <option value="Cartão de Crédito">Cartão de Crédito</option>
+                    <option value="Cartão de Débito">Cartão de Débito</option>
+                    <option value="Boleto Bancário">Boleto Bancário</option>
+                    <option value="Transferência">Transferência Bancária (TED/DOC)</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Recebimento parcelado e comissão — ver BlocoRecebimentoVenda.tsx */}
+              <BlocoRecebimentoVenda
+                total={parseFloat(vendaValor) || 0}
+                plano={planoVenda}
+                onChange={setPlanoVenda}
+              />
 
               {/* Footer Modal */}
               <div className="pt-4 border-t border-slate-100 flex gap-3">
@@ -3455,6 +3851,16 @@ ${meiName}`;
             </form>
           </div>
         </div>
+      )}
+
+      {/* BAIXA DE RECEBIMENTO — ver ModalBaixaRecebimento.tsx */}
+      {baixaEmAndamento && (
+        <ModalBaixaRecebimento
+          venda={baixaEmAndamento.venda}
+          parcela={baixaEmAndamento.parcela}
+          onCancelar={() => setBaixaEmAndamento(null)}
+          onConfirmar={confirmarRecebimento}
+        />
       )}
 
       {/* MODAL 2: ADICIONAR DESPESA (SAÍDA/DESPESA) */}

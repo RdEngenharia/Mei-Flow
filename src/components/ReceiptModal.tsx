@@ -9,6 +9,7 @@ import { Transacao } from "../types";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { savePdfCrossPlatform, isNativePlatform } from "../utils/nativeFile";
+import { totalDaVenda, totalAReceber } from "../utils/recebimentos";
 
 interface ReceiptModalProps {
   transaction: Transacao | null;
@@ -330,6 +331,24 @@ export default function ReceiptModal({
                 R$ {transaction.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
               </p>
             </div>
+
+            {/*
+              VENDA PARCELADA — só aparece quando existe saldo em aberto.
+              `transaction.valor` já é o que entrou no caixa (é ele que a
+              caixa acima mostra); aqui só se soma o contexto: quanto era a
+              venda no total e quanto ainda falta. Recibo que escondesse isso
+              faria parecer que a venda de R$ 30.000 terminou em R$ 15.000.
+            */}
+            {isEntrada && totalAReceber(transaction) > 0 && (
+              <div className="flex justify-between items-center bg-amber-50 border border-amber-100 rounded-xl px-4 py-2.5 text-xs">
+                <span className="text-amber-800 font-semibold">
+                  Venda de {totalDaVenda(transaction).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                </span>
+                <span className="text-amber-900 font-bold">
+                  faltam {totalAReceber(transaction).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                </span>
+              </div>
+            )}
 
             {/* Informações Gerais */}
             <div className="space-y-3 text-sm">

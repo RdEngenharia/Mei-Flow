@@ -40,6 +40,12 @@ export type DadosOrcamento = {
   observacoes?: string;
   desconto?: number;
   total?: number;
+  /**
+   * Frase já pronta da condição de pagamento (ver `textoDaCondicao` em
+   * utils/recebimentos.ts). Chega como texto, não como objeto: este arquivo
+   * só desenha, quem decide o que a frase diz é uma função só, com teste.
+   */
+  condicaoPagamentoTexto?: string;
 };
 
 export type ExtrasOrcamento = {
@@ -341,6 +347,28 @@ export function desenharOrcamento(doc: any, d: DadosOrcamento, extras: ExtrasOrc
     cor(TINTA.texto);
     doc.text(usadas, M + 4, y + 9.5);
     y += altObs + 5;
+  }
+
+  // ------------------------------------------------- condição de pagamento
+  //
+  // Mesmo molde do bloco de observações, um pouco mais enxuto: é uma frase só.
+  // Só ocupa espaço na folha quando a proposta tem entrada/saldo combinados —
+  // a maioria das propostas (à vista) sai do PDF exatamente como sempre saiu.
+  const condTexto = String(d.condicaoPagamentoTexto || "").trim();
+  if (condTexto) {
+    doc.setFont("helvetica", "normal").setFontSize(7.6);
+    const linhasCond: string[] = doc.splitTextToSize(condTexto, L - 8);
+    const usadasCond = linhasCond.slice(0, 3);
+    const altCond = 8 + usadasCond.length * 3.4;
+    preenche([239, 246, 255]); // blue-50
+    traco([191, 219, 254]); // blue-200
+    doc.setLineWidth(0.2);
+    doc.roundedRect(M, y, L, altCond, 2, 2, "FD");
+    rotulo("Condição de pagamento", M + 4, y + 5);
+    doc.setFont("helvetica", "normal").setFontSize(7.6);
+    doc.setTextColor(30, 64, 175); // blue-800
+    doc.text(usadasCond, M + 4, y + 9.5);
+    y += altCond + 5;
   }
 
   // ---------------------------------------------------------- total geral
