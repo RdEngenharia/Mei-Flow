@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Boxes, Plus, Search, ArrowDownCircle, ArrowUpCircle, AlertTriangle,
   ChevronDown, ChevronRight, Trash2, X, Cloud, CloudOff, Users, Calendar,
@@ -518,6 +518,101 @@ function MovimentoLinha({ m, unidade }: { m: MovimentoEstoque; unidade: string }
 }
 
 /* ============================================================================
+   SELETOR DE CLIENTE — com busca por nome
+   ============================================================================
+   Um <select> comum vira inutilizável a partir de umas 20-30 opções: a pessoa
+   tem que rolar lendo nome por nome. Aqui é um campo de busca que filtra a
+   lista conforme digita, igual um combobox — usado tanto para escolher o
+   cliente do consumo quanto para filtrar o relatório.
+*/
+
+function SeletorCliente({
+  clientes,
+  value,
+  onChange,
+  permitirTodos,
+}: {
+  clientes: Cliente[];
+  value: string;
+  onChange: (id: string) => void;
+  /** Relatório precisa de "Todos"; o consumo precisa de um cliente de fato. */
+  permitirTodos?: boolean;
+}) {
+  const [aberto, setAberto] = useState(false);
+  const [busca, setBusca] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  const selecionado = clientes.find((c) => c.id === value);
+
+  useEffect(() => {
+    const fechar = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setAberto(false);
+    };
+    document.addEventListener("mousedown", fechar);
+    return () => document.removeEventListener("mousedown", fechar);
+  }, []);
+
+  const termo = busca.trim().toLowerCase();
+  const filtrados = termo ? clientes.filter((c) => c.nome.toLowerCase().includes(termo)) : clientes;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => { setAberto((a) => !a); setBusca(""); }}
+        className={`${campo} bg-white text-left flex items-center justify-between gap-2 cursor-pointer`}
+      >
+        <span className={selecionado ? "text-slate-800 truncate" : "text-slate-400 truncate"}>
+          {selecionado ? selecionado.nome : permitirTodos ? "Todos" : "Selecione o cliente"}
+        </span>
+        <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+      </button>
+
+      {aberto && (
+        <div className="absolute z-30 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+          <div className="p-2 border-b border-slate-100">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                autoFocus
+                type="text"
+                placeholder="Buscar por nome..."
+                value={busca}
+                onChange={(e) => setBusca(e.target.value)}
+                className="w-full pl-8 pr-2.5 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+          <div className="max-h-52 overflow-y-auto">
+            {permitirTodos && (
+              <div
+                onClick={() => { onChange(""); setAberto(false); }}
+                className="px-3.5 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 cursor-pointer"
+              >
+                Todos
+              </div>
+            )}
+            {filtrados.length === 0 ? (
+              <p className="px-3.5 py-3 text-xs text-slate-400 text-center">Nenhum cliente encontrado.</p>
+            ) : (
+              filtrados.map((c) => (
+                <div
+                  key={c.id}
+                  onClick={() => { onChange(c.id); setAberto(false); }}
+                  className={`px-3.5 py-2 text-xs cursor-pointer hover:bg-blue-50 ${c.id === value ? "bg-blue-50 font-bold text-blue-700" : "text-slate-700"}`}
+                >
+                  {c.nome}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================================
    ABA 2 — CONSUMO: a baixa vinculada a um cliente (e opcionalmente a uma venda)
    ============================================================================ */
 
@@ -586,10 +681,7 @@ function AbaConsumo({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className={rotuloCampo}><Users className="w-3 h-3 inline mr-1 -mt-0.5" />Cliente</label>
-          <select required value={clienteId} onChange={(e) => { setClienteId(e.target.value); setVendaId(""); }} className={`${campo} bg-white`}>
-            <option value="">Selecione o cliente</option>
-            {clientes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
-          </select>
+          <SeletorCliente clientes={clientes} value={clienteId} onChange={(id) => { setClienteId(id); setVendaId(""); }} />
         </div>
         <div>
           <label className={rotuloCampo}>Venda vinculada (opcional)</label>
@@ -701,10 +793,7 @@ function AbaRelatorio({ itens, clientes }: { itens: ItemEstoque[]; clientes: Cli
         </div>
         <div className="flex-1">
           <label className={rotuloCampo}>Cliente</label>
-          <select value={clienteFiltro} onChange={(e) => setClienteFiltro(e.target.value)} className={`${campo} bg-white`}>
-            <option value="">Todos</option>
-            {clientes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
-          </select>
+          <SeletorCliente clientes={clientes} value={clienteFiltro} onChange={setClienteFiltro} permitirTodos />
         </div>
       </div>
 
