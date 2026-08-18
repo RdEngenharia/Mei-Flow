@@ -160,6 +160,51 @@ export interface Transacao {
   orcamentoId?: string;
   /** Despesa de comissão aponta para a venda de origem, para o estorno achar. */
   vendaOrigemId?: string;
+  /**
+   * Distingue, entre as despesas que apontam para `vendaOrigemId`, a saída
+   * automática de comissão da compra de material lançada à mão — as duas
+   * usam o mesmo campo de ligação, mas uma nasce do sistema e a outra do
+   * usuário. Ver src/utils/composicaoValor.ts.
+   */
+  origemTipo?: "comissao" | "material";
+  /**
+   * Retrato de quanto desta venda era serviço (seu) e quanto era material, no
+   * momento em que foi lançada. Informativo: quem decide o que entra no caixa
+   * é sempre `valor`/`valorTotal`, nunca este campo. Ver
+   * src/utils/composicaoValor.ts.
+   */
+  composicao?: ComposicaoValor;
+  /** Fornecedor que fatura e recebe o material direto do cliente — ver mesmo arquivo. */
+  repasse?: RepasseFornecedor;
+}
+
+/* --------------------------------------------------------------------------
+   REPASSE AO FORNECEDOR — quando o material não passa pela sua mão
+   ==========================================================================
+
+   O CASO REAL
+
+   Projeto fotovoltaico onde o fornecedor das placas fatura e recebe do
+   cliente diretamente; o MEI só presta o serviço de instalação e manda uma
+   nota de serviço PARA O FORNECEDOR, não para o cliente final. O dinheiro do
+   material nunca passa pela mão do MEI — então ele não pode contar como
+   faturamento, nem entrar nem sair do Livro Caixa.
+
+   Isto é diferente de comprar o material e revender embutido no serviço
+   (aí o cliente paga tudo a você, e o material vira uma despesa sua comum,
+   linkável à venda via `Transacao.vendaOrigemId` + `origemTipo: "material"`).
+   -------------------------------------------------------------------------- */
+export interface RepasseFornecedor {
+  ativo: boolean;
+  /** Nome do fornecedor que fatura e recebe o material diretamente. */
+  fornecedorNome: string;
+  fornecedorDocumento?: string;
+}
+
+/** Quanto de um orçamento/venda é serviço (seu) e quanto é material. */
+export interface ComposicaoValor {
+  servico: number;
+  material: number;
 }
 
 export interface MEIProfile {
@@ -239,6 +284,21 @@ export interface Orcamento {
    * Vira comissão de verdade (a pagar) quando o orçamento vira venda.
    */
   comissao?: Comissao;
+
+  /**
+   * MATERIAL E FORNECEDOR — ver o comentário de `RepasseFornecedor` em types.ts.
+   *
+   * `mostrarComposicao` decide como a tabela de itens sai no PDF do cliente:
+   * ausente ou `true` mantém o comportamento de sempre (itens um a um, como
+   * já era antes deste recurso existir); `false` consolida tudo numa linha só
+   * com o valor total, para quem não quer expor o preço do material separado
+   * do serviço. A composição real (quanto é produto, quanto é serviço) nunca
+   * precisa ser gravada aqui — ela já está em `itens` e é recalculada na hora
+   * por `composicaoDosItens()` (utils/composicaoValor.ts).
+   */
+  mostrarComposicao?: boolean;
+  /** Fornecedor que fatura e recebe o material direto do cliente, sem passar pelo seu caixa. */
+  repasse?: RepasseFornecedor;
 
   // --------------------------------------------------------------------------
   // LEGADO — orçamentos de um item só, salvos antes de `itens` existir.

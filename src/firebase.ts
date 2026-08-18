@@ -334,7 +334,8 @@ export async function fetchTransacoesFromFirebase(meiUid: string): Promise<Trans
         clienteNome: data.clienteNome || undefined,
         clienteDocumento: data.clienteDocumento || undefined,
         formaPagamento: data.formaPagamento || 'Pix',
-        vendaOrigemId: data.vendaOrigemId || undefined
+        vendaOrigemId: data.vendaOrigemId || undefined,
+        origemTipo: data.origemTipo === 'material' || data.origemTipo === 'comissao' ? data.origemTipo : undefined
       } as Transacao;
     });
 
@@ -436,7 +437,11 @@ export async function saveTransacaoToFirebase(meiUid: string, tx: Transacao): Pr
       // Despesa de comissão aponta para a venda que a originou. Sem isto, uma
       // saída de R$ 3.000 chamada "Comissão — Carlos" não tem como voltar para
       // a venda de onde saiu quando alguém for conferir.
-      vendaOrigemId: tx.vendaOrigemId || ''
+      vendaOrigemId: tx.vendaOrigemId || '',
+      // Distingue a despesa automática de comissão da compra de material
+      // lançada à mão — as duas apontam para `vendaOrigemId`, só isto separa
+      // qual é qual. Ver utils/composicaoValor.ts.
+      origemTipo: tx.origemTipo || ''
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
@@ -704,6 +709,22 @@ export async function saveVendaToFirebase(userId: string, tx: Transacao): Promis
         : null,
       orcamentoId: tx.orcamentoId || null,
 
+      // Retrato de material × serviço, e o fornecedor que fatura o material
+      // direto ao cliente, quando existir. Ver utils/composicaoValor.ts.
+      composicao: tx.composicao
+        ? limparIndefinidos({
+            servico: Number(tx.composicao.servico) || 0,
+            material: Number(tx.composicao.material) || 0,
+          })
+        : null,
+      repasse: tx.repasse
+        ? limparIndefinidos({
+            ativo: !!tx.repasse.ativo,
+            fornecedorNome: String(tx.repasse.fornecedorNome || ''),
+            fornecedorDocumento: tx.repasse.fornecedorDocumento || undefined,
+          })
+        : null,
+
       // O createdAt de quem já existe não pode ser reescrito a cada baixa de
       // parcela: com merge, passar o valor antigo o preserva, e a ausência dele
       // numa venda nova cai no agora.
@@ -747,6 +768,8 @@ export async function fetchVendasFromFirebase(userId: string): Promise<Transacao
           : undefined,
         comissao: data.comissao && data.comissao.beneficiario ? data.comissao : undefined,
         orcamentoId: data.orcamentoId || undefined,
+        composicao: data.composicao && typeof data.composicao === 'object' ? data.composicao : undefined,
+        repasse: data.repasse && data.repasse.ativo ? data.repasse : undefined,
         createdAt: data.createdAt || undefined,
       } as any) as Transacao;
     });
@@ -840,6 +863,10 @@ export function normalizarOrcamento(o: any): Orcamento {
         }
       : undefined,
     comissao: o?.comissao && o.comissao.beneficiario ? o.comissao : undefined,
+
+    // Material e fornecedor — ver utils/composicaoValor.ts.
+    mostrarComposicao: typeof o?.mostrarComposicao === "boolean" ? o.mostrarComposicao : undefined,
+    repasse: o?.repasse && o.repasse.ativo ? o.repasse : undefined,
   };
 }
 
@@ -934,6 +961,17 @@ export async function saveOrcamentoToFirebase(userId: string, orc: Orcamento): P
             valor: Number(orc.comissao.valor) || 0,
             situacao: 'aPagar',
             observacao: orc.comissao.observacao || undefined,
+          })
+        : null,
+
+      // Material e fornecedor — `null` apaga de verdade quando desmarcado,
+      // mesmo motivo do bloco de condição de pagamento logo acima.
+      mostrarComposicao: typeof orc.mostrarComposicao === 'boolean' ? orc.mostrarComposicao : null,
+      repasse: orc.repasse
+        ? limparIndefinidos({
+            ativo: !!orc.repasse.ativo,
+            fornecedorNome: String(orc.repasse.fornecedorNome || ''),
+            fornecedorDocumento: orc.repasse.fornecedorDocumento || undefined,
           })
         : null,
 

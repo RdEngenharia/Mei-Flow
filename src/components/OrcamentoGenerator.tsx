@@ -17,8 +17,9 @@ import {
   type MensagensContato,
 } from "../utils/reguaContato";
 import { CatalogItem, Cliente, Orcamento, ItemOrcamento, SituacaoOrcamento } from "../types";
-import BlocoCondicaoPagamento, { condicaoVazia, condicaoParaSalvar, type CondicaoForm } from "./BlocoCondicaoPagamento";
+import BlocoCondicaoPagamento, { condicaoVazia, condicaoParaSalvar, repasseParaSalvar, type CondicaoForm } from "./BlocoCondicaoPagamento";
 import { entradaDaCondicao, textoDaCondicao, calcularComissao, arredondar } from "../utils/recebimentos";
+import { composicaoDosItens, itensParaExibir } from "../utils/composicaoValor";
 
 /**
  * ============================================================================
@@ -187,6 +188,8 @@ export default function OrcamentoGenerator({
   const subtotal = somaItens(itens);
   const descontoNum = Math.max(0, Number(desconto) || 0);
   const total = Math.max(0, subtotal - descontoNum);
+  /** Soma dos itens por tipo — a única fonte da divisão material/serviço. Ver BlocoCondicaoPagamento. */
+  const composicaoAtual = composicaoDosItens(itens);
 
   // --------------------------------------------------------------------------
   // CARGA E MIGRAÇÃO
@@ -334,6 +337,8 @@ export default function OrcamentoGenerator({
       situacao: "enviado",
       createdAt: new Date().toISOString(),
       condicaoPagamento,
+      mostrarComposicao: condicao.mostrarComposicao,
+      repasse: repasseParaSalvar(condicao),
       comissao: calcularComissao(
         {
           beneficiario: condicao.comBeneficiario,
@@ -501,10 +506,19 @@ export default function OrcamentoGenerator({
    * initialization" assim que alguém mexe na ordem. Declarar antes custa nada e
    * tira o risco de vez.
    */
-  const itensDaFolha = activePreviewQuote?.itens?.length
+  const itensReaisDaFolha = activePreviewQuote?.itens?.length
     ? activePreviewQuote.itens
     : normalizarOrcamento(activePreviewQuote || {}).itens || [];
-  const subtotalFolha = somaItens(itensDaFolha);
+  const subtotalFolha = somaItens(itensReaisDaFolha);
+  /**
+   * O QUE O CLIENTE VÊ NO PDF/IMPRESSÃO.
+   *
+   * `mostrarComposicao === false` consolida os itens numa linha só com o
+   * valor total — é o "o cliente vê só o valor do serviço" do repasse. Em
+   * qualquer outro caso sai exatamente como sempre saiu: item a item.
+   * Ver utils/composicaoValor.ts.
+   */
+  const itensDaFolha = itensParaExibir(itensReaisDaFolha, activePreviewQuote?.mostrarComposicao);
 
   /**
    * BAIXAR PDF — desenhado, não fotografado.
@@ -881,7 +895,7 @@ export default function OrcamentoGenerator({
               quando a proposta não tem nada marcado, então propostas simples —
               a maioria — não ganham um campo a mais para preencher.
             */}
-            <BlocoCondicaoPagamento total={total} form={condicao} onChange={setCondicao} />
+            <BlocoCondicaoPagamento total={total} form={condicao} onChange={setCondicao} composicao={composicaoAtual} />
 
             <button
               type="submit"

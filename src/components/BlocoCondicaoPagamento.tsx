@@ -20,9 +20,10 @@
  */
 
 import React from "react";
-import { HandCoins, Percent, Clock, Users } from "lucide-react";
-import type { CondicaoPagamento } from "../types";
+import { HandCoins, Percent, Clock, Users, Truck } from "lucide-react";
+import type { CondicaoPagamento, ComposicaoValor, RepasseFornecedor } from "../types";
 import { arredondar, entradaDaCondicao, textoDaCondicao } from "../utils/recebimentos";
+import { textoComposicao } from "../utils/composicaoValor";
 
 export type CondicaoForm = {
   ativa: boolean;
@@ -38,6 +39,16 @@ export type CondicaoForm = {
   comBase: "percentual" | "fixo";
   comPercentual: string;
   comValor: string;
+
+  /**
+   * MATERIAL E FORNECEDOR — ver types.ts (`RepasseFornecedor`) e
+   * utils/composicaoValor.ts. A composição em si (quanto é produto, quanto é
+   * serviço) não mora aqui: vem sempre de `itens`, recalculada na hora.
+   */
+  mostrarComposicao: boolean;
+  repasseAtiva: boolean;
+  fornecedorNome: string;
+  fornecedorDocumento: string;
 };
 
 export const condicaoVazia: CondicaoForm = {
@@ -54,6 +65,14 @@ export const condicaoVazia: CondicaoForm = {
   comBase: "percentual",
   comPercentual: "10",
   comValor: "",
+
+  // `true` por padrão: preserva o comportamento de sempre (itens um a um no
+  // PDF) para quem já usava orçamento com produto e serviço misturados antes
+  // deste recurso existir.
+  mostrarComposicao: true,
+  repasseAtiva: false,
+  fornecedorNome: "",
+  fornecedorDocumento: "",
 };
 
 const FORMAS = ["Pix", "Dinheiro", "Boleto Bancário", "Cartão de Crédito", "Cartão de Débito", "Transferência"];
@@ -83,14 +102,27 @@ export function condicaoParaSalvar(f: CondicaoForm): CondicaoPagamento | undefin
   };
 }
 
+/** Converte o formulário no repasse gravado no orçamento — ausente quando desligado. */
+export function repasseParaSalvar(f: CondicaoForm): RepasseFornecedor | undefined {
+  if (!f.repasseAtiva || !f.fornecedorNome.trim()) return undefined;
+  return {
+    ativo: true,
+    fornecedorNome: f.fornecedorNome.trim(),
+    fornecedorDocumento: f.fornecedorDocumento.trim() || undefined,
+  };
+}
+
 export default function BlocoCondicaoPagamento({
   total,
   form,
   onChange,
+  composicao,
 }: {
   total: number;
   form: CondicaoForm;
   onChange: (f: CondicaoForm) => void;
+  /** Soma dos itens por tipo (produto × serviço) — vem de `composicaoDosItens(itens)`. */
+  composicao?: ComposicaoValor;
 }) {
   const cheio = arredondar(total);
   const alterar = (m: Partial<CondicaoForm>) => onChange({ ...form, ...m });
@@ -264,6 +296,88 @@ export default function BlocoCondicaoPagamento({
           </div>
         )}
       </div>
+
+      {/*
+        ---- Material e fornecedor ----
+
+        Só aparece quando o orçamento realmente mistura produto e serviço —
+        proposta só de serviço (a maioria) não ganha campo a mais. Ver o
+        comentário de `RepasseFornecedor` em types.ts.
+      */}
+      {!!composicao && composicao.material > 0 && (
+        <div className="rounded-2xl border border-slate-200 overflow-hidden">
+          <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 space-y-1.5">
+            <span className="text-xs font-bold text-slate-700 flex items-center gap-2">
+              <Truck className="w-4 h-4 text-sky-600" />
+              Material e fornecedor
+            </span>
+            <p className="text-[11px] text-slate-500 font-semibold">
+              {textoComposicao(composicao)}
+            </p>
+          </div>
+
+          <div className="p-4 space-y-4">
+            <button
+              type="button"
+              onClick={() => alterar({ mostrarComposicao: !form.mostrarComposicao })}
+              className="w-full flex items-center justify-between gap-3 text-left"
+            >
+              <span className="text-[11px] font-bold text-slate-600">
+                Mostrar material e serviço separados para o cliente no PDF
+              </span>
+              <span className={`w-9 h-5 rounded-full p-0.5 transition-all shrink-0 ${form.mostrarComposicao ? "bg-sky-600" : "bg-slate-300"}`}>
+                <span className={`block w-4 h-4 bg-white rounded-full shadow-sm transition-all ${form.mostrarComposicao ? "translate-x-4" : ""}`} />
+              </span>
+            </button>
+            <p className="text-[10px] text-slate-400 leading-relaxed -mt-2">
+              {form.mostrarComposicao
+                ? "O cliente vê os itens um a um, como já era."
+                : "O cliente vê só o valor total do projeto, numa linha só — sem o preço do material aparecer separado."}
+            </p>
+
+            <div className="border-t border-slate-100 pt-3">
+              <button
+                type="button"
+                onClick={() => alterar({ repasseAtiva: !form.repasseAtiva })}
+                className="w-full flex items-center justify-between gap-3 text-left"
+              >
+                <span className="text-[11px] font-bold text-slate-600">
+                  O fornecedor fatura e recebe o material direto do cliente (repasse)
+                </span>
+                <span className={`w-9 h-5 rounded-full p-0.5 transition-all shrink-0 ${form.repasseAtiva ? "bg-sky-600" : "bg-slate-300"}`}>
+                  <span className={`block w-4 h-4 bg-white rounded-full shadow-sm transition-all ${form.repasseAtiva ? "translate-x-4" : ""}`} />
+                </span>
+              </button>
+
+              {form.repasseAtiva && (
+                <div className="mt-3 space-y-3">
+                  <div>
+                    <label className={rotulo}>Nome do fornecedor</label>
+                    <input
+                      type="text" placeholder="Quem fatura e recebe o material"
+                      value={form.fornecedorNome} onChange={(e) => alterar({ fornecedorNome: e.target.value })}
+                      className={campo}
+                    />
+                  </div>
+                  <div>
+                    <label className={rotulo}>CNPJ/CPF do fornecedor (opcional)</label>
+                    <input
+                      type="text" placeholder="Só para referência sua"
+                      value={form.fornecedorDocumento} onChange={(e) => alterar({ fornecedorDocumento: e.target.value })}
+                      className={campo}
+                    />
+                  </div>
+                  <div className="rounded-xl bg-sky-50 border border-sky-100 p-3 text-[11px] font-semibold text-sky-900 leading-relaxed">
+                    Só {emReais(composicao.servico)} vai entrar no seu Livro Caixa quando esta proposta virar
+                    venda. O material ({emReais(composicao.material)}) nunca passa pela sua mão — emita a nota de
+                    serviço para {form.fornecedorNome.trim() || "o fornecedor"}, não para o cliente.
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

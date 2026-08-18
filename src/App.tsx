@@ -47,7 +47,8 @@ import {
 
 import { Cliente, Transacao, CatalogItem, Orcamento, Recebimento } from "./types";
 import ReceiptModal from "./components/ReceiptModal";
-import BlocoRecebimentoVenda, { planoVendaVazio, type PlanoVendaForm } from "./components/BlocoRecebimentoVenda";
+import BlocoRecebimentoVenda, { planoVendaVazio, composicaoParaSalvar, type PlanoVendaForm } from "./components/BlocoRecebimentoVenda";
+import { composicaoDosItens, valorParaCaixa } from "./utils/composicaoValor";
 import PainelAReceber from "./components/PainelAReceber";
 import ModalBaixaRecebimento from "./components/ModalBaixaRecebimento";
 import CentralNotificacoes from "./components/CentralNotificacoes";
@@ -484,6 +485,12 @@ export default function App() {
   const [despesaCategoria, setDespesaCategoria] = useState("Infraestrutura");
   const [despesaData, setDespesaData] = useState(hojeBR());
   const [despesaFormaPagamento, setDespesaFormaPagamento] = useState("Pix");
+  /**
+   * Vincula a compra de material a uma venda, para depois enxergar a margem
+   * líquida (o que entrou, menos comissão e menos este custo). Ver
+   * utils/composicaoValor.ts, `custoMaterialDaVenda`.
+   */
+  const [despesaVendaVinculada, setDespesaVendaVinculada] = useState("");
 
   // Campos de novos clientes
   const [cliNome, setCliNome] = useState("");
@@ -1414,8 +1421,17 @@ export default function App() {
            * mesma trava — o comportamento continua idempotente.
            */
           lancamentoId: parcelaEmitirId ? `${tx.id}__${parcelaEmitirId}` : tx.id,
-          clienteNome: tx.clienteNome || "",
-          clienteDocumento: tx.clienteDocumento || "",
+          /*
+           * ⚠️ REPASSE ATIVO: A NOTA VAI PARA O FORNECEDOR, NÃO PARA O CLIENTE.
+           *
+           * Com repasse, o material foi faturado e recebido direto pelo
+           * fornecedor — quem te paga o serviço é ele, não o cliente final.
+           * A nota de serviço tem que ter o fornecedor como tomador, senão
+           * sai um documento fiscal para quem nunca te pagou nada. Ver
+           * types.ts (RepasseFornecedor) e utils/composicaoValor.ts.
+           */
+          clienteNome: tx.repasse?.ativo ? (tx.repasse.fornecedorNome || "") : (tx.clienteNome || ""),
+          clienteDocumento: tx.repasse?.ativo ? (tx.repasse.fornecedorDocumento || "") : (tx.clienteDocumento || ""),
           valor: valorEmitir,
           // O que o usuário escreveu na janela — e não o texto automático do
           // lançamento, que costuma ser "Recebimento de FULANO".
@@ -1954,17 +1970,30 @@ ${meiName}`;
 
     const selectedClient = clientes.find(c => c.id === vendaClienteId);
 
+    /*
+     * MATERIAL E FORNECEDOR — ver BlocoRecebimentoVenda.tsx.
+     *
+     * Com repasse ativo, só o serviço é seu dinheiro: o material nunca passa
+     * pela sua mão, o fornecedor faturou e recebeu direto do cliente. Por
+     * isso `valorCaixa` (não `valorNum`) é o que alimenta o plano de
+     * recebimento e o valor inicial da venda daqui para baixo.
+     */
+    const { composicao, repasse } = composicaoParaSalvar(planoVenda, valorNum);
+    const valorCaixa = valorParaCaixa(valorNum, composicao, repasse);
+
     let novaVenda: Transacao = {
       id: `tx_${Date.now().toString().slice(-6)}`,
       tipo: "entrada",
-      valor: valorNum,
+      valor: valorCaixa,
       data: vendaData,
       descricao: vendaDescricao,
       categoria: vendaCategoria,
       clienteId: selectedClient?.id,
       clienteNome: selectedClient?.nome || "Consumidor Geral",
       clienteDocumento: selectedClient?.documento,
-      formaPagamento: vendaFormaPagamento
+      formaPagamento: vendaFormaPagamento,
+      composicao,
+      repasse,
     };
 
     /*
@@ -1972,9 +2001,10 @@ ${meiName}`;
      * O PLANO DE RECEBIMENTO
      * ==========================================================================
      *
-     * `valorNum` é o valor CHEIO da venda — foi o que a pessoa digitou. Quem
-     * decide o que vai para o caixa é `aplicarRecebimentos`, e só ela: em venda
-     * parcelada `novaVenda.valor` passa a ser apenas a entrada.
+     * `valorCaixa` é o valor CHEIO que é seu — o que a pessoa digitou, menos o
+     * material repassado ao fornecedor, quando existir. Quem decide o que vai
+     * para o caixa é `aplicarRecebimentos`, e só ela: em venda parcelada
+     * `novaVenda.valor` passa a ser apenas a entrada.
      *
      * Venda à vista não entra aqui e sai deste bloco exatamente como entrou —
      * sem `recebimentos`, sem `valorTotal`, idêntica a tudo que já foi gravado
@@ -1984,7 +2014,7 @@ ${meiName}`;
       novaVenda = aplicarRecebimentos(
         novaVenda,
         montarPlano({
-          total: valorNum,
+          total: valorCaixa,
           entrada: arredondar(String(planoVenda.entradaValor).replace(",", ".")),
           formaEntrada: planoVenda.formaEntrada,
           formaSaldo: planoVenda.formaSaldo,
@@ -2006,7 +2036,7 @@ ${meiName}`;
           valorFixo: arredondar(String(planoVenda.comValor).replace(",", ".")),
           sobre: planoVenda.comSobre,
         },
-        { total: valorNum, recebido: novaVenda.valor }
+        { total: valorCaixa, recebido: novaVenda.valor }
       );
       if (comissao) novaVenda.comissao = comissao;
     }
@@ -2157,11 +2187,24 @@ ${meiName}`;
    * Devolve o id da venda, que o gerador guarda no orçamento.
    */
   const converterOrcamentoEmVenda = async (orc: any): Promise<string | null> => {
-    const valor = Number(orc?.total || 0);
-    if (!valor || valor <= 0) {
+    const totalOrcamento = Number(orc?.total || 0);
+    if (!totalOrcamento || totalOrcamento <= 0) {
       triggerToast("⚠ Este orçamento está sem valor. Confira os itens antes de lançar.");
       return null;
     }
+
+    /*
+     * REPASSE AO FORNECEDOR — só o serviço é seu dinheiro.
+     *
+     * A composição (quanto é produto, quanto é serviço) vem sempre dos itens
+     * do orçamento, nunca de um número guardado à parte. Com repasse ativo, o
+     * que entra no seu Livro Caixa é só o valor de serviço — o material nunca
+     * passou pela sua mão, o fornecedor faturou e recebeu direto do cliente.
+     * Ver utils/composicaoValor.ts.
+     */
+    const composicao = composicaoDosItens(orc?.itens);
+    const repasse = orc?.repasse?.ativo ? orc.repasse : undefined;
+    const valor = valorParaCaixa(totalOrcamento, composicao, repasse);
 
     const hoje = new Date();
     const dataBR = `${String(hoje.getDate()).padStart(2, "0")}/${String(hoje.getMonth() + 1).padStart(2, "0")}/${hoje.getFullYear()}`;
@@ -2187,6 +2230,8 @@ ${meiName}`;
       clienteDocumento: orc?.clienteDocumento,
       formaPagamento: "A combinar",
       orcamentoId: String(orc?.id || "") || undefined,
+      composicao: composicao.servico > 0 && composicao.material > 0 ? composicao : undefined,
+      repasse,
     };
 
     /*
@@ -2242,7 +2287,10 @@ ${meiName}`;
       data: despesaData,
       descricao: despesaDescricao,
       categoria: despesaCategoria,
-      formaPagamento: despesaFormaPagamento
+      formaPagamento: despesaFormaPagamento,
+      // Vincula a compra de material a uma venda, para depois enxergar a
+      // margem líquida dela. Ver utils/composicaoValor.ts.
+      ...(despesaVendaVinculada ? { vendaOrigemId: despesaVendaVinculada, origemTipo: "material" as const } : {}),
     };
 
     if (user) {
@@ -2264,6 +2312,7 @@ ${meiName}`;
     setDespesaValor("");
     setDespesaDescricao("");
     setDespesaFormaPagamento("Pix");
+    setDespesaVendaVinculada("");
     setShowDespesaModal(false);
   };
 
@@ -3269,6 +3318,19 @@ ${meiName}`;
                                       {situacao === "aberta" ? "Aguardando recebimento" : "Parcial"}
                                     </span>
                                   )}
+                                  {/*
+                                    SELO DE REPASSE — o material desta venda não é seu
+                                    dinheiro. Ver types.ts (RepasseFornecedor) e
+                                    utils/composicaoValor.ts.
+                                  */}
+                                  {tx.repasse?.ativo && (
+                                    <span
+                                      className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded-md text-[9px] font-bold w-fit uppercase tracking-wide bg-sky-50 text-sky-700"
+                                      title={`Material faturado direto por ${tx.repasse.fornecedorNome || "o fornecedor"} — não entra no seu caixa`}
+                                    >
+                                      Repasse: {tx.repasse.fornecedorNome || "fornecedor"}
+                                    </span>
+                                  )}
                                 </div>
                               ) : (
                                 <span className="text-slate-400 italic text-xs">Despesa Geral</span>
@@ -3556,9 +3618,21 @@ ${meiName}`;
             <div className="text-left">
               <h3 className="font-bold text-lg text-slate-900">Emitir nota fiscal</h3>
               <p className="text-xs text-slate-400 font-medium mt-0.5">
-                {notaEmAndamento.tx.clienteNome || "Cliente não identificado"} —{" "}
+                {notaEmAndamento.tx.repasse?.ativo
+                  ? (notaEmAndamento.tx.repasse.fornecedorNome || "Fornecedor não identificado")
+                  : (notaEmAndamento.tx.clienteNome || "Cliente não identificado")} —{" "}
                 {notaEmAndamento.valorEmitir.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
               </p>
+              {/*
+                REPASSE ATIVO — o tomador da nota é o fornecedor, não o
+                cliente final da venda. Sem este aviso, o usuário estranharia
+                ver um nome diferente do que cadastrou na venda.
+              */}
+              {notaEmAndamento.tx.repasse?.ativo && (
+                <p className="mt-1.5 text-[10px] font-bold text-sky-700 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1 inline-block">
+                  Repasse ativo: a nota vai para o fornecedor, que é quem te paga esta venda — não para {notaEmAndamento.tx.clienteNome || "o cliente final"}.
+                </p>
+              )}
             </div>
 
             {/*
@@ -3971,6 +4045,8 @@ ${meiName}`;
                   <option value="Infraestrutura">Infraestrutura & Domínios</option>
                   <option value="Impostos">Impostos (Guia DAS MEI)</option>
                   <option value="Equipamentos">Equipamentos & Ferramentas</option>
+                  <option value="Materiais">Materiais (compra para revenda/instalação)</option>
+                  <option value="Comissões">Comissões</option>
                   <option value="Softwares">Softwares e Ferramentas</option>
                   <option value="Outros">Outros Encargos Financeiros</option>
                 </select>
@@ -3991,6 +4067,37 @@ ${meiName}`;
                   <option value="Boleto Bancário">Boleto Bancário</option>
                   <option value="Transferência">Transferência Bancária (TED/DOC)</option>
                 </select>
+              </div>
+
+              {/*
+                VINCULAR A UMA VENDA — opcional, para o material comprado por
+                você e revendido embutido no serviço. Some da margem líquida
+                da venda (utils/composicaoValor.ts, `custoMaterialDaVenda`)
+                assim que você linkar aqui. Não confundir com repasse: isto é
+                para quando o dinheiro do cliente passou pela sua mão.
+              */}
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                  Vincular a uma venda (opcional)
+                </label>
+                <select
+                  value={despesaVendaVinculada}
+                  onChange={(e) => setDespesaVendaVinculada(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl py-2.5 px-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+                >
+                  <option value="">Nenhuma — despesa geral</option>
+                  {transacoes
+                    .filter((t) => t.tipo === "entrada")
+                    .slice(0, 40)
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.data} — {t.clienteNome || "Cliente"} ({t.descricao.slice(0, 40)})
+                      </option>
+                    ))}
+                </select>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Use quando este gasto for a compra do material desta venda — assim dá para ver a margem líquida real dela depois.
+                </p>
               </div>
 
                {/* Footer Modal */}
@@ -4288,13 +4395,17 @@ ${meiName}`;
                 <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block font-sans">Dados de preenchimento rápido</span>
                 <div className="grid grid-cols-2 gap-3 text-xs">
                   <div>
-                    <span className="text-slate-400 block text-[10px] font-medium">Cliente (Tomador)</span>
+                    <span className="text-slate-400 block text-[10px] font-medium">
+                      {focusNfeSelectedTx.repasse?.ativo ? "Fornecedor (Tomador — repasse)" : "Cliente (Tomador)"}
+                    </span>
                     <strong className="text-slate-700 font-semibold truncate block max-w-full">
-                      {focusNfeSelectedTx.clienteNome || "Consumidor Geral"}
+                      {focusNfeSelectedTx.repasse?.ativo
+                        ? (focusNfeSelectedTx.repasse.fornecedorNome || "Fornecedor não identificado")
+                        : (focusNfeSelectedTx.clienteNome || "Consumidor Geral")}
                     </strong>
-                    {focusNfeSelectedTx.clienteDocumento && (
+                    {(focusNfeSelectedTx.repasse?.ativo ? focusNfeSelectedTx.repasse.fornecedorDocumento : focusNfeSelectedTx.clienteDocumento) && (
                       <span className="text-slate-400 font-mono text-[9px] block">
-                        Doc: {focusNfeSelectedTx.clienteDocumento}
+                        Doc: {focusNfeSelectedTx.repasse?.ativo ? focusNfeSelectedTx.repasse.fornecedorDocumento : focusNfeSelectedTx.clienteDocumento}
                       </span>
                     )}
                   </div>

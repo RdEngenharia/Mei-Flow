@@ -350,6 +350,27 @@ export default function ReceiptModal({
               </div>
             )}
 
+            {/*
+              MATERIAL E FORNECEDOR — só aparece quando esta venda tem repasse
+              ativo. Lembrete visual de que o valor lançado aqui já é só o seu
+              serviço; o material foi faturado direto pelo fornecedor. Ver
+              types.ts (RepasseFornecedor) e utils/composicaoValor.ts.
+            */}
+            {isEntrada && transaction.repasse?.ativo && (
+              <div className="bg-sky-50 border border-sky-100 rounded-xl px-4 py-2.5 text-xs space-y-0.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-sky-800 font-semibold">Repasse direto ao fornecedor</span>
+                  <span className="text-sky-900 font-bold">{transaction.repasse.fornecedorNome}</span>
+                </div>
+                {transaction.composicao && transaction.composicao.material > 0 && (
+                  <p className="text-sky-700/80">
+                    Material de {transaction.composicao.material.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} faturado
+                    direto ao cliente — não entra neste valor.
+                  </p>
+                )}
+              </div>
+            )}
+
             {/* Informações Gerais */}
             <div className="space-y-3 text-sm">
               <div className="flex justify-between py-1 border-b border-slate-100">
