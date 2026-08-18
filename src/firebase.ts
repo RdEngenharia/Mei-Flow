@@ -41,7 +41,7 @@ import {
 
 // Carrega as configurações geradas pelo console do AI Studio / Firebase Blueprints
 import firebaseConfigImport from '../firebase-applet-config.json';
-import { Cliente, Transacao, Orcamento, ItemOrcamento } from './types';
+import { Cliente, Transacao, Orcamento, ItemOrcamento, ItemEstoque } from './types';
 // Converte a venda gravada em qualquer época para o formato atual, na leitura.
 import { normalizarVenda } from './utils/recebimentos';
 import { cadastrarEmpresaFocusNFe, CadastroEmpresaPayload } from './focusNFeService';
@@ -989,6 +989,91 @@ export async function deleteOrcamentoFromFirebase(userId: string, orcamentoId: s
   const path = `usuarios/${userId}/orcamentos/${orcamentoId}`;
   try {
     await deleteDoc(doc(db, 'usuarios', userId, 'orcamentos', orcamentoId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+    throw error;
+  }
+}
+
+/* ==========================================================================
+   ESTOQUE — itens e suas movimentações (compra e consumo por cliente)
+   ==========================================================================
+   Mesmo cuidado dos blocos de venda e orçamento acima: `movimentos` é uma
+   lista de objetos com campos opcionais (cliente, venda, observação), então
+   cada um passa por `limparIndefinidos` antes de subir — Firestore recusa
+   `undefined`. Ver src/utils/estoque.ts para quem escreve quantidade/custo.
+   ========================================================================== */
+
+/** Lista os itens do estoque do usuário, em ordem alfabética. */
+export async function fetchEstoqueFromFirebase(userId: string): Promise<ItemEstoque[]> {
+  const path = `usuarios/${userId}/estoque`;
+  try {
+    const colRef = collection(db, 'usuarios', userId, 'estoque');
+    const snapshot = await getDocs(colRef);
+    return snapshot.docs
+      .map((docSnap) => {
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          nome: String(data.nome || ''),
+          unidade: data.unidade || 'un',
+          categoria: data.categoria || undefined,
+          estoqueMinimo: typeof data.estoqueMinimo === 'number' ? data.estoqueMinimo : undefined,
+          quantidadeAtual: Number(data.quantidadeAtual) || 0,
+          custoMedio: Number(data.custoMedio) || 0,
+          movimentos: Array.isArray(data.movimentos) ? data.movimentos : [],
+          createdAt: data.createdAt || new Date().toISOString(),
+          atualizadoEm: data.atualizadoEm || undefined,
+        } as ItemEstoque;
+      })
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+    return [];
+  }
+}
+
+/** Cria ou atualiza um item do estoque — a mesma função grava a criação e cada movimentação seguinte. */
+export async function saveItemEstoqueToFirebase(userId: string, item: ItemEstoque): Promise<void> {
+  const path = `usuarios/${userId}/estoque/${item.id}`;
+  try {
+    const docRef = doc(db, 'usuarios', userId, 'estoque', item.id);
+    await setDoc(docRef, {
+      id: item.id,
+      nome: item.nome,
+      unidade: item.unidade,
+      categoria: item.categoria || '',
+      estoqueMinimo: typeof item.estoqueMinimo === 'number' ? item.estoqueMinimo : null,
+      quantidadeAtual: Number(item.quantidadeAtual) || 0,
+      custoMedio: Number(item.custoMedio) || 0,
+      movimentos: (item.movimentos || []).map((m) =>
+        limparIndefinidos({
+          id: m.id,
+          tipo: m.tipo === 'saida' ? 'saida' : 'entrada',
+          quantidade: Number(m.quantidade) || 0,
+          data: m.data,
+          custoUnitario: Number(m.custoUnitario) || 0,
+          valorTotal: Number(m.valorTotal) || 0,
+          clienteId: m.clienteId || undefined,
+          clienteNome: m.clienteNome || undefined,
+          vendaId: m.vendaId || undefined,
+          observacao: m.observacao || undefined,
+        })
+      ),
+      createdAt: item.createdAt || new Date().toISOString(),
+      atualizadoEm: new Date().toISOString(),
+    }, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+    throw error;
+  }
+}
+
+/** Remove um item do estoque — só faz sentido para um item cadastrado por engano, sem movimentação real. */
+export async function deleteItemEstoqueFromFirebase(userId: string, itemId: string): Promise<void> {
+  const path = `usuarios/${userId}/estoque/${itemId}`;
+  try {
+    await deleteDoc(doc(db, 'usuarios', userId, 'estoque', itemId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
     throw error;

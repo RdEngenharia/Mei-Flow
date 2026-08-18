@@ -1,0 +1,128 @@
+/**
+ * ============================================================================
+ * TESTES DO ESTOQUE
+ * ============================================================================
+ * Rodar: npx tsx src/utils/estoque.test.ts
+ *
+ * O que precisa continuar verdade, em ordem de gravidade:
+ * 1. O custo médio pondera direito quando chega material por preço diferente.
+ * 2. Uma saída usa o custo médio do MOMENTO, e ele fica congelado depois.
+ * 3. Saldo pode ficar negativo — não é bug, é a baixa acontecendo antes da
+ *    entrada ser lançada.
+ * 4. O relatório por cliente soma certo e nunca mistura a venda errada.
+ */
+
+import {
+  criarItemEstoque,
+  registrarEntrada,
+  registrarSaida,
+  estoqueSuficiente,
+  valorEmEstoque,
+  valorTotalEstoque,
+  itensComEstoqueBaixo,
+  buscarItens,
+  baixasNoPeriodo,
+  totalBaixasPorCliente,
+  custoMaterialDaVenda,
+} from "./estoque";
+import type { ItemEstoque } from "../types";
+
+let passou = 0;
+let falhou = 0;
+function t(nome: string, condicao: boolean, detalhe?: unknown) {
+  if (condicao) passou++;
+  else {
+    falhou++;
+    console.error(`  ✗ ${nome}${detalhe !== undefined ? `\n      obtido: ${JSON.stringify(detalhe)}` : ""}`);
+  }
+}
+function bloco(titulo: string) { console.log(`\n${titulo}`); }
+
+/* ========================================================================== */
+bloco("Criar item");
+
+const vazio = criarItemEstoque({ nome: "Disjuntor 20A", unidade: "un" });
+t("nasce zerado", vazio.quantidadeAtual === 0 && vazio.custoMedio === 0 && vazio.movimentos.length === 0);
+t("nome sem espaço nas pontas", criarItemEstoque({ nome: "  Cabo 2.5mm  ", unidade: "m" }).nome === "Cabo 2.5mm");
+
+/* ========================================================================== */
+bloco("Entrada — custo médio ponderado");
+
+let item = criarItemEstoque({ nome: "Disjuntor 20A", unidade: "un" });
+item = registrarEntrada(item, { quantidade: 10, custoUnitario: 20, data: "01/08/2026" });
+t("primeira compra: quantidade e custo médio batem com o que foi pago", item.quantidadeAtual === 10 && item.custoMedio === 20);
+
+item = registrarEntrada(item, { quantidade: 10, custoUnitario: 30, data: "05/08/2026" });
+// (10*20 + 10*30) / 20 = 25
+t("segunda compra por preço diferente pondera certo", item.quantidadeAtual === 20 && item.custoMedio === 25, item);
+t("cada entrada vira uma movimentação", item.movimentos.filter((m) => m.tipo === "entrada").length === 2);
+t("entrada de quantidade zero ou negativa não faz nada", registrarEntrada(item, { quantidade: 0, custoUnitario: 10 }).movimentos.length === item.movimentos.length);
+
+/* ========================================================================== */
+bloco("Saída — consumo por cliente");
+
+let saida = registrarSaida(item, { quantidade: 4, clienteId: "c1", clienteNome: "Carlos", vendaId: "v1", data: "10/08/2026" });
+t("desconta a quantidade", saida.quantidadeAtual === 16);
+t("usa o custo médio do momento (25), não o preço de nenhuma compra específica", saida.movimentos.at(-1)?.custoUnitario === 25);
+t("valor total da baixa é quantidade × custo médio", saida.movimentos.at(-1)?.valorTotal === 100);
+t("guarda o cliente e a venda", saida.movimentos.at(-1)?.clienteId === "c1" && saida.movimentos.at(-1)?.vendaId === "v1");
+
+// Uma entrada depois da saída não deve mudar o custo já congelado na saída anterior.
+let comNovaEntrada = registrarEntrada(saida, { quantidade: 10, custoUnitario: 100, data: "15/08/2026" });
+t("custo da saída antiga não muda quando chega uma entrada nova", comNovaEntrada.movimentos.find((m) => m.tipo === "saida")?.custoUnitario === 25);
+
+t("saída de quantidade zero não faz nada", registrarSaida(item, { quantidade: 0 }).movimentos.length === item.movimentos.length);
+
+t("estoqueSuficiente diz a verdade antes de baixar", estoqueSuficiente(item, 20) && !estoqueSuficiente(item, 21));
+
+let saldoNegativo = registrarSaida(item, { quantidade: 999, clienteNome: "Cliente ansioso" });
+t("saldo pode ficar negativo — é a verdade, não um bug escondido", saldoNegativo.quantidadeAtual < 0, saldoNegativo.quantidadeAtual);
+
+/* ========================================================================== */
+bloco("Valor em estoque");
+
+t("valor do item é quantidade × custo médio", valorEmEstoque(item) === item.quantidadeAtual * item.custoMedio);
+
+const outroItem = registrarEntrada(criarItemEstoque({ nome: "Cabo 2.5mm", unidade: "m" }), { quantidade: 100, custoUnitario: 2 });
+t("valor total do estoque soma todos os itens", valorTotalEstoque([item, outroItem]) === valorEmEstoque(item) + valorEmEstoque(outroItem));
+
+/* ========================================================================== */
+bloco("Estoque baixo e busca");
+
+const comMinimo = { ...criarItemEstoque({ nome: "Fita isolante", unidade: "un", estoqueMinimo: 5 }), quantidadeAtual: 3 };
+const semMinimo = { ...criarItemEstoque({ nome: "Parafuso", unidade: "un" }), quantidadeAtual: 1 };
+t("só entra quem tem mínimo definido e está no limite ou abaixo", itensComEstoqueBaixo([comMinimo, semMinimo]).length === 1);
+
+t("busca ignora maiúscula/minúscula", buscarItens([item, outroItem], "disjuntor").length === 1);
+t("busca vazia devolve tudo", buscarItens([item, outroItem], "").length === 2);
+t("busca sem resultado devolve lista vazia", buscarItens([item, outroItem], "xyz123").length === 0);
+
+/* ========================================================================== */
+bloco("Relatório — baixas por período e por cliente");
+
+const itensRelatorio: ItemEstoque[] = [
+  registrarSaida(
+    registrarSaida(
+      registrarEntrada(criarItemEstoque({ nome: "Disjuntor", unidade: "un" }), { quantidade: 50, custoUnitario: 10 }),
+      { quantidade: 5, clienteId: "c1", clienteNome: "Carlos", vendaId: "v1", data: "05/08/2026" }
+    ),
+    { quantidade: 3, clienteId: "c2", clienteNome: "Maria", data: "10/08/2026" }
+  ),
+];
+
+const todasBaixas = baixasNoPeriodo(itensRelatorio);
+t("pega as duas baixas quando não filtra período", todasBaixas.length === 2);
+t("mais recente vem primeiro", todasBaixas[0]?.movimento.clienteNome === "Maria");
+
+const soAgosto5 = baixasNoPeriodo(itensRelatorio, "2026-08-05", "2026-08-05");
+t("filtro de período pega só o dia certo", soAgosto5.length === 1 && soAgosto5[0].movimento.clienteNome === "Carlos");
+
+const porCliente = totalBaixasPorCliente(todasBaixas);
+t("agrupa por cliente com o total certo", porCliente.find((c) => c.clienteNome === "Carlos")?.total === 50);
+t("maior valor vem primeiro", porCliente[0]?.clienteNome === "Carlos");
+
+t("custo do material de uma venda soma só as baixas daquela venda", custoMaterialDaVenda("v1", itensRelatorio) === 50);
+t("venda sem baixa vinculada dá zero", custoMaterialDaVenda("v_inexistente", itensRelatorio) === 0);
+
+console.log(`\n${falhou === 0 ? "✓" : "✗"} ${passou} passaram, ${falhou} falharam\n`);
+if (falhou > 0) process.exit(1);

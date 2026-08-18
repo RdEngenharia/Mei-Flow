@@ -312,3 +312,73 @@ export interface Orcamento {
   itemValor?: number;
 }
 
+/* ==========================================================================
+   ESTOQUE — o material que entra na compra e sai na instalação
+   ==========================================================================
+
+   O PEDIDO
+
+   Comprar material para uma instalação, guardar no estoque, e ir dando baixa
+   conforme usa em cada cliente — sabendo a qualquer momento quanto tem de
+   cada item e quanto isso vale em dinheiro parado.
+
+   COMO O NÚMERO SE MANTÉM CERTO
+
+   Cada item guarda sua própria lista de movimentações — igual aos
+   recebimentos de uma venda: uma entrada por compra, uma saída por baixa.
+   `quantidadeAtual` e `custoMedio` são sempre a CONSEQUÊNCIA dessa lista,
+   nunca digitados à mão soltos — é a função `registrarEntrada`/`registrarSaida`
+   (utils/estoque.ts) que garante isso, do mesmo jeito que `aplicarRecebimentos`
+   garante o invariante de uma venda parcelada.
+
+   `custoMedio` é uma média ponderada: cada entrada mistura o que já tinha com
+   o que acabou de chegar, na proporção certa. Uma saída sempre usa o custo
+   médio do momento — congelado na movimentação, para o histórico não mudar
+   de valor com o tempo.
+
+   POR QUE A SAÍDA PODE FICAR NEGATIVA
+
+   Se alguém baixa mais do que tinha registrado (esqueceu de lançar uma
+   compra, por exemplo), o sistema não trava — mostra o número negativo, que é
+   a verdade: falta uma entrada para lançar. Esconder isso arredondando para
+   zero esconderia o problema, não resolveria.
+   ========================================================================== */
+
+export type UnidadeEstoque = "un" | "m" | "kg" | "l" | "cx" | "rolo" | "pc";
+
+/** Uma entrada (compra) ou saída (consumo numa instalação) de um item do estoque. */
+export interface MovimentoEstoque {
+  id: string;
+  tipo: "entrada" | "saida";
+  quantidade: number;
+  /** dd/mm/aaaa */
+  data: string;
+  /** Entrada: o que foi pago por unidade. Saída: o custo médio no momento, congelado. */
+  custoUnitario: number;
+  /** quantidade × custoUnitario, congelado — não recalcula se o custo médio mudar depois. */
+  valorTotal: number;
+  /** Só em saída: para quem foi usado. */
+  clienteId?: string;
+  clienteNome?: string;
+  /** Só em saída: a venda que este consumo abasteceu, quando existir. */
+  vendaId?: string;
+  observacao?: string;
+}
+
+export interface ItemEstoque {
+  id: string;
+  nome: string;
+  unidade: UnidadeEstoque;
+  categoria?: string;
+  /** Abaixo disto, o item entra no aviso de estoque baixo. Ausente = sem aviso. */
+  estoqueMinimo?: number;
+
+  // ---- Sempre calculados por registrarEntrada/registrarSaida — nunca escreva à mão. ----
+  quantidadeAtual: number;
+  custoMedio: number;
+  movimentos: MovimentoEstoque[];
+
+  createdAt: string;
+  atualizadoEm?: string;
+}
+

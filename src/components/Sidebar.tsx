@@ -1,7 +1,7 @@
 import React from "react";
 import {
   LayoutDashboard, Users, BookOpen, FileText, Package,
-  Building, Calendar, Receipt, X, Crown, Barcode, FolderArchive, Landmark, UserCog,
+  Building, Calendar, Receipt, X, Crown, Barcode, FolderArchive, Landmark, UserCog, Boxes,
 } from "lucide-react";
 
 /**
@@ -42,7 +42,8 @@ export type TelaMeiFlow =
   | "notafiscal"
   | "arquivos"
   | "banco"
-  | "usuarios";
+  | "usuarios"
+  | "estoque";
 
 /**
  * ============================================================================
@@ -167,6 +168,7 @@ export default function Sidebar({
     { id: "orcamentos", rotulo: "Orçamentos", icone: FileText, grupo: "trabalho" },
     { id: "cobrancas", rotulo: "Cobranças e boletos", icone: Barcode, bloqueado: free, grupo: "trabalho", acao: onEmitirBoleto },
     { id: "financeiro", rotulo: "Livro Caixa", icone: BookOpen, contador: totalLancamentos, grupo: "trabalho" },
+    { id: "estoque", rotulo: "Estoque", icone: Boxes, grupo: "trabalho" },
 
     // Cadastros
     { id: "clientes", rotulo: "Clientes", icone: Users, contador: totalClientes, grupo: "cadastro" },

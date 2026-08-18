@@ -81,6 +81,7 @@ import UpgradeModal from "./components/UpgradeModal";
 import CnpjOnboarding from "./components/CnpjOnboarding";
 import CatalogManager from "./components/CatalogManager";
 import OrcamentoGenerator from "./components/OrcamentoGenerator";
+import EstoquePanel from "./components/EstoquePanel";
 import DasModal from "./components/DasModal";
 import DasnModal from "./components/DasnModal";
 import ArquivoDigitalMei from "./components/ArquivoDigitalMei";
@@ -127,7 +128,7 @@ export default function App() {
   // Controle de Navegação por Abas/Módulos
   const [currentView, setCurrentView] = useState<
     | "home" | "clientes" | "financeiro" | "orcamentos" | "catalogo"
-    | "arquivos" | "banco" | "usuarios"
+    | "arquivos" | "banco" | "usuarios" | "estoque"
   >("home");
 
   /**
@@ -3432,6 +3433,16 @@ ${meiName}`;
             onGoBack={() => irPara("home")}
             onConverterEmVenda={converterOrcamentoEmVenda}
             mensagensContato={mensagensContato}
+            triggerToast={triggerToast}
+          />
+        )}
+
+        {currentView === "estoque" && (
+          <EstoquePanel
+            userId={user?.uid || userId}
+            clientes={clientes}
+            transacoes={transacoes}
+            onGoBack={() => irPara("home")}
             triggerToast={triggerToast}
           />
         )}
