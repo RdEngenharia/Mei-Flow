@@ -50,6 +50,7 @@ import ReceiptModal from "./components/ReceiptModal";
 import BlocoRecebimentoVenda, { planoVendaVazio, type PlanoVendaForm } from "./components/BlocoRecebimentoVenda";
 import PainelAReceber from "./components/PainelAReceber";
 import ModalBaixaRecebimento from "./components/ModalBaixaRecebimento";
+import CentralNotificacoes from "./components/CentralNotificacoes";
 /*
  * ⚠️ TODA conta de "quanto recebi" e "quanto falta receber" mora em um arquivo
  * só, com teste. Não recalcule nenhuma delas aqui dentro: o preço da assinatura
@@ -66,6 +67,7 @@ import {
   montarPlano,
   planoDoOrcamento,
   receberParcialmente,
+  recebimentosDa,
   situacaoDaVenda,
   totalAReceber,
   totalDaVenda,
@@ -471,6 +473,10 @@ export default function App() {
     venda: Transacao;
     parcela: Recebimento;
   } | null>(null);
+
+  /** Central de Notificações — ver CentralNotificacoes.tsx */
+  const [notificacoesAbertas, setNotificacoesAbertas] = useState(false);
+  const [contagemNotificacoes, setContagemNotificacoes] = useState(0);
 
   // Campos de novas Despesas
   const [despesaValor, setDespesaValor] = useState("");
@@ -2412,7 +2418,33 @@ ${meiName}`;
         onSair={handleSignOut}
         onAbrirMenu={() => setMenuAberto(true)}
         mostrarMenu={!!user && !!cnpjPrestador}
+        notificacoesCount={contagemNotificacoes}
+        onAbrirNotificacoes={() => setNotificacoesAbertas((v) => !v)}
       />
+
+      {/* CENTRAL DE NOTIFICAÇÕES — ver CentralNotificacoes.tsx */}
+      {!!user && (
+        <CentralNotificacoes
+          aberto={notificacoesAbertas}
+          onFechar={() => setNotificacoesAbertas(false)}
+          onContagem={setContagemNotificacoes}
+          transacoes={transacoes}
+          faturamentoBrutoTotal={faturamentoBrutoTotal}
+          limiteAnual={limiteAnual}
+          planType={planType}
+          cnpjPrestador={cnpjPrestador || ""}
+          isCpfEmissor={isCpfEmissor}
+          logado={!!user}
+          onAbrirDas={() => setShowDasModal(true)}
+          onAbrirCertificado={() => setAbrirNotaFiscal(true)}
+          onAbrirCobrancasVencidas={() => setAbrirBoletoDrawer(true)}
+          onAbrirRecebimento={(vendaId, parcelaId) => {
+            const venda = transacoes.find((tx) => tx.id === vendaId);
+            const parcela = venda ? recebimentosDa(venda).find((r) => r.id === parcelaId) : undefined;
+            if (venda && parcela) setBaixaEmAndamento({ venda, parcela });
+          }}
+        />
+      )}
 
       {/*
         A CASCA: menu lateral + conteúdo, lado a lado.
