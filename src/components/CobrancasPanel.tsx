@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Receipt, Plus, X, Loader2, AlertTriangle, CheckCircle2, Copy, ExternalLink,
   TrendingUp, Clock, AlertOctagon, Wallet, ChevronRight, ChevronDown, RefreshCw, Search, Sparkles,
+  Trash2,
 } from "lucide-react";
 import { auth } from "../firebase";
 import { montarAgenda, ordemDaAba } from "../utils/agendaCobrancas";
@@ -116,6 +117,8 @@ export default function CobrancasPanel({
   const [grupos, setGrupos] = useState<Record<string, Item[]>>({});
   const [aba, setAba] = useState<"pendente" | "vencido" | "pago">("pendente");
   const [busca, setBusca] = useState("");
+  /** Id do boleto sendo cancelado agora — trava só o botão dele, não a tela toda. */
+  const [excluindoId, setExcluindoId] = useState<string | null>(null);
 
   // Formulário de emissão
   const [emitindo, setEmitindo] = useState(false);
@@ -233,6 +236,35 @@ export default function CobrancasPanel({
       setErro(e.message);
     } finally {
       setSincronizando(false);
+    }
+  };
+
+  /**
+   * CANCELA O BOLETO NO BANCO — não é só apagar da tela.
+   *
+   * ⚠️ Boleto pago não pode ser excluído por aqui: o servidor recusa antes de
+   * chamar Efí/Asaas, porque cancelar não devolve o dinheiro que já entrou.
+   * O botão nem aparece nessa situação (ver a lista mais abaixo).
+   */
+  const excluirBoleto = async (it: Item) => {
+    if (!window.confirm(
+      `Cancelar o boleto de ${it.cliente} (${brl(it.valor)})? Ele deixa de poder ser pago.`
+    )) return;
+    setExcluindoId(it.id);
+    setErro(null);
+    try {
+      const r = await fetch(getApiUrl(`/api/efi/boleto/${encodeURIComponent(it.id)}`), {
+        method: "DELETE",
+        headers: await comToken(),
+      });
+      const d = await r.json();
+      if (!d.success) throw new Error(d.mensagem || "Não foi possível cancelar o boleto.");
+      triggerToast?.("✓ Boleto cancelado.");
+      await carregar();
+    } catch (e: any) {
+      setErro(e.message);
+    } finally {
+      setExcluindoId(null);
     }
   };
 
@@ -817,6 +849,23 @@ export default function CobrancasPanel({
                                         title="Abrir boleto"
                                       >
                                         <ExternalLink className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                    {/*
+                                      Pago não cancela por aqui — o servidor recusaria de
+                                      qualquer forma, mas nem oferecer o botão evita o
+                                      usuário achar que "excluir" devolveria o dinheiro.
+                                    */}
+                                    {it.situacao !== "pago" && (
+                                      <button
+                                        onClick={() => excluirBoleto(it)}
+                                        disabled={excluindoId === it.id}
+                                        className="w-8 h-8 bg-slate-50 hover:bg-red-50 border border-slate-200 hover:border-red-200 rounded-lg flex items-center justify-center text-slate-400 hover:text-red-600 cursor-pointer disabled:opacity-50"
+                                        title="Cancelar boleto"
+                                      >
+                                        {excluindoId === it.id
+                                          ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                          : <Trash2 className="w-3.5 h-3.5" />}
                                       </button>
                                     )}
                                   </div>

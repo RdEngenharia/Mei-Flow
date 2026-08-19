@@ -4,7 +4,7 @@ import {
   Sparkles, Plus, Trash2, Loader2, Search, Package, Wrench, FileText, Calendar,
   User, CheckCircle2, Printer, X, Phone, Bookmark, ArrowRight, ArrowLeft,
   TrendingUp, Clock, XCircle, ShoppingCart, Cloud, CloudOff, Download,
-  MessageCircle, Copy, CheckCheck, BellRing,
+  MessageCircle, Copy, CheckCheck, BellRing, Pencil, Ban,
 } from "lucide-react";
 import { db, saveOrcamentoToFirebase, fetchOrcamentosFromFirebase,
          deleteOrcamentoFromFirebase, normalizarOrcamento } from "../firebase";
@@ -87,6 +87,40 @@ const dataBR = (iso?: string) => {
 const somaItens = (itens: ItemOrcamento[]) =>
   itens.reduce((s, it) => s + (Number(it.quantidade) || 0) * (Number(it.valorUnitario) || 0), 0);
 
+/**
+ * O INVERSO DE `condicaoParaSalvar`/`repasseParaSalvar`.
+ *
+ * Aqueles dois convertem o formulário para o que é gravado no orçamento; esta
+ * função faz o caminho de volta, para reabrir um orçamento salvo e editá-lo
+ * sem o usuário ter que redigitar a condição de pagamento e a comissão do
+ * zero. Campos ausentes no orçamento salvo caem no mesmo padrão de
+ * `condicaoVazia`.
+ */
+const condicaoFormDoOrcamento = (orc: Orcamento): CondicaoForm => {
+  const cp = orc.condicaoPagamento;
+  const com = orc.comissao;
+  return {
+    ativa: !!cp,
+    entradaValor: cp?.entradaValor ? String(cp.entradaValor).replace(".", ",") : "",
+    entradaPct: cp?.entradaPercentual != null ? String(cp.entradaPercentual) : condicaoVazia.entradaPct,
+    formaEntrada: cp?.formaEntrada || condicaoVazia.formaEntrada,
+    formaSaldo: cp?.formaSaldo || condicaoVazia.formaSaldo,
+    previsaoSaldo: cp?.previsaoSaldo || "",
+    gatilhoSaldo: cp?.gatilhoSaldo || "",
+
+    comissaoAtiva: !!com,
+    comBeneficiario: com?.beneficiario || "",
+    comBase: com?.base || "percentual",
+    comPercentual: com?.percentual != null ? String(com.percentual) : condicaoVazia.comPercentual,
+    comValor: com?.base === "fixo" && com?.valor != null ? String(com.valor).replace(".", ",") : "",
+
+    mostrarComposicao: orc.mostrarComposicao !== false,
+    repasseAtiva: !!orc.repasse?.ativo,
+    fornecedorNome: orc.repasse?.fornecedorNome || "",
+    fornecedorDocumento: orc.repasse?.fornecedorDocumento ? mascararDocumento(orc.repasse.fornecedorDocumento) : "",
+  };
+};
+
 /** As etapas do funil, na ordem em que a vida acontece. */
 const ETAPAS: { chave: SituacaoOrcamento; rotulo: string; cor: string; icone: any }[] = [
   { chave: "enviado",    rotulo: "Enviado",    cor: "blue",    icone: Clock },
@@ -127,6 +161,15 @@ export default function OrcamentoGenerator({
   const [convertendo, setConvertendo] = useState<string | null>(null);
   // Orçamento recém-marcado como aceito, esperando a decisão sobre faturamento.
   const [perguntarVenda, setPerguntarVenda] = useState<Orcamento | null>(null);
+  /**
+   * EDIÇÃO DE ORÇAMENTO JÁ CRIADO.
+   *
+   * O mesmo formulário de "Novo Orçamento" serve para editar — só muda o que
+   * acontece ao salvar. Guardamos o id de quem está sendo editado; quando ele
+   * é null, o formulário volta a criar um orçamento novo. Isso evita duplicar
+   * um formulário inteiro só para o caso de edição.
+   */
+  const [editandoOrcamentoId, setEditandoOrcamentoId] = useState<string | null>(null);
 
   // Cliente
   const [showClientDropdown, setShowClientDropdown] = useState(false);
@@ -191,6 +234,8 @@ export default function OrcamentoGenerator({
   const total = Math.max(0, subtotal - descontoNum);
   /** Soma dos itens por tipo — a única fonte da divisão material/serviço. Ver BlocoCondicaoPagamento. */
   const composicaoAtual = composicaoDosItens(itens);
+  /** O orçamento sendo editado agora, se houver — só para exibir número e avisos no formulário. */
+  const orcamentoEmEdicao = editandoOrcamentoId ? historico.find((o) => o.id === editandoOrcamentoId) || null : null;
 
   // --------------------------------------------------------------------------
   // CARGA E MIGRAÇÃO
@@ -265,6 +310,44 @@ export default function OrcamentoGenerator({
     triggerToast(`✓ Cliente ${cli.nome} vinculado!`);
   };
 
+  /**
+   * ABRE O ORÇAMENTO NO FORMULÁRIO PARA EDIÇÃO.
+   *
+   * Preenche cada campo a partir do que está salvo — inclusive condição de
+   * pagamento, repasse e comissão, que passam por `condicaoFormDoOrcamento`.
+   * O número, a data de criação, a situação no funil e o vínculo com a venda
+   * (se já virou uma) não mudam aqui: só o conteúdo da proposta.
+   */
+  const iniciarEdicao = (orc: Orcamento) => {
+    setEditandoOrcamentoId(orc.id);
+    setSelectedClient(clientes.find((c) => c.id === orc.clienteId) || null);
+    setClienteNome(orc.clienteNome || "");
+    setClienteDocumento(mascararDocumento(orc.clienteDocumento || ""));
+    setClienteEmail(orc.clienteEmail || "");
+    setClienteTelefone(orc.clienteTelefone || "");
+    setItens(orc.itens && orc.itens.length ? orc.itens.map((it) => ({ ...it })) : [novoItem()]);
+    setDesconto(orc.desconto ? String(orc.desconto).replace(".", ",") : "");
+    setObservacoes(orc.observacoes || "");
+    setValidade(orc.validade || "");
+    setCondicao(condicaoFormDoOrcamento(orc));
+    setActiveTab("criar");
+  };
+
+  /** Sai do modo edição sem salvar, devolvendo o formulário ao estado de "novo orçamento". */
+  const cancelarEdicao = () => {
+    setEditandoOrcamentoId(null);
+    setSelectedClient(null);
+    setClienteNome(""); setClienteDocumento(""); setClienteEmail(""); setClienteTelefone("");
+    setItens([novoItem()]);
+    setDesconto(""); setObservacoes("");
+    setCondicao(condicaoVazia);
+    setValidade(() => {
+      const d = new Date();
+      d.setDate(d.getDate() + 15);
+      return d.toISOString().split("T")[0];
+    });
+  };
+
   const alterarItem = (id: string, campo: keyof ItemOrcamento, valor: any) => {
     setItens((atual) => atual.map((it) => (it.id === id ? { ...it, [campo]: valor } : it)));
   };
@@ -318,13 +401,19 @@ export default function OrcamentoGenerator({
     if (!validade) { triggerToast("⚠ Informe até quando a proposta vale."); return; }
 
     const totalFinal = Math.max(0, somaItens(limpos) - descontoNum);
-    const proximoNumero = Math.max(0, ...historico.map((o) => Number(o.numero) || 0)) + 1;
-
     const condicaoPagamento = condicaoParaSalvar(condicao);
+    const comissao = calcularComissao(
+      {
+        beneficiario: condicao.comBeneficiario,
+        base: condicao.comBase,
+        percentual: Number(condicao.comPercentual.replace(",", ".")) || 0,
+        valorFixo: arredondar(condicao.comValor.replace(",", ".")),
+        sobre: "total",
+      },
+      { total: totalFinal, recebido: 0 }
+    );
 
-    const novo: Orcamento = {
-      id: "orc_" + Date.now(),
-      numero: proximoNumero,
+    const camposComuns = {
       clienteId: selectedClient?.id || "manual_input",
       clienteNome: clienteNome.trim(),
       clienteDocumento: clienteDocumento.trim() || undefined,
@@ -335,46 +424,58 @@ export default function OrcamentoGenerator({
       total: totalFinal,
       observacoes: observacoes.trim() || undefined,
       validade,
-      situacao: "enviado",
-      createdAt: new Date().toISOString(),
       condicaoPagamento,
       mostrarComposicao: condicao.mostrarComposicao,
       repasse: repasseParaSalvar(condicao),
-      comissao: calcularComissao(
-        {
-          beneficiario: condicao.comBeneficiario,
-          base: condicao.comBase,
-          percentual: Number(condicao.comPercentual.replace(",", ".")) || 0,
-          valorFixo: arredondar(condicao.comValor.replace(",", ".")),
-          sobre: "total",
-        },
-        { total: totalFinal, recebido: 0 }
-      ),
+      comissao,
     };
 
+    /*
+      EDITANDO UM ORÇAMENTO JÁ EXISTENTE.
+
+      Id, número, data de criação, situação no funil, vínculo com a venda (se
+      já virou uma) e o histórico da régua de acompanhamento não mudam aqui —
+      só o conteúdo da proposta em si. Editar não move o orçamento de etapa
+      nem desfaz uma venda já lançada.
+    */
+    const orcamentoOriginal = editandoOrcamentoId
+      ? historico.find((o) => o.id === editandoOrcamentoId)
+      : null;
+
+    const salvo: Orcamento = orcamentoOriginal
+      ? { ...orcamentoOriginal, ...camposComuns, atualizadoEm: new Date().toISOString() }
+      : {
+          id: "orc_" + Date.now(),
+          numero: Math.max(0, ...historico.map((o) => Number(o.numero) || 0)) + 1,
+          situacao: "enviado",
+          createdAt: new Date().toISOString(),
+          ...camposComuns,
+        };
+
     setSalvando(true);
-    const lista = [novo, ...historico];
+    const lista = orcamentoOriginal
+      ? historico.map((o) => (o.id === salvo.id ? salvo : o))
+      : [salvo, ...historico];
     setHistorico(lista);
     espelharLocal(lista);
 
     try {
-      await saveOrcamentoToFirebase(userId, novo);
+      await saveOrcamentoToFirebase(userId, salvo);
       setNaNuvem(true);
-      triggerToast(`✓ Orçamento nº ${proximoNumero} salvo no funil!`);
+      triggerToast(orcamentoOriginal
+        ? `✓ Orçamento nº ${salvo.numero} atualizado!`
+        : `✓ Orçamento nº ${salvo.numero} salvo no funil!`);
     } catch {
       setNaNuvem(false);
-      triggerToast("⚠ Orçamento gerado, mas não foi para a nuvem. Ficou salvo aqui.");
+      triggerToast(orcamentoOriginal
+        ? "⚠ Alterações salvas aqui, mas não subiram para a nuvem."
+        : "⚠ Orçamento gerado, mas não foi para a nuvem. Ficou salvo aqui.");
     } finally {
       setSalvando(false);
     }
 
-    setActivePreviewQuote(novo);
-
-    setSelectedClient(null);
-    setClienteNome(""); setClienteDocumento(""); setClienteEmail(""); setClienteTelefone("");
-    setItens([novoItem()]);
-    setDesconto(""); setObservacoes("");
-    setCondicao(condicaoVazia);
+    setActivePreviewQuote(salvo);
+    cancelarEdicao();
   };
 
   // --------------------------------------------------------------------------
@@ -625,7 +726,13 @@ export default function OrcamentoGenerator({
       <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 pb-6 border-b border-slate-100">
         <div>
           <h1 className="text-3xl md:text-4xl font-display font-light text-slate-900 tracking-tight flex items-center gap-2 flex-wrap">
-            <span>{activeTab === "criar" ? "Gerador de Orçamentos" : "Funil de Vendas"}</span>
+            <span>
+              {activeTab !== "criar"
+                ? "Funil de Vendas"
+                : editandoOrcamentoId
+                ? `Editando orçamento nº ${orcamentoEmEdicao?.numero ?? ""}`
+                : "Gerador de Orçamentos"}
+            </span>
             {planType === "premium" && (
               <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-[9px] font-extrabold uppercase tracking-widest border border-blue-100">
                 Premium Ativo
@@ -657,6 +764,34 @@ export default function OrcamentoGenerator({
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
 
           <form onSubmit={handleCreateOrcamento} className="lg:col-span-8 bg-white p-6 md:p-8 rounded-3xl border border-slate-200/50 shadow-xs space-y-6">
+
+            {/*
+              AVISO DE EDIÇÃO — some sozinho fora do modo edição.
+
+              Se o orçamento já virou venda, o usuário precisa saber que
+              editar aqui não muda o lançamento que já está no Livro Caixa.
+            */}
+            {editandoOrcamentoId && (
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 flex items-start justify-between gap-3 flex-wrap">
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <Pencil className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-amber-800 leading-relaxed">
+                    Editando o orçamento nº {orcamentoEmEdicao?.numero ?? ""}
+                    {orcamentoEmEdicao?.clienteNome ? ` de ${orcamentoEmEdicao.clienteNome}` : ""}.
+                    {orcamentoEmEdicao?.vendaId
+                      ? " Este orçamento já virou venda — salvar aqui atualiza só a proposta, não o lançamento já feito no Livro Caixa."
+                      : " Número, data de criação e etapa no funil continuam os mesmos."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={cancelarEdicao}
+                  className="shrink-0 px-3 py-1.5 bg-white hover:bg-amber-100 border border-amber-200 text-amber-700 text-[10px] font-bold rounded-lg cursor-pointer flex items-center gap-1.5"
+                >
+                  <Ban className="w-3.5 h-3.5" /> Cancelar edição
+                </button>
+              </div>
+            )}
 
             {/* -------------------------------------------------- cliente */}
             <div className="space-y-4">
@@ -898,14 +1033,32 @@ export default function OrcamentoGenerator({
             */}
             <BlocoCondicaoPagamento total={total} form={condicao} onChange={setCondicao} composicao={composicaoAtual} />
 
-            <button
-              type="submit"
-              disabled={salvando}
-              className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer uppercase tracking-wider disabled:opacity-60"
-            >
-              {salvando ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4 shrink-0" />}
-              <span>{salvando ? "Salvando..." : "Gerar proposta e salvar no funil"}</span>
-            </button>
+            <div className="flex items-center gap-2.5">
+              <button
+                type="submit"
+                disabled={salvando}
+                className="flex-1 py-4 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer uppercase tracking-wider disabled:opacity-60"
+              >
+                {salvando
+                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : editandoOrcamentoId ? <Pencil className="w-4 h-4 shrink-0" /> : <FileText className="w-4 h-4 shrink-0" />}
+                <span>
+                  {salvando
+                    ? "Salvando..."
+                    : editandoOrcamentoId ? "Salvar alterações" : "Gerar proposta e salvar no funil"}
+                </span>
+              </button>
+              {editandoOrcamentoId && (
+                <button
+                  type="button"
+                  onClick={cancelarEdicao}
+                  disabled={salvando}
+                  className="py-4 px-5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 font-bold text-xs rounded-xl cursor-pointer disabled:opacity-60"
+                >
+                  Cancelar
+                </button>
+              )}
+            </div>
           </form>
 
           {/* ------------------------------------------------- lateral */}
@@ -1222,6 +1375,13 @@ export default function OrcamentoGenerator({
                                 </button>
                               )}
 
+                              <button
+                                onClick={() => iniciarEdicao(orc)}
+                                className="px-2.5 py-1 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold cursor-pointer flex items-center gap-1"
+                                title="Editar esta proposta"
+                              >
+                                <Pencil className="w-3 h-3" /> Editar
+                              </button>
                               <button
                                 onClick={() => setActivePreviewQuote(orc)}
                                 className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-[10px] font-bold cursor-pointer"

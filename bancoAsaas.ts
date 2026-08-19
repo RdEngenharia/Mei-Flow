@@ -49,7 +49,7 @@ export function baseAsaas(ambiente?: string): string {
 async function chamar(
   ambiente: string | undefined,
   apiKey: string,
-  metodo: "GET" | "POST",
+  metodo: "GET" | "POST" | "DELETE",
   caminho: string,
   corpo?: any
 ) {
@@ -198,6 +198,24 @@ export async function consultarCobrancaAsaas(
     pagoEm: d?.paymentDate || d?.confirmedDate || d?.clientPaymentDate || undefined,
     bruto: d,
   };
+}
+
+/**
+ * Cancela/exclui uma cobrança que ainda não foi paga.
+ *
+ * ⚠️ ISTO NÃO É ESTORNO. A própria Asaas documenta que excluir uma cobrança
+ * não devolve dinheiro nenhum — para uma cobrança já recebida, ela recusa
+ * com 400. Por isso quem chama esta função precisa conferir o status ANTES
+ * (ver efi.ts, rota de cancelamento): aqui só repassamos a chamada.
+ */
+export async function cancelarCobrancaAsaas(
+  credenciais: { apiKey?: string },
+  ambiente: string | undefined,
+  id: string
+): Promise<void> {
+  const apiKey = String(credenciais?.apiKey || "").trim();
+  if (!apiKey) throw new Error("SEM_CREDENCIAIS_USUARIO");
+  await chamar(ambiente, apiKey, "DELETE", `/v3/payments/${encodeURIComponent(id)}`);
 }
 
 /**

@@ -54,7 +54,7 @@ import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
 import {
   lerCredenciaisBanco, registrarRotasBanco, tokenWebhookConfere,
 } from "./bancoCofre.js";
-import { emitirBoletoAsaas, consultarCobrancaAsaas, situacaoAsaas } from "./bancoAsaas.js";
+import { emitirBoletoAsaas, consultarCobrancaAsaas, situacaoAsaas, cancelarCobrancaAsaas } from "./bancoAsaas.js";
 import { exigirPremium, responderSePlano } from "./plano.js";
 
 /** URL pública do sistema — usada em webhooks e no retorno do banco. */
@@ -993,6 +993,69 @@ export function registrarRotasEfi(
         err.response?.data?.errors?.[0]?.message ||
         err.message;
       res.status(500).json({ success: false, mensagem: `Erro ao gerar boleto: ${detalhe}` });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // CANCELAR/EXCLUIR um boleto já emitido
+  // --------------------------------------------------------------------------
+  //
+  // "Excluir" aqui significa cancelar a cobrança no banco (Efí ou Asaas), não
+  // só apagar o registro local. Um boleto cancelado só no Firestore continuaria
+  // válido para o cliente pagar no banco — o usuário acharia que sumiu e o
+  // dinheiro entraria do mesmo jeito, sem lançamento correspondente.
+  //
+  // ⚠️ BOLETO PAGO NÃO ENTRA AQUI. Cancelar não é estornar: nem a Efí nem a
+  // Asaas devolvem o dinheiro por esta chamada. Bloqueado antes de tentar,
+  // com uma mensagem que explica o motivo em vez de deixar o banco recusar.
+  // --------------------------------------------------------------------------
+  const STATUS_PAGOS = ["paid", "settled", "received", "confirmed", "approved"];
+
+  app.delete("/api/efi/boleto/:id", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuarioAutenticado(req);
+      const id = String(req.params.id);
+
+      const snap = await db.collection("cobrancas").doc(id).get();
+      if (!snap.exists || snap.data().userId !== uid) {
+        return res.status(404).json({ success: false, mensagem: "Boleto não encontrado." });
+      }
+      const cobranca = snap.data();
+
+      if (STATUS_PAGOS.includes(String(cobranca.status || "").toLowerCase())) {
+        return res.status(400).json({
+          success: false,
+          mensagem:
+            "Este boleto já foi pago — excluir aqui não devolve o dinheiro. Para estornar, use o painel do seu banco.",
+        });
+      }
+
+      if (cobranca.gateway === "asaas") {
+        const contaDoUsuario = await lerCredenciaisBanco(db, uid);
+        await cancelarCobrancaAsaas(contaDoUsuario?.segredos || {}, contaDoUsuario?.ambiente, id);
+      } else {
+        await efiCobrancas(uid, "PUT", `/v1/charge/${encodeURIComponent(id)}/cancel`);
+      }
+
+      // Fica marcado como cancelado, não apagado — o Arquivo Digital e o
+      // painel de evolução precisam saber que existiu, mesmo sem valer mais.
+      await db.collection("cobrancas").doc(id).set(
+        { status: "canceled", canceladoEm: new Date().toISOString() },
+        { merge: true }
+      );
+
+      res.json({ success: true, mensagem: "Boleto cancelado." });
+    } catch (err: any) {
+      if (err.message === "NAO_AUTENTICADO") {
+        return res.status(401).json({ success: false, mensagem: "Faça login para continuar." });
+      }
+      console.error("[Efí Cancelar Boleto]", err.response?.data || err.message);
+      const detalhe =
+        err.response?.data?.error_description?.message ||
+        err.response?.data?.error_description ||
+        err.response?.data?.errors?.[0]?.message ||
+        err.message;
+      res.status(500).json({ success: false, mensagem: `Não foi possível cancelar: ${detalhe}` });
     }
   });
 
