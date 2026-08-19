@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { X, Building, Check, Search, Sparkles, KeyRound, ChevronRight } from "lucide-react";
 import { MENSAGENS_PADRAO } from "../utils/reguaContato";
+import { mascararDocumento, soDocumento } from "../utils/documentoBR";
 
 export interface DadosEndereco {
   cep?: string;
@@ -114,9 +115,15 @@ export default function MeiConfigModal({
   };
 
   const handleLookupCnpj = async () => {
-    const cleaned = cnpj.replace(/\D/g, "");
+    /*
+      `soDocumento` no lugar de `replace(/\D/g, "")`: desde 31/07/2026 existe
+      CNPJ alfanumérico, e jogar fora as letras faria um CNPJ novo parecer
+      curto demais e cair no erro de "14 dígitos" sem nunca chegar à consulta.
+      Para o CNPJ numérico de sempre o resultado é idêntico ao de antes.
+    */
+    const cleaned = soDocumento(cnpj);
     if (cleaned.length !== 14) {
-      setSearchError("Por favor, digite um CNPJ válido com 14 dígitos.");
+      setSearchError("Por favor, digite um CNPJ válido com 14 caracteres.");
       return;
     }
     setSearchingCnpj(true);
@@ -221,7 +228,7 @@ export default function MeiConfigModal({
               <input
                 type="text"
                 value={cnpj}
-                onChange={(e) => setCnpj(e.target.value)}
+                onChange={(e) => setCnpj(mascararDocumento(e.target.value))}
                 placeholder="Digite o CNPJ"
                 className="flex-1 bg-white border border-blue-200 text-slate-800 rounded-lg px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none font-mono"
               />

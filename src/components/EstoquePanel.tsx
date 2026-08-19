@@ -4,9 +4,10 @@ import {
   ChevronDown, ChevronRight, Trash2, X, Cloud, CloudOff, Users, Calendar,
   Package, Loader2, Pencil, Undo2, TrendingUp,
 } from "lucide-react";
-import type { Cliente, ItemEstoque, MovimentoEstoque, Transacao, UnidadeEstoque } from "../types";
+import type { CatalogItem, Cliente, ItemEstoque, MovimentoEstoque, Transacao, UnidadeEstoque } from "../types";
 import {
   fetchEstoqueFromFirebase, saveItemEstoqueToFirebase, deleteItemEstoqueFromFirebase,
+  fetchCatalogoFromFirebase,
 } from "../firebase";
 import {
   criarItemEstoque, registrarEntrada, registrarSaida, removerUltimoMovimento, estoqueSuficiente,
@@ -80,6 +81,8 @@ export default function EstoquePanel({
   const [carregando, setCarregando] = useState(true);
   const [naNuvem, setNaNuvem] = useState<boolean | null>(null);
   const [aba, setAba] = useState<Aba>("itens");
+  /** Só para sugerir nome ao cadastrar item novo — ver fetchCatalogoFromFirebase em firebase.ts. */
+  const [catalogo, setCatalogo] = useState<CatalogItem[]>([]);
 
   const carregar = useCallback(async () => {
     if (!userId) { setCarregando(false); return; }
@@ -97,6 +100,12 @@ export default function EstoquePanel({
   }, [userId]);
 
   useEffect(() => { carregar(); }, [carregar]);
+
+  // Sugestão de nome, best-effort: falha em silêncio, nunca trava a tela de estoque.
+  useEffect(() => {
+    if (!userId) return;
+    fetchCatalogoFromFirebase(userId).then(setCatalogo);
+  }, [userId]);
 
   /** Grava um item (novo ou alterado) na nuvem e substitui no estado local. */
   const persistirItem = async (item: ItemEstoque) => {
@@ -186,6 +195,7 @@ export default function EstoquePanel({
               userId={userId}
               setItens={setItens}
               triggerToast={triggerToast}
+              catalogo={catalogo}
             />
           )}
           {aba === "consumo" && (
@@ -216,6 +226,7 @@ function AbaItens({
   userId,
   setItens,
   triggerToast,
+  catalogo,
 }: {
   itens: ItemEstoque[];
   estoqueBaixo: ItemEstoque[];
@@ -223,12 +234,15 @@ function AbaItens({
   userId: string;
   setItens: React.Dispatch<React.SetStateAction<ItemEstoque[]>>;
   triggerToast: (msg: string) => void;
+  /** Só para sugerir nome ao cadastrar item novo — ver comentário em EstoquePanel. */
+  catalogo: CatalogItem[];
 }) {
   const [busca, setBusca] = useState("");
   const [expandido, setExpandido] = useState<string | null>(null);
 
   const [showNovoItem, setShowNovoItem] = useState(false);
   const [nomeNovo, setNomeNovo] = useState("");
+  const [nomeNovoFocado, setNomeNovoFocado] = useState(false);
   const [unidadeNova, setUnidadeNova] = useState<UnidadeEstoque>("un");
   const [categoriaNova, setCategoriaNova] = useState("");
   const [minimoNovo, setMinimoNovo] = useState("");
@@ -247,6 +261,17 @@ function AbaItens({
 
   const listaFiltrada = buscarItens(itens, busca);
   const valorTotal = valorTotalEstoque(itens);
+
+  // Sugestão de nome ao cadastrar item novo — nunca sugere um nome que já existe no estoque
+  // (clicar nele só ia disparar o aviso de duplicata em handleCriarItem).
+  const nomesNoEstoque = new Set(itens.map((i) => i.nome.trim().toLowerCase()));
+  const termoNovo = nomeNovo.trim().toLowerCase();
+  const sugestoesCatalogo = termoNovo.length >= 2
+    ? catalogo
+        .filter((c) => c.title.toLowerCase().includes(termoNovo))
+        .filter((c) => !nomesNoEstoque.has(c.title.trim().toLowerCase()))
+        .slice(0, 5)
+    : [];
 
   const handleCriarItem = (e: React.FormEvent) => {
     e.preventDefault();
@@ -492,10 +517,31 @@ function AbaItens({
               </button>
             </div>
             <form onSubmit={handleCriarItem} className="p-6 space-y-4">
-              <div>
+              <div className="relative">
                 <label className={rotuloCampo}>Nome do item</label>
-                <input type="text" required autoFocus placeholder="Ex.: Disjuntor 20A"
-                  value={nomeNovo} onChange={(e) => setNomeNovo(e.target.value)} className={campo} />
+                <input
+                  type="text" required autoFocus placeholder="Ex.: Disjuntor 20A"
+                  value={nomeNovo}
+                  onChange={(e) => setNomeNovo(e.target.value)}
+                  onFocus={() => setNomeNovoFocado(true)}
+                  onBlur={() => setTimeout(() => setNomeNovoFocado(false), 150)}
+                  className={campo}
+                />
+                {nomeNovoFocado && sugestoesCatalogo.length > 0 && (
+                  <div className="absolute z-10 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+                    <p className="px-3.5 pt-2 pb-1 text-[9px] font-extrabold uppercase tracking-widest text-slate-400">Do seu catálogo</p>
+                    {sugestoesCatalogo.map((c) => (
+                      <div
+                        key={c.id}
+                        onMouseDown={() => { setNomeNovo(c.title); setNomeNovoFocado(false); }}
+                        className="px-3.5 py-2 text-xs cursor-pointer hover:bg-blue-50 text-slate-700 flex items-center justify-between gap-2"
+                      >
+                        <span className="truncate">{c.title}</span>
+                        <span className="text-[10px] text-slate-400 shrink-0">{c.type === "produto" ? "Produto" : "Serviço"}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

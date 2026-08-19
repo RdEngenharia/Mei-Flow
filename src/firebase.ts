@@ -41,7 +41,7 @@ import {
 
 // Carrega as configurações geradas pelo console do AI Studio / Firebase Blueprints
 import firebaseConfigImport from '../firebase-applet-config.json';
-import { Cliente, Transacao, Orcamento, ItemOrcamento, ItemEstoque } from './types';
+import { Cliente, Transacao, Orcamento, ItemOrcamento, ItemEstoque, CatalogItem } from './types';
 // Converte a venda gravada em qualquer época para o formato atual, na leitura.
 import { normalizarVenda } from './utils/recebimentos';
 import { cadastrarEmpresaFocusNFe, CadastroEmpresaPayload } from './focusNFeService';
@@ -1003,6 +1003,34 @@ export async function deleteOrcamentoFromFirebase(userId: string, orcamentoId: s
    cada um passa por `limparIndefinidos` antes de subir — Firestore recusa
    `undefined`. Ver src/utils/estoque.ts para quem escreve quantidade/custo.
    ========================================================================== */
+
+/**
+ * Lista o Catálogo (`CatalogManager.tsx`) do usuário — só para SUGERIR nome ao
+ * cadastrar um item novo de estoque, nunca para escrever nele. Mesma coleção
+ * que o Catálogo já usa (`users/{userId}/catalog`, reparar que é "users" e
+ * não "usuarios" — coleções diferentes, ver comentário em CatalogManager.tsx).
+ * Falha em silêncio (devolve []): sem catálogo, o estoque simplesmente não
+ * sugere nada — não é motivo para travar a tela.
+ */
+export async function fetchCatalogoFromFirebase(userId: string): Promise<CatalogItem[]> {
+  if (!userId) return [];
+  try {
+    const colRef = collection(db, 'users', userId, 'catalog');
+    const snap = await getDocs(colRef);
+    return snap.docs.map((docSnap) => {
+      const data = docSnap.data();
+      return {
+        id: docSnap.id,
+        title: String(data.title || ''),
+        type: data.type === 'produto' ? 'produto' : 'serviço',
+        price: Number(data.price) || 0,
+      } as CatalogItem;
+    });
+  } catch (err) {
+    console.warn('Catálogo: não consegui buscar sugestões.', err);
+    return [];
+  }
+}
 
 /** Lista os itens do estoque do usuário, em ordem alfabética. */
 export async function fetchEstoqueFromFirebase(userId: string): Promise<ItemEstoque[]> {

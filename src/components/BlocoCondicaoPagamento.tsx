@@ -24,6 +24,7 @@ import { HandCoins, Percent, Clock, Users, Truck } from "lucide-react";
 import type { CondicaoPagamento, ComposicaoValor, RepasseFornecedor } from "../types";
 import { arredondar, entradaDaCondicao, textoDaCondicao } from "../utils/recebimentos";
 import { textoComposicao } from "../utils/composicaoValor";
+import { mascararDocumento } from "../utils/documentoBR";
 
 export type CondicaoForm = {
   ativa: boolean;
@@ -363,7 +364,7 @@ export default function BlocoCondicaoPagamento({
                     <label className={rotulo}>CNPJ/CPF do fornecedor (opcional)</label>
                     <input
                       type="text" placeholder="Só para referência sua"
-                      value={form.fornecedorDocumento} onChange={(e) => alterar({ fornecedorDocumento: e.target.value })}
+                      value={form.fornecedorDocumento} onChange={(e) => alterar({ fornecedorDocumento: mascararDocumento(e.target.value) })}
                       className={campo}
                     />
                   </div>

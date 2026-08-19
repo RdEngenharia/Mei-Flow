@@ -20,6 +20,7 @@ import { CatalogItem, Cliente, Orcamento, ItemOrcamento, SituacaoOrcamento } fro
 import BlocoCondicaoPagamento, { condicaoVazia, condicaoParaSalvar, repasseParaSalvar, type CondicaoForm } from "./BlocoCondicaoPagamento";
 import { entradaDaCondicao, textoDaCondicao, calcularComissao, arredondar } from "../utils/recebimentos";
 import { composicaoDosItens, itensParaExibir } from "../utils/composicaoValor";
+import { mascararDocumento } from "../utils/documentoBR";
 
 /**
  * ============================================================================
@@ -257,7 +258,7 @@ export default function OrcamentoGenerator({
   const selectClientData = (cli: Cliente) => {
     setSelectedClient(cli);
     setClienteNome(cli.nome);
-    setClienteDocumento(cli.documento || "");
+    setClienteDocumento(mascararDocumento(cli.documento || ""));
     setClienteEmail(cli.email || "");
     setClienteTelefone(cli.telefone || "");
     setShowClientDropdown(false);
@@ -714,7 +715,7 @@ export default function OrcamentoGenerator({
                   <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">CPF ou CNPJ (opcional)</label>
                   <input
                     type="text" placeholder="Ex.: 123.456.789-00"
-                    value={clienteDocumento} onChange={(e) => setClienteDocumento(e.target.value)}
+                    value={clienteDocumento} onChange={(e) => setClienteDocumento(mascararDocumento(e.target.value))}
                     className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-blue-500 focus:bg-white outline-hidden font-mono"
                   />
                 </div>

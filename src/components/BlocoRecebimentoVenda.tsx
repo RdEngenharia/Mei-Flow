@@ -32,6 +32,7 @@
 import React from "react";
 import { HandCoins, Percent, Clock, Users, Truck } from "lucide-react";
 import { arredondar } from "../utils/recebimentos";
+import { mascararDocumento } from "../utils/documentoBR";
 import type { ComposicaoValor, RepasseFornecedor } from "../types";
 
 export type PlanoVendaForm = {
@@ -574,7 +575,7 @@ export default function BlocoRecebimentoVenda({
                     <label className={rotulo}>CNPJ/CPF do fornecedor (opcional)</label>
                     <input
                       type="text" placeholder="Só para referência sua"
-                      value={plano.fornecedorDocumento} onChange={(e) => alterar({ fornecedorDocumento: e.target.value })}
+                      value={plano.fornecedorDocumento} onChange={(e) => alterar({ fornecedorDocumento: mascararDocumento(e.target.value) })}
                       className={campo}
                     />
                   </div>

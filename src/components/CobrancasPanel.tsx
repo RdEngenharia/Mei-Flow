@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Receipt, Plus, X, Loader2, AlertTriangle, CheckCircle2, Copy, ExternalLink,
-  TrendingUp, Clock, AlertOctagon, Wallet, ChevronRight, RefreshCw, Search, Sparkles,
+  TrendingUp, Clock, AlertOctagon, Wallet, ChevronRight, ChevronDown, RefreshCw, Search, Sparkles,
 } from "lucide-react";
 import { auth } from "../firebase";
 import { montarAgenda, ordemDaAba } from "../utils/agendaCobrancas";
@@ -478,19 +478,7 @@ export default function CobrancasPanel({
                     <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
                       Cliente *
                     </label>
-                    <select
-                      required
-                      value={clienteId}
-                      onChange={(e) => setClienteId(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none focus:bg-white"
-                    >
-                      <option value="">Selecione um cliente cadastrado</option>
-                      {clientes.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.nome}{c.documento ? ` — ${c.documento}` : ""}
-                        </option>
-                      ))}
-                    </select>
+                    <SeletorClienteCobranca clientes={clientes} value={clienteId} onChange={setClienteId} />
                     {clientes.length === 0 && (
                       <p className="text-[9px] text-amber-600 font-bold mt-1">
                         Você ainda não tem clientes cadastrados. Cadastre um antes de emitir.
@@ -843,6 +831,91 @@ export default function CobrancasPanel({
                 )}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================================
+   SELETOR DE CLIENTE — com busca por nome
+   ============================================================================
+   Um <select> comum vira inutilizável a partir de umas 20-30 opções: a pessoa
+   tem que rolar lendo nome por nome. Aqui é um campo de busca que filtra a
+   lista conforme digita, igual um combobox. Mesmo padrão usado em
+   EstoquePanel.tsx — vale copiar de novo se aparecer o mesmo problema em
+   outra tela.
+*/
+
+function SeletorClienteCobranca({
+  clientes,
+  value,
+  onChange,
+}: {
+  clientes: Cliente[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [aberto, setAberto] = useState(false);
+  const [busca, setBusca] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  const selecionado = clientes.find((c) => c.id === value);
+
+  useEffect(() => {
+    const fechar = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setAberto(false);
+    };
+    document.addEventListener("mousedown", fechar);
+    return () => document.removeEventListener("mousedown", fechar);
+  }, []);
+
+  const termo = busca.trim().toLowerCase();
+  const filtrados = termo ? clientes.filter((c) => c.nome.toLowerCase().includes(termo)) : clientes;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => { setAberto((a) => !a); setBusca(""); }}
+        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none focus:bg-white text-left flex items-center justify-between gap-2 cursor-pointer"
+      >
+        <span className={selecionado ? "text-slate-800 truncate" : "text-slate-400 truncate"}>
+          {selecionado ? `${selecionado.nome}${selecionado.documento ? ` — ${selecionado.documento}` : ""}` : "Selecione um cliente cadastrado"}
+        </span>
+        <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+      </button>
+
+      {aberto && (
+        <div className="absolute z-30 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+          <div className="p-2 border-b border-slate-100">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                autoFocus
+                type="text"
+                placeholder="Buscar por nome..."
+                value={busca}
+                onChange={(e) => setBusca(e.target.value)}
+                className="w-full pl-8 pr-2.5 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+          <div className="max-h-52 overflow-y-auto">
+            {filtrados.length === 0 ? (
+              <p className="px-3.5 py-3 text-xs text-slate-400 text-center">Nenhum cliente encontrado.</p>
+            ) : (
+              filtrados.map((c) => (
+                <div
+                  key={c.id}
+                  onClick={() => { onChange(c.id); setAberto(false); }}
+                  className={`px-3.5 py-2 text-xs cursor-pointer hover:bg-emerald-50 ${c.id === value ? "bg-emerald-50 font-bold text-emerald-700" : "text-slate-700"}`}
+                >
+                  {c.nome}{c.documento ? ` — ${c.documento}` : ""}
+                </div>
+              ))
+            )}
           </div>
         </div>
       )}

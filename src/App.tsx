@@ -42,13 +42,15 @@ import {
   BookOpen,
   Copy,
   ExternalLink,
-  Calendar
+  Calendar,
+  Pencil
 } from "lucide-react";
 
 import { Cliente, Transacao, CatalogItem, Orcamento, Recebimento } from "./types";
 import ReceiptModal from "./components/ReceiptModal";
 import BlocoRecebimentoVenda, { planoVendaVazio, composicaoParaSalvar, type PlanoVendaForm } from "./components/BlocoRecebimentoVenda";
 import { composicaoDosItens, valorParaCaixa } from "./utils/composicaoValor";
+import { mascararDocumento, documentoInvalidoCompleto, rotuloDocumento } from "./utils/documentoBR";
 import PainelAReceber from "./components/PainelAReceber";
 import ModalBaixaRecebimento from "./components/ModalBaixaRecebimento";
 import CentralNotificacoes from "./components/CentralNotificacoes";
@@ -498,6 +500,8 @@ export default function App() {
   const [cliDoc, setCliDoc] = useState("");
   const [cliEmail, setCliEmail] = useState("");
   const [cliTel, setCliTel] = useState("");
+  /** Presente ⇒ o modal de cliente está editando este cadastro, não criando um novo. */
+  const [editandoClienteId, setEditandoClienteId] = useState<string | null>(null);
 
   // Busca e Filtros da tabela
   const [searchTerm, setSearchTerm] = useState("");
@@ -2342,8 +2346,10 @@ ${meiName}`;
     e.preventDefault();
     if (!cliNome) return;
 
+    const editando = editandoClienteId ? clientes.find((c) => c.id === editandoClienteId) : undefined;
+
     const novoCli: Cliente = {
-      id: `cli_${Date.now().toString().slice(-4)}`,
+      id: editando?.id || `cli_${Date.now().toString().slice(-4)}`,
       nome: cliNome,
       documento: cliDoc,
       email: cliEmail,
@@ -2353,22 +2359,25 @@ ${meiName}`;
         bairro: cliBairro, cidade: cliCidade, uf: cliUf.toUpperCase()
       } : undefined,
       observacaoNfse: cliObsNfse.trim(),
-      createdAt: new Date().toISOString()
+      // Editar não pode reiniciar a data de cadastro do cliente.
+      createdAt: editando?.createdAt || new Date().toISOString()
     };
+
+    const mensagem = editando ? `✓ Cliente ${cliNome} atualizado com sucesso!` : `✓ Cliente ${cliNome} cadastrado com sucesso!`;
 
     if (user) {
       saveClienteToFirebase(user.uid, novoCli)
         .then(() => {
-          setClientes(prev => [...prev, novoCli]);
-          triggerToast(`✓ Cliente ${cliNome} cadastrado com sucesso!`);
+          setClientes(prev => editando ? prev.map((c) => (c.id === novoCli.id ? novoCli : c)) : [...prev, novoCli]);
+          triggerToast(mensagem);
         })
         .catch(err => {
           console.error("Erro ao salvar o cliente na nuvem:", err);
-          triggerToast("⚠ Erro ao cadastrar cliente.");
+          triggerToast(editando ? "⚠ Erro ao atualizar cliente." : "⚠ Erro ao cadastrar cliente.");
         });
     } else {
-      setClientes(prev => [...prev, novoCli]);
-      triggerToast(`✓ Cliente ${cliNome} cadastrado com sucesso!`);
+      setClientes(prev => editando ? prev.map((c) => (c.id === novoCli.id ? novoCli : c)) : [...prev, novoCli]);
+      triggerToast(mensagem);
     }
 
     // Reset form
@@ -2378,7 +2387,35 @@ ${meiName}`;
     setCliTel("");
     setCliCep(""); setCliRua(""); setCliNum("");
     setCliBairro(""); setCliCidade(""); setCliUf(""); setCliObsNfse("");
+    setEditandoClienteId(null);
     setShowClienteModal(false);
+  };
+
+  /** Zera o formulário e abre o modal em modo de cadastro — nunca deixa sobrar dado de uma edição anterior. */
+  const abrirNovoCliente = () => {
+    setEditandoClienteId(null);
+    setCliNome(""); setCliDoc(""); setCliEmail(""); setCliTel("");
+    setCliCep(""); setCliRua(""); setCliNum("");
+    setCliBairro(""); setCliCidade(""); setCliUf(""); setCliObsNfse("");
+    setShowClienteModal(true);
+  };
+
+  /** Abre o modal de cliente já preenchido com os dados atuais, para corrigir um cadastro. */
+  const abrirEdicaoCliente = (c: Cliente) => {
+    setEditandoClienteId(c.id);
+    setCliNome(c.nome || "");
+    // Cliente cadastrado antes da máscara existir pode estar salvo sem pontuação.
+    setCliDoc(mascararDocumento(c.documento || ""));
+    setCliEmail(c.email || "");
+    setCliTel(c.telefone || "");
+    setCliCep(c.endereco?.cep || "");
+    setCliRua(c.endereco?.logradouro || "");
+    setCliNum(c.endereco?.numero || "");
+    setCliBairro(c.endereco?.bairro || "");
+    setCliCidade(c.endereco?.cidade || "");
+    setCliUf(c.endereco?.uf || "");
+    setCliObsNfse(c.observacaoNfse || "");
+    setShowClienteModal(true);
   };
 
   const handleDeleteCliente = (cliId: string, e: React.MouseEvent) => {
@@ -3017,7 +3054,7 @@ ${meiName}`;
               
               <div>
                 <button
-                  onClick={() => setShowClienteModal(true)}
+                  onClick={abrirNovoCliente}
                   className="px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
                 >
                   <UserPlus className="w-4 h-4 text-blue-100" />
@@ -3030,8 +3067,8 @@ ${meiName}`;
               <div className="text-center py-16 bg-white rounded-3xl border border-slate-200/50 shadow-xs p-8 space-y-4">
                 <p className="text-sm text-slate-400 italic">Nenhum cliente cadastrado no momento.</p>
                 <div className="pt-2">
-                  <button 
-                    onClick={() => setShowClienteModal(true)}
+                  <button
+                    onClick={abrirNovoCliente}
                     className="px-5 py-2.5 bg-blue-600 hover:bg-blue-750 text-white font-bold text-xs rounded-xl cursor-pointer"
                   >
                     Cadastrar Primeiro Cliente
@@ -3055,7 +3092,7 @@ ${meiName}`;
                             {c.nome}
                           </h3>
                           <span className="text-xs text-slate-400 font-mono block">
-                            {c.documento || "Sem CNPJ/CPF"}
+                            {mascararDocumento(c.documento) || "Sem CNPJ/CPF"}
                           </span>
                         </div>
                       </div>
@@ -3093,6 +3130,14 @@ ${meiName}`;
                           <span>Nova Venda</span>
                         </button>
                         
+                        <button
+                          onClick={(e) => { e.stopPropagation(); abrirEdicaoCliente(c); }}
+                          className="p-2 border border-slate-200 hover:bg-blue-50 hover:border-blue-100 text-slate-400 hover:text-blue-600 rounded-xl transition-all cursor-pointer"
+                          title="Editar dados do cliente"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+
                         <button
                           onClick={(e) => handleDeleteCliente(c.id, e)}
                           className="p-2 border border-slate-200 hover:bg-rose-50 hover:border-rose-100 text-slate-400 hover:text-rose-600 rounded-xl transition-all cursor-pointer"
@@ -3303,7 +3348,7 @@ ${meiName}`;
                                 <div className="flex flex-col">
                                   <span className="text-slate-700 font-medium">{tx.clienteNome}</span>
                                   {tx.clienteDocumento && (
-                                    <span className="text-[10px] text-slate-400 font-mono mt-0.5">{tx.clienteDocumento}</span>
+                                    <span className="text-[10px] text-slate-400 font-mono mt-0.5">{mascararDocumento(tx.clienteDocumento)}</span>
                                   )}
                                   {/*
                                     SELO DE SITUAÇÃO — só aparece em venda parcelada.
@@ -4141,11 +4186,11 @@ ${meiName}`;
           <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden my-auto">
             <div className="pt-safe px-6 pb-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                <UserPlus className="w-5 h-5 text-blue-600" />
-                Cadastrar Novo Cliente Tomador
+                {editandoClienteId ? <Pencil className="w-5 h-5 text-blue-600" /> : <UserPlus className="w-5 h-5 text-blue-600" />}
+                {editandoClienteId ? "Editar Cliente Tomador" : "Cadastrar Novo Cliente Tomador"}
               </h3>
               <button
-                onClick={() => setShowClienteModal(false)}
+                onClick={() => { setShowClienteModal(false); setEditandoClienteId(null); }}
                 className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 font-bold"
               >
                 ✕
@@ -4167,16 +4212,22 @@ ${meiName}`;
                 />
               </div>
 
-              {/* CPF / CNPJ */}
+              {/* CPF / CNPJ — pontos, barra e traço entram sozinhos. Ver utils/documentoBR.ts. */}
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">CPF ou CNPJ para emissão</label>
                 <input
                   type="text"
                   placeholder="Ex: 12.345.678/0001-90"
                   value={cliDoc}
-                  onChange={(e) => setCliDoc(e.target.value)}
+                  onChange={(e) => setCliDoc(mascararDocumento(e.target.value))}
                   className="w-full border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
                 />
+                {documentoInvalidoCompleto(cliDoc) && (
+                  <p className="text-[11px] text-amber-700 mt-1 font-semibold">
+                    Este {rotuloDocumento(cliDoc)} não passa na conta do dígito verificador — confira antes de emitir
+                    nota ou boleto para este cliente.
+                  </p>
+                )}
               </div>
 
               {/* Email */}
@@ -4289,7 +4340,7 @@ ${meiName}`;
               <div className="pt-4 border-t border-slate-100 flex gap-3">
                 <button
                   type="button"
-                  onClick={() => setShowClienteModal(false)}
+                  onClick={() => { setShowClienteModal(false); setEditandoClienteId(null); }}
                   className="flex-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold py-2.5 rounded-xl text-xs cursor-pointer"
                 >
                   Cancelar
@@ -4298,7 +4349,7 @@ ${meiName}`;
                   type="submit"
                   className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm cursor-pointer"
                 >
-                  Salvar Cliente
+                  {editandoClienteId ? "Salvar Alterações" : "Salvar Cliente"}
                 </button>
               </div>
 
@@ -4418,7 +4469,7 @@ ${meiName}`;
                     </strong>
                     {(focusNfeSelectedTx.repasse?.ativo ? focusNfeSelectedTx.repasse.fornecedorDocumento : focusNfeSelectedTx.clienteDocumento) && (
                       <span className="text-slate-400 font-mono text-[9px] block">
-                        Doc: {focusNfeSelectedTx.repasse?.ativo ? focusNfeSelectedTx.repasse.fornecedorDocumento : focusNfeSelectedTx.clienteDocumento}
+                        Doc: {mascararDocumento(focusNfeSelectedTx.repasse?.ativo ? focusNfeSelectedTx.repasse.fornecedorDocumento : focusNfeSelectedTx.clienteDocumento)}
                       </span>
                     )}
                   </div>
