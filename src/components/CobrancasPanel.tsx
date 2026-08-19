@@ -34,6 +34,14 @@ interface Props {
    */
   onRecebimento?: () => void;
   /**
+   * Avisa o aplicativo de que uma cobrança mudou de status por aqui — pago,
+   * vencido ou cancelado. A Central de Notificações busca o resumo de
+   * boletos vencidos uma vez só, num componente à parte; sem este aviso, um
+   * boleto cancelado aqui continuava aparecendo vencido no sino até a
+   * próxima vez que o usuário entrasse no sistema.
+   */
+  onMudancaCobrancas?: () => void;
+  /**
    * MODO PÁGINA — o painel deixa de ser gaveta e vira tela.
    *
    * Cada serviço passou a ter caminho próprio no menu lateral. Gaveta que abre
@@ -84,7 +92,7 @@ async function comToken(): Promise<Record<string, string>> {
 }
 
 export default function CobrancasPanel({
-  clientes, planType = "free", onTriggerUpgrade, triggerToast, onRecebimento,
+  clientes, planType = "free", onTriggerUpgrade, triggerToast, onRecebimento, onMudancaCobrancas,
   abrirExterno, onFechado, emitirDireto, modoPagina, semCartao,
 }: Props) {
 
@@ -232,6 +240,8 @@ export default function CobrancasPanel({
 
       // Entrou dinheiro? O resto do aplicativo precisa saber.
       if ((d.pagas || 0) > 0) onRecebimento?.();
+      // Qualquer status mudou (pago, vencido, cancelado)? O sino também precisa saber.
+      if ((d.atualizadas || 0) > 0 || (d.pagas || 0) > 0) onMudancaCobrancas?.();
     } catch (e: any) {
       setErro(e.message);
     } finally {
@@ -279,6 +289,7 @@ export default function CobrancasPanel({
           if (!d2.success) throw new Error(d2.mensagem || "Não foi possível atualizar aqui.");
           triggerToast?.("✓ Marcado como cancelado.");
           await carregar();
+          onMudancaCobrancas?.();
           return;
         }
         throw new Error(d.mensagem || "Não foi possível cancelar o boleto.");
@@ -286,6 +297,7 @@ export default function CobrancasPanel({
 
       triggerToast?.("✓ Boleto cancelado.");
       await carregar();
+      onMudancaCobrancas?.();
     } catch (e: any) {
       setErro(e.message);
     } finally {

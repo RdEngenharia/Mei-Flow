@@ -67,6 +67,18 @@ type Props = {
   logado: boolean;
   /** Para buscar o próprio estoque, do mesmo jeito que EstoquePanel busca o dele. */
   userId: string;
+  /**
+   * SINAL DE "ALGO MUDOU NAS COBRANÇAS", vindo de fora.
+   *
+   * A busca de boletos vencidos aqui roda uma vez só (ver o comentário grande
+   * no topo do arquivo — o contador precisa existir mesmo com o painel
+   * fechado, então não recarrega quando o usuário abre e fecha o sino). Sem
+   * isto, cancelar um boleto na tela de Cobranças deixava o aviso de
+   * "vencido" preso no sino até o próximo login — o painel de Cobranças sabia
+   * que mudou, mas este componente, montado à parte, nunca ficava sabendo.
+   * Basta o número mudar (qualquer valor novo) para refazer a busca.
+   */
+  sinalCobrancas?: number;
 
   onAbrirDas: () => void;
   onAbrirCertificado: () => void;
@@ -96,6 +108,7 @@ export default function CentralNotificacoes({
   isCpfEmissor,
   logado,
   userId,
+  sinalCobrancas,
   onAbrirDas,
   onAbrirCertificado,
   onAbrirCobrancasVencidas,
@@ -163,7 +176,7 @@ export default function CentralNotificacoes({
       }
     })();
     return () => { vivo = false; };
-  }, [logado]);
+  }, [logado, sinalCobrancas]);
 
   /**
    * Estoque no limite mínimo — busca a lista de itens do usuário, do mesmo

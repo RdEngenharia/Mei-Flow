@@ -482,6 +482,13 @@ export default function App() {
   /** Central de Notificações — ver CentralNotificacoes.tsx */
   const [notificacoesAbertas, setNotificacoesAbertas] = useState(false);
   const [contagemNotificacoes, setContagemNotificacoes] = useState(0);
+  /**
+   * Incrementado sempre que uma cobrança muda de status (paga, vencida,
+   * cancelada) em CobrancasPanel.tsx. A Central de Notificações busca o
+   * resumo de boletos vencidos sozinha, uma vez só — este número é o sinal
+   * para ela refazer a busca sem depender do usuário sair e voltar ao app.
+   */
+  const [sinalCobrancas, setSinalCobrancas] = useState(0);
 
   // Campos de novas Despesas
   const [despesaValor, setDespesaValor] = useState("");
@@ -2524,6 +2531,7 @@ ${meiName}`;
           isCpfEmissor={isCpfEmissor}
           logado={!!user}
           userId={user?.uid || userId}
+          sinalCobrancas={sinalCobrancas}
           onAbrirDas={() => setShowDasModal(true)}
           onAbrirCertificado={() => setAbrirNotaFiscal(true)}
           onAbrirCobrancasVencidas={() => setAbrirBoletoDrawer(true)}
@@ -3677,6 +3685,7 @@ ${meiName}`;
           onTriggerUpgrade={() => setShowUpgradeModal(true)}
           triggerToast={triggerToast}
           onRecebimento={recarregarLancamentos}
+          onMudancaCobrancas={() => setSinalCobrancas((n) => n + 1)}
           abrirExterno={abrirBoletoDrawer}
           onFechado={() => setAbrirBoletoDrawer(false)}
         />
