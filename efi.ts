@@ -1030,8 +1030,32 @@ export function registrarRotasEfi(
         });
       }
 
-      if (cobranca.gateway === "asaas") {
-        const contaDoUsuario = await lerCredenciaisBanco(db, uid);
+      /*
+        O BOLETO FOI EMITIDO POR UM BANCO — TEM QUE SER CANCELADO POR ELE.
+
+        ⚠️ Isto não é opcional: a conta cadastrada em Configurações → Banco
+        pode ter MUDADO depois que o boleto foi emitido (era Efí, virou
+        Asaas, por exemplo). Cancelar sempre fala com o banco que emitiu,
+        nunca com o que está conectado agora — senão a Efí (ou a Asaas)
+        recusaria a chamada (credencial de outra conta) e o erro cru
+        vazaria para a tela, sem explicar o que fazer.
+      */
+      const gatewayDoBoleto: "asaas" | "efi" = cobranca.gateway === "asaas" ? "asaas" : "efi";
+      const contaDoUsuario = await lerCredenciaisBanco(db, uid);
+      const gatewayAtual: "asaas" | "efi" = contaDoUsuario?.provedor === "asaas" ? "asaas" : "efi";
+
+      if (gatewayDoBoleto !== gatewayAtual) {
+        const nomeEmissor = gatewayDoBoleto === "asaas" ? "Asaas" : "Efí";
+        return res.status(428).json({
+          success: false,
+          mensagem:
+            `Este boleto foi emitido pela ${nomeEmissor}, mas a conta conectada agora é outra. ` +
+            `Para cancelar, reconecte a ${nomeEmissor} temporariamente em Configurações → Banco, ` +
+            `ou cancele direto no painel da ${nomeEmissor}.`,
+        });
+      }
+
+      if (gatewayDoBoleto === "asaas") {
         await cancelarCobrancaAsaas(contaDoUsuario?.segredos || {}, contaDoUsuario?.ambiente, id);
       } else {
         await efiCobrancas(uid, "PUT", `/v1/charge/${encodeURIComponent(id)}/cancel`);
@@ -1046,8 +1070,16 @@ export function registrarRotasEfi(
 
       res.json({ success: true, mensagem: "Boleto cancelado." });
     } catch (err: any) {
-      if (err.message === "NAO_AUTENTICADO") {
-        return res.status(401).json({ success: false, mensagem: "Faça login para continuar." });
+      // Mesmas causas conhecidas da emissão (sem credencial, sem chave de
+      // cofre etc.) podem acontecer aqui também — a mesma tradução serve.
+      if (
+        err.message === "NAO_AUTENTICADO" ||
+        err.message === "SEM_CREDENCIAIS_USUARIO" ||
+        err.message === "BANCO_SEM_EMISSAO" ||
+        err.message === "SEM_CHAVE_CRIPTO"
+      ) {
+        const { status, mensagem } = explicarFalhaConta(err);
+        return res.status(status).json({ success: false, mensagem });
       }
       console.error("[Efí Cancelar Boleto]", err.response?.data || err.message);
       const detalhe =
