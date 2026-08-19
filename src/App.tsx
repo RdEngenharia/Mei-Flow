@@ -52,6 +52,7 @@ import BlocoRecebimentoVenda, { planoVendaVazio, composicaoParaSalvar, type Plan
 import { composicaoDosItens, valorParaCaixa } from "./utils/composicaoValor";
 import { mascararDocumento, documentoInvalidoCompleto, rotuloDocumento } from "./utils/documentoBR";
 import PainelAReceber from "./components/PainelAReceber";
+import CardBoletosAReceber from "./components/CardBoletosAReceber";
 import ModalBaixaRecebimento from "./components/ModalBaixaRecebimento";
 import CentralNotificacoes from "./components/CentralNotificacoes";
 /*
@@ -2866,6 +2867,18 @@ ${meiName}`;
               transacoes={transacoes}
               onBaixar={(venda, parcela) => setBaixaEmAndamento({ venda, parcela })}
               onPagarComissao={handlePagarComissao}
+            />
+
+            {/*
+              BOLETOS A RECEBER — mesma ideia do painel acima, outra fonte.
+
+              Venda a prazo mora nas transações do app; boleto mora na Efí, e
+              antes só aparecia entrando na aba Cobranças. Este card busca o
+              resumo sozinho e some quando não há boleto pendente.
+            */}
+            <CardBoletosAReceber
+              userId={user?.uid || userId}
+              onAbrir={() => setAbrirBoletoDrawer(true)}
             />
 
             {/* REGULARIDADE TRIBUTÁRIA MEI (DAS & DASN-SIMEI) */}
