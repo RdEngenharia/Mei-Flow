@@ -62,7 +62,7 @@ export function taxaParaParcelas(parcelas: number): FaixaTaxaCartao {
 
 export type SimulacaoCartao = {
   parcelas: number;
-  /** Quanto o cliente paga em cada parcela — informativo, não é o que o MEI recebe. */
+  /** Quanto o cliente paga em cada parcela. */
   valorParcela: number;
   taxaFixa: number;
   taxaPercentual: number;
@@ -70,14 +70,21 @@ export type SimulacaoCartao = {
   valorTaxas: number;
   /** O que efetivamente sobra para o MEI, depois das taxas. */
   valorLiquido: number;
+  /** Total cobrado do cliente (= valorParcela × parcelas). Repetido aqui para
+   *  não obrigar quem consome a recalcular — em "com repasse" é diferente do
+   *  valor que o MEI digitou. */
+  valorBruto: number;
 };
 
 /**
  * Simula quanto sobra líquido para o MEI numa venda de `valorVenda`, parcelada
- * em `parcelas` vezes no cartão. Nunca lança erro — valores fora do intervalo
- * são limitados silenciosamente (1 a 21x, valor negativo vira zero), porque
- * isto alimenta uma tela que atualiza a cada tecla digitada: travar no meio
- * da digitação seria pior que mostrar um número provisório.
+ * em `parcelas` vezes no cartão, quando o PRÓPRIO MEI absorve a taxa — o
+ * cliente paga exatamente `valorVenda`, dividido nas parcelas.
+ *
+ * Nunca lança erro — valores fora do intervalo são limitados silenciosamente
+ * (1 a 21x, valor negativo vira zero), porque isto alimenta uma tela que
+ * atualiza a cada tecla digitada: travar no meio da digitação seria pior que
+ * mostrar um número provisório.
  */
 export function simularRecebimentoCartao(valorVenda: number, parcelas: number): SimulacaoCartao {
   const p = parcelasValidas(parcelas);
@@ -93,5 +100,48 @@ export function simularRecebimentoCartao(valorVenda: number, parcelas: number): 
     taxaPercentual: faixa.taxaPercentual,
     valorTaxas,
     valorLiquido,
+    valorBruto: arredondar(valor),
+  };
+}
+
+/**
+ * O inverso: quanto COBRAR do cliente para que, depois de descontada a taxa
+ * desta faixa de parcelamento, sobre exatamente `valorLiquidoDesejado` para
+ * o MEI — "repassar a taxa ao cliente", em vez de o MEI absorver o custo do
+ * parcelamento.
+ *
+ * A conta: se X é o valor cobrado do cliente,
+ *   líquido = X − (taxaFixa + X × taxaPercentual/100)
+ * Isolando X para que líquido = valorLiquidoDesejado:
+ *   X = (valorLiquidoDesejado + taxaFixa) / (1 − taxaPercentual/100)
+ *
+ * Assim como a função irmã, nunca lança erro — mesma lógica de limitar
+ * silenciosamente parcelas e valor, pelo mesmo motivo (tela que recalcula a
+ * cada tecla digitada).
+ */
+export function calcularValorComRepasse(valorLiquidoDesejado: number, parcelas: number): SimulacaoCartao {
+  const p = parcelasValidas(parcelas);
+  const liquidoAlvo = Math.max(0, Number(valorLiquidoDesejado) || 0);
+  const faixa = taxaParaParcelas(p);
+  const fatorPercentual = faixa.taxaPercentual / 100;
+  // A tabela atual nunca chega perto de 100% de taxa, mas a guarda evita
+  // dividir por zero (ou por negativo) se um dia uma faixa absurda for
+  // adicionada por engano.
+  const valorBruto =
+    fatorPercentual < 1
+      ? arredondar((liquidoAlvo + faixa.taxaFixa) / (1 - fatorPercentual))
+      : arredondar(liquidoAlvo + faixa.taxaFixa);
+  const valorTaxas = arredondar(Math.max(0, valorBruto - liquidoAlvo));
+
+  return {
+    parcelas: p,
+    valorParcela: arredondar(valorBruto / p),
+    taxaFixa: faixa.taxaFixa,
+    taxaPercentual: faixa.taxaPercentual,
+    valorTaxas,
+    // Por definição do que foi pedido — o valor efetivo (valorBruto - valorTaxas)
+    // pode diferir em menos de 1 centavo por causa do arredondamento acima.
+    valorLiquido: liquidoAlvo,
+    valorBruto,
   };
 }

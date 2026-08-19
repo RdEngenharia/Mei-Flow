@@ -13,7 +13,7 @@
  * 5. Líquido + taxas sempre fecha com o valor da venda.
  */
 
-import { taxaParaParcelas, simularRecebimentoCartao } from "./taxasAsaas";
+import { taxaParaParcelas, simularRecebimentoCartao, calcularValorComRepasse } from "./taxasAsaas";
 
 let passou = 0;
 let falhou = 0;
@@ -73,6 +73,34 @@ t("venda de R$0 não gera taxa negativa nem líquido negativo", semValor.valorLi
 
 const negativo = simularRecebimentoCartao(-50, 1);
 t("valor negativo é tratado como zero, não como venda de fato", negativo.valorTaxas === 0.49 && negativo.valorLiquido === 0, negativo);
+
+/* ========================================================================== */
+bloco("valorBruto — sem repasse é sempre o valor digitado");
+
+t("à vista: valorBruto = valor digitado", simularRecebimentoCartao(1000, 1).valorBruto === 1000);
+t("6x: valorBruto continua o total, não a parcela", simularRecebimentoCartao(1200, 6).valorBruto === 1200);
+
+/* ========================================================================== */
+bloco("Repasse de taxa — cobrar do cliente para o MEI receber o líquido pedido");
+
+const r1 = calcularValorComRepasse(1000, 1);
+// X = (1000 + 0,49) / (1 - 0,0299) = 1000,49 / 0,9701 ≈ 1031,33
+t("à vista de R$1000 líquido: valorBruto ≈ 1031,33", Math.abs(r1.valorBruto - 1031.33) < 0.02, r1);
+t("à vista: valorLiquido é exatamente o que foi pedido", r1.valorLiquido === 1000, r1);
+t("à vista: valorBruto − valorTaxas fecha com o líquido pedido (a menos de 1 centavo)",
+  Math.abs(r1.valorBruto - r1.valorTaxas - 1000) < 0.01, r1);
+
+t("mais parcelas pedindo o mesmo líquido cobra um valorBruto maior (taxa % sobe)",
+  calcularValorComRepasse(1000, 21).valorBruto > calcularValorComRepasse(1000, 1).valorBruto);
+
+t("com repasse, parcelas fora do intervalo também são limitadas (não trava)",
+  calcularValorComRepasse(500, 100).parcelas === 21 && calcularValorComRepasse(500, -3).parcelas === 1);
+
+t("líquido pedido de R$0 não gera valorBruto negativo", calcularValorComRepasse(0, 3).valorBruto >= 0);
+
+t("com repasse, cliente sempre paga mais que o líquido pedido pelo MEI (taxa não é de graça)",
+  [1, 5, 10, 21].every((p) => calcularValorComRepasse(300, p).valorBruto > 300)
+);
 
 console.log(`\n${falhou === 0 ? "✓" : "✗"} ${passou} passaram, ${falhou} falharam\n`);
 if (falhou > 0) process.exit(1);

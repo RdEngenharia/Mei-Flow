@@ -1,14 +1,14 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   Receipt, Plus, X, Loader2, AlertTriangle, CheckCircle2, Copy, ExternalLink,
   TrendingUp, Clock, AlertOctagon, Wallet, ChevronRight, ChevronDown, RefreshCw, Search, Sparkles,
-  Trash2, CreditCard,
+  Trash2, CreditCard, BellOff,
 } from "lucide-react";
 import { auth } from "../firebase";
 import { montarAgenda, ordemDaAba } from "../utils/agendaCobrancas";
 import { getApiUrl } from "../utils/nativeFile";
 import { Cliente } from "../types";
-import { simularRecebimentoCartao } from "../utils/taxasAsaas";
+import { simularRecebimentoCartao, calcularValorComRepasse } from "../utils/taxasAsaas";
 
 /**
  * PAINEL DE COBRANÇAS — emitir boletos e acompanhar o que foi pago.
@@ -147,7 +147,15 @@ export default function CobrancasPanel({
    * `true` pede a ANTECIPAÇÃO: tudo de uma vez, com uma taxa maior por isso.
    */
   const [antecipar, setAntecipar] = useState(false);
+  /**
+   * `false` (padrão): o MEI absorve a taxa — o cliente paga exatamente o
+   * valor digitado, e a taxa é descontada do que o MEI recebe.
+   * `true`: "repasse" — o valor digitado é o que o MEI QUER RECEBER líquido;
+   * o valor cobrado do cliente já vem maior, embutindo a taxa.
+   */
+  const [repasseTaxa, setRepasseTaxa] = useState(false);
   const [sincronizando, setSincronizando] = useState(false);
+  const [desligandoWhatsapp, setDesligandoWhatsapp] = useState(false);
 
   // Endereço: só aparece quando o banco exige (boleto registrado em produção).
   const [pedirEndereco, setPedirEndereco] = useState(false);
@@ -259,6 +267,35 @@ export default function CobrancasPanel({
   };
 
   /**
+   * Corrige, de uma vez, os clientes já cadastrados que ainda geram taxa de
+   * notificação por WhatsApp — cliente novo já sai correto a partir de agora
+   * (ver bancoAsaas.ts), mas quem já cobrou antes precisa rodar isto uma vez
+   * para os clientes antigos pararem de gerar a taxa também.
+   */
+  const desligarWhatsapp = async () => {
+    setDesligandoWhatsapp(true);
+    setErro(null);
+    try {
+      const r = await fetch(getApiUrl("/api/efi/notificacoes/desativar-whatsapp"), {
+        method: "POST",
+        headers: await comToken(),
+      });
+      const d = await r.json();
+      if (!d.success) throw new Error(d.mensagem || "Não foi possível desligar as notificações.");
+      triggerToast?.(d.mensagem);
+      if (Array.isArray(d.falhas) && d.falhas.length) {
+        setErro(
+          `${d.falhas.length} cliente(s) não puderam ser corrigidos agora — tente de novo em instantes.`
+        );
+      }
+    } catch (e: any) {
+      setErro(e.message);
+    } finally {
+      setDesligandoWhatsapp(false);
+    }
+  };
+
+  /**
    * CANCELA O BOLETO NO BANCO — não é só apagar da tela.
    *
    * ⚠️ Boleto pago não pode ser excluído por aqui: o servidor recusa antes de
@@ -322,6 +359,41 @@ export default function CobrancasPanel({
     }
   }, [vencimento]);
 
+  /**
+   * As parcelas oferecidas no seletor de cartão — em vez da barra deslizante
+   * antiga, uma lista de opções (1x a 21x), cada uma já mostrando o valor da
+   * parcela. Some da lista qualquer opção cuja parcela ficaria abaixo de
+   * R$ 5,00 (mínimo cobrado pela Asaas), do mesmo jeito que o carnê já avisa
+   * — só que aqui a opção nem aparece, em vez de deixar escolher e travar
+   * depois. A conta muda com o modo (com ou sem repasse), porque em "com
+   * repasse" quem paga a taxa é o cliente, então a parcela dele é maior.
+   */
+  const totalCartaoDigitado = parseFloat(String(valor).replace(",", ".")) || 0;
+  const opcoesParcelasCartao = useMemo(() => {
+    const opcoes: { n: number; parcela: number }[] = [];
+    for (let n = 1; n <= 21; n++) {
+      if (totalCartaoDigitado <= 0) {
+        opcoes.push({ n, parcela: 0 });
+        continue;
+      }
+      const sim = repasseTaxa
+        ? calcularValorComRepasse(totalCartaoDigitado, n)
+        : simularRecebimentoCartao(totalCartaoDigitado, n);
+      if (n > 1 && sim.valorParcela < 5) continue;
+      opcoes.push({ n, parcela: sim.valorParcela });
+    }
+    return opcoes.length ? opcoes : [{ n: 1, parcela: totalCartaoDigitado }];
+  }, [totalCartaoDigitado, repasseTaxa]);
+
+  // Se a opção selecionada sumiu da lista (valor mudou e a parcela ficou
+  // abaixo do mínimo), volta para a maior opção ainda válida.
+  useEffect(() => {
+    if (modo !== "cartao") return;
+    if (!opcoesParcelasCartao.some((o) => o.n === parcelasCartao)) {
+      setParcelasCartao(opcoesParcelasCartao[opcoesParcelasCartao.length - 1]?.n || 1);
+    }
+  }, [modo, opcoesParcelasCartao, parcelasCartao]);
+
   const emitir = async (e: React.FormEvent) => {
     e.preventDefault();
     const valorNum = parseFloat(String(valor).replace(",", "."));
@@ -346,7 +418,13 @@ export default function CobrancasPanel({
           : modo === "cartao"
           ? {
               customerId: clienteId,
-              valor: valorNum,
+              // Sem repasse: o valor digitado é o que o cliente paga.
+              // Com repasse: o valor digitado é o que o MEI quer receber —
+              // a Asaas precisa do valor BRUTO (já com a taxa embutida) para
+              // cobrar do cliente, senão o líquido pedido nunca fecha.
+              valor: repasseTaxa
+                ? calcularValorComRepasse(valorNum, parcelasCartao).valorBruto
+                : valorNum,
               vencimento,
               parcelas: parcelasCartao,
               mensagem: descricao || undefined,
@@ -374,7 +452,10 @@ export default function CobrancasPanel({
         throw new Error(d.mensagem || "Falha ao gerar a cobrança.");
       }
 
-      setGerado(d);
+      // Guarda o valor líquido que o MEI pediu (modo "com repasse") junto com a
+      // resposta — o campo `valor` é limpo logo abaixo, então sem isso a tela de
+      // sucesso não teria mais como mostrar "você pediu para receber X".
+      setGerado(modo === "cartao" && repasseTaxa ? { ...d, valorLiquidoAlvo: valorNum } : d);
       setValor("");
       setDescricao("");
       triggerToast?.(
@@ -484,6 +565,18 @@ export default function CobrancasPanel({
                   title="Conferir pagamentos"
                 >
                   <RefreshCw className={`w-4 h-4 ${carregando || sincronizando ? "animate-spin" : ""}`} />
+                </button>
+                <button
+                  onClick={desligarWhatsapp}
+                  disabled={desligandoWhatsapp}
+                  className="w-9 h-9 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-full flex items-center justify-center transition-colors cursor-pointer disabled:opacity-50"
+                  title="Parar de pagar notificação por WhatsApp (clientes já cadastrados)"
+                >
+                  {desligandoWhatsapp ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <BellOff className="w-4 h-4" />
+                  )}
                 </button>
                 <button
                   onClick={() => { setAberto(false); setShowForm(false); setGerado(null); onFechado?.(); }}
@@ -609,7 +702,13 @@ export default function CobrancasPanel({
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
                       <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
-                        {modo === "carne" ? "Valor TOTAL (R$) *" : modo === "cartao" ? "Valor da venda (R$) *" : "Valor (R$) *"}
+                        {modo === "carne"
+                          ? "Valor TOTAL (R$) *"
+                          : modo === "cartao"
+                          ? repasseTaxa
+                            ? "Quanto você quer receber líquido (R$) *"
+                            : "Valor da venda (R$) *"
+                          : "Valor (R$) *"}
                       </label>
                       <input
                         required
@@ -682,50 +781,131 @@ export default function CobrancasPanel({
                       <label className="block text-[9px] uppercase tracking-wider font-extrabold text-indigo-800">
                         Parcelas oferecidas ao cliente
                       </label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="range" min={1} max={21} step={1}
-                          value={parcelasCartao}
-                          onChange={(e) => setParcelasCartao(Number(e.target.value))}
-                          className="flex-1 accent-indigo-600 cursor-pointer"
-                        />
-                        <span className="text-sm font-extrabold text-indigo-800 w-14 text-right">
-                          {parcelasCartao === 1 ? "à vista" : `até ${parcelasCartao}x`}
-                        </span>
+                      <select
+                        value={parcelasCartao}
+                        onChange={(e) => setParcelasCartao(Number(e.target.value))}
+                        className="w-full bg-white border border-indigo-200 text-indigo-800 rounded-xl py-2.5 px-3 text-xs font-bold focus:ring-1 focus:ring-indigo-500 focus:outline-none cursor-pointer"
+                      >
+                        {opcoesParcelasCartao.map(({ n, parcela }) => (
+                          <option key={n} value={n}>
+                            {n === 1
+                              ? "À vista (1x)"
+                              : totalCartaoDigitado > 0
+                              ? `${n}x de ${brl(parcela)}`
+                              : `Até ${n}x`}
+                          </option>
+                        ))}
+                      </select>
+                      {totalCartaoDigitado > 0 && opcoesParcelasCartao[opcoesParcelasCartao.length - 1]?.n < 21 && (
+                        <p className="text-[9px] text-indigo-700/70 font-medium">
+                          Parcelas acima de {opcoesParcelasCartao[opcoesParcelasCartao.length - 1]?.n}x não aparecem
+                          porque a parcela ficaria abaixo do mínimo de R$ 5,00.
+                        </p>
+                      )}
+
+                      {/*
+                        QUEM PAGA A TAXA — "sem repasse" (o MEI absorve, valor digitado é o que
+                        o cliente paga) vs "com repasse" (o valor digitado é o que o MEI quer
+                        receber líquido, e a taxa é embutida no preço cobrado do cliente).
+                      */}
+                      <div className="pt-2 border-t border-indigo-100 space-y-1.5">
+                        <label className="block text-[9px] uppercase tracking-wider font-extrabold text-indigo-800">
+                          Quem paga a taxa do cartão
+                        </label>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setRepasseTaxa(false)}
+                            className={`text-[10px] font-bold rounded-xl py-2 px-2 border transition-colors ${
+                              !repasseTaxa
+                                ? "bg-indigo-600 border-indigo-600 text-white"
+                                : "bg-white border-indigo-200 text-indigo-700"
+                            }`}
+                          >
+                            Você (sem repasse)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRepasseTaxa(true)}
+                            className={`text-[10px] font-bold rounded-xl py-2 px-2 border transition-colors ${
+                              repasseTaxa
+                                ? "bg-indigo-600 border-indigo-600 text-white"
+                                : "bg-white border-indigo-200 text-indigo-700"
+                            }`}
+                          >
+                            Cliente (com repasse)
+                          </button>
+                        </div>
                       </div>
 
-                      {(() => {
-                        const total = parseFloat(String(valor).replace(",", ".")) || 0;
-                        if (total <= 0) {
+                      {/*
+                        CALCULADORA — mostra as duas contas lado a lado (com e sem repasse) para
+                        o MEI comparar antes de decidir; o botão acima é o que efetivamente vale
+                        na hora de gerar a cobrança.
+                      */}
+                      {totalCartaoDigitado <= 0 ? (
+                        <p className="text-[11px] font-bold text-indigo-700">
+                          Digite o valor acima para ver a comparação de taxas.
+                        </p>
+                      ) : (
+                        (() => {
+                          const semRepasse = simularRecebimentoCartao(totalCartaoDigitado, parcelasCartao);
+                          const comRepasse = calcularValorComRepasse(totalCartaoDigitado, parcelasCartao);
                           return (
-                            <p className="text-[11px] font-bold text-indigo-700">
-                              Digite o valor da venda acima para ver quanto sobra líquido.
-                            </p>
+                            <div className="space-y-1.5">
+                              <div
+                                className={`bg-white border rounded-xl p-2.5 space-y-1 ${
+                                  !repasseTaxa ? "border-indigo-400 ring-1 ring-indigo-300" : "border-indigo-100"
+                                }`}
+                              >
+                                <p className="text-[9px] uppercase tracking-wider font-extrabold text-indigo-700">
+                                  Sem repasse {!repasseTaxa && "· selecionado"}
+                                </p>
+                                <p className="text-[11px] font-bold text-indigo-800">
+                                  {semRepasse.parcelas === 1
+                                    ? `Cliente paga ${brl(semRepasse.valorBruto)} à vista.`
+                                    : `Cliente paga em ${semRepasse.parcelas}x de ${brl(semRepasse.valorParcela)}.`}
+                                </p>
+                                <p className="text-[11px] text-slate-500">
+                                  Taxa: {brl(semRepasse.taxaFixa)} + {semRepasse.taxaPercentual}% ={" "}
+                                  <span className="font-bold text-rose-600">{brl(semRepasse.valorTaxas)}</span>
+                                </p>
+                                <p className="text-[12px] font-extrabold text-emerald-700">
+                                  Você recebe líquido: {brl(semRepasse.valorLiquido)}
+                                </p>
+                              </div>
+
+                              <div
+                                className={`bg-white border rounded-xl p-2.5 space-y-1 ${
+                                  repasseTaxa ? "border-indigo-400 ring-1 ring-indigo-300" : "border-indigo-100"
+                                }`}
+                              >
+                                <p className="text-[9px] uppercase tracking-wider font-extrabold text-indigo-700">
+                                  Com repasse {repasseTaxa && "· selecionado"}
+                                </p>
+                                <p className="text-[11px] font-bold text-indigo-800">
+                                  {comRepasse.parcelas === 1
+                                    ? `Cliente paga ${brl(comRepasse.valorBruto)} à vista.`
+                                    : `Cliente paga em ${comRepasse.parcelas}x de ${brl(comRepasse.valorParcela)}.`}
+                                </p>
+                                <p className="text-[11px] text-slate-500">
+                                  Taxa embutida no preço:{" "}
+                                  <span className="font-bold text-rose-600">{brl(comRepasse.valorTaxas)}</span>
+                                </p>
+                                <p className="text-[12px] font-extrabold text-emerald-700">
+                                  Você recebe líquido: {brl(comRepasse.valorLiquido)} (o valor que você digitou)
+                                </p>
+                              </div>
+                            </div>
                           );
-                        }
-                        const sim = simularRecebimentoCartao(total, parcelasCartao);
-                        return (
-                          <div className="bg-white border border-indigo-100 rounded-xl p-2.5 space-y-1">
-                            <p className="text-[11px] font-bold text-indigo-800">
-                              {sim.parcelas === 1
-                                ? `Cliente paga ${brl(total)} à vista.`
-                                : `Cliente paga em até ${sim.parcelas}x de ${brl(sim.valorParcela)}.`}
-                            </p>
-                            <p className="text-[11px] text-slate-500">
-                              Taxa estimada: {brl(sim.taxaFixa)} + {sim.taxaPercentual}% ={" "}
-                              <span className="font-bold text-rose-600">{brl(sim.valorTaxas)}</span>
-                            </p>
-                            <p className="text-[12px] font-extrabold text-emerald-700">
-                              Você recebe líquido: {brl(sim.valorLiquido)}
-                            </p>
-                          </div>
-                        );
-                      })()}
+                        })()
+                      )}
 
                       <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed">
                         Estimativa com a tabela padrão da Asaas — a taxa da sua conta pode ser um pouco
-                        diferente. O cliente escolhe, na página de pagamento, quantas parcelas quer usar
-                        (até este limite e até o que a bandeira do cartão dele permitir).
+                        diferente. Em "sem repasse" o valor digitado é o que o cliente paga; em "com
+                        repasse" é o que você quer receber líquido, e o preço cobrado do cliente já
+                        vem maior para cobrir a taxa.
                       </p>
 
                       {/*
@@ -892,6 +1072,13 @@ export default function CobrancasPanel({
                       ? `Valor de ${brl(gerado.valor)}${gerado.parcelas > 1 ? `, em até ${gerado.parcelas}x` : " à vista"}. Envie o link abaixo — o cliente digita o cartão numa página segura da Asaas.`
                       : `Valor de ${brl(gerado.valor)}. Envie o link abaixo para o seu cliente.`}
                   </p>
+
+                  {modo === "cartao" && gerado.valorLiquidoAlvo != null && (
+                    <p className="text-[11px] text-emerald-700/80 font-medium leading-relaxed">
+                      Taxa repassada ao cliente: o preço já foi ajustado para {brl(gerado.valor)} para que você
+                      receba os {brl(gerado.valorLiquidoAlvo)} que digitou, líquido.
+                    </p>
+                  )}
 
                   {modo === "cartao" && gerado.parcelas > 1 && antecipar && (
                     <div

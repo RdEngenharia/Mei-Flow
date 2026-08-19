@@ -49,7 +49,7 @@ export function baseAsaas(ambiente?: string): string {
 async function chamar(
   ambiente: string | undefined,
   apiKey: string,
-  metodo: "GET" | "POST" | "DELETE",
+  metodo: "GET" | "POST" | "PUT" | "DELETE",
   caminho: string,
   corpo?: any
 ) {
@@ -91,10 +91,90 @@ type ClienteMinimo = {
 };
 
 /**
+ * ============================================================================
+ * NOTIFICAÇÃO POR WHATSAPP — desligando a cobrança automática por mensagem
+ * ============================================================================
+ *
+ * A Asaas cria, para todo cliente novo, uma sequência de notificações
+ * automáticas (cobrança criada, vencimento próximo, recebida, etc.). A
+ * maioria dos canais é grátis, mas WhatsApp é cobrado por mensagem — e é
+ * cada uma dessas mensagens que aparece no extrato da Asaas como "Taxa de
+ * notificação por WhatsApp". Numa cobrança PARCELADA, cada parcela nasce
+ * como uma cobrança (`payment`) separada por baixo dos panos — é por isso
+ * que uma venda em 10x pode gerar 10 mensagens (e 10 taxas) de uma vez: não
+ * é 10 mensagens sobre 1 cobrança, são 10 cobranças, cada uma com sua
+ * própria notificação.
+ *
+ * A configuração de notificação, porém, é por CLIENTE, não por cobrança —
+ * então desligar o WhatsApp uma vez para o cliente vale para todas as
+ * cobranças dele, presentes e futuras, parceladas ou não.
+ *
+ * ⚠️ NÃO CONFIRMADO CONTRA UMA RESPOSTA REAL: a documentação não deixa 100%
+ * claro se o PUT em `/v3/notifications/{id}` aceita só o campo que muda
+ * (parcial) ou se é preciso reenviar o objeto inteiro. Aqui mandamos só
+ * `whatsappEnabledForCustomer: false` — é o padrão mais comum no resto desta
+ * API (todas as outras rotas usadas neste arquivo aceitam corpo parcial).
+ * Depois de usar, vale conferir no painel da Asaas (Cliente → Notificações)
+ * se os outros canais (e-mail, SMS) continuam do jeito que estavam antes.
+ */
+async function desligarWhatsappDoCliente(
+  ambiente: string | undefined,
+  apiKey: string,
+  customerId: string
+): Promise<void> {
+  const resposta = await chamar(
+    ambiente,
+    apiKey,
+    "GET",
+    `/v3/customers/${encodeURIComponent(customerId)}/notifications`
+  );
+  const notificacoes: any[] = Array.isArray(resposta?.data)
+    ? resposta.data
+    : Array.isArray(resposta)
+    ? resposta
+    : [];
+
+  for (const n of notificacoes) {
+    if (!n?.id) continue;
+    if (n.whatsappEnabledForCustomer === false) continue; // já desligado — não gasta chamada à toa
+    await chamar(ambiente, apiKey, "PUT", `/v3/notifications/${encodeURIComponent(n.id)}`, {
+      whatsappEnabledForCustomer: false,
+    });
+  }
+}
+
+/**
+ * Chama `desligarWhatsappDoCliente` sem deixar uma falha nela travar a
+ * emissão da cobrança em si — é mais importante o MEI conseguir cobrar o
+ * cliente do que essa limpeza funcionar toda vez. Se falhar, só registra no
+ * log do servidor.
+ */
+async function desligarWhatsappSeNecessario(
+  ambiente: string | undefined,
+  apiKey: string,
+  customerId: string
+): Promise<void> {
+  try {
+    await desligarWhatsappDoCliente(ambiente, apiKey, customerId);
+  } catch (err: any) {
+    console.error(
+      "[Asaas] Não foi possível desligar a notificação por WhatsApp do cliente:",
+      err?.message || err
+    );
+  }
+}
+
+/**
  * Passos 1 e 2 do fluxo: procura o cliente pelo CPF/CNPJ, cria se não achar.
  * Compartilhado entre boleto e cartão — os dois cobram da mesma carteira de
  * clientes da Asaas, então duplicar essa busca criaria o mesmo cliente duas
  * vezes (uma "boleto", outra "cartão") no painel dela.
+ *
+ * Também desliga a notificação por WhatsApp do cliente aqui — cliente achado
+ * ou criado, tanto faz, porque um cliente antigo (de antes desta função
+ * existir) continuaria gerando a taxa até alguém desligar manualmente.
+ * Fazendo aqui, a primeira cobrança nova para qualquer cliente já corrige
+ * isso sozinha.
  */
 async function resolverClienteAsaas(
   ambiente: string | undefined,
@@ -116,7 +196,9 @@ async function resolverClienteAsaas(
   );
 
   if (busca && Array.isArray(busca.data) && busca.data.length > 0) {
-    return busca.data[0].id;
+    const id = busca.data[0].id;
+    await desligarWhatsappSeNecessario(ambiente, apiKey, id);
+    return id;
   }
 
   const criado = await chamar(ambiente, apiKey, "POST", "/v3/customers", {
@@ -129,7 +211,24 @@ async function resolverClienteAsaas(
   });
 
   if (!criado?.id) throw new Error("A Asaas não devolveu o cliente. Tente novamente.");
+  await desligarWhatsappSeNecessario(ambiente, apiKey, criado.id);
   return criado.id;
+}
+
+/**
+ * Versão exportada, para uma rotina manual de "corrigir clientes antigos de
+ * uma vez" — ver `/api/efi/notificacoes/desativar-whatsapp` em efi.ts. Ao
+ * contrário da chamada interna em `resolverClienteAsaas`, esta propaga o
+ * erro: quem chama precisa saber, cliente por cliente, se funcionou ou não.
+ */
+export async function desligarNotificacaoWhatsappAsaas(
+  credenciais: { apiKey?: string },
+  ambiente: string | undefined,
+  customerId: string
+): Promise<void> {
+  const apiKey = String(credenciais?.apiKey || "").trim();
+  if (!apiKey) throw new Error("SEM_CREDENCIAIS_USUARIO");
+  await desligarWhatsappDoCliente(ambiente, apiKey, customerId);
 }
 
 export type DadosBoletoAsaas = {

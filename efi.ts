@@ -56,7 +56,7 @@ import {
 } from "./bancoCofre.js";
 import {
   emitirBoletoAsaas, consultarCobrancaAsaas, situacaoAsaas, cancelarCobrancaAsaas, emitirCartaoAsaas,
-  solicitarAntecipacaoAsaas,
+  solicitarAntecipacaoAsaas, desligarNotificacaoWhatsappAsaas,
 } from "./bancoAsaas.js";
 import { exigirPremium, responderSePlano } from "./plano.js";
 
@@ -1896,6 +1896,91 @@ export function registrarRotasEfi(
       }
       console.error("[Efí Sincronizar]", err.response?.data || err.message);
       res.status(500).json({ success: false, mensagem: `Erro ao sincronizar: ${err.message}` });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // DESLIGAR NOTIFICAÇÃO POR WHATSAPP — corrige clientes já cadastrados
+  // --------------------------------------------------------------------------
+  //
+  // A partir de agora, todo cliente NOVO (ou reutilizado) já sai com o
+  // WhatsApp desligado — ver `resolverClienteAsaas` em bancoAsaas.ts. Mas
+  // isso só vale a partir da PRÓXIMA cobrança de cada cliente; quem já tem
+  // clientes cadastrados de antes continua sendo cobrado por notificação até
+  // que essa rotina rode uma vez para eles. É por isso que esta rota existe:
+  // um botão de "corrigir agora, de uma vez" para os clientes já usados.
+  //
+  // ⚠️ Só Asaas — a Efí não tem esse mecanismo de notificação paga por
+  // WhatsApp neste app.
+  // --------------------------------------------------------------------------
+  app.post("/api/efi/notificacoes/desativar-whatsapp", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuarioAutenticado(req);
+
+      const contaDoUsuario = await lerCredenciaisBanco(db, uid);
+      if (contaDoUsuario?.provedor !== "asaas") {
+        return res.status(428).json({
+          success: false,
+          mensagem: "Isto só se aplica a contas conectadas via Asaas.",
+        });
+      }
+
+      // Os mesmos clientes que já foram cobrados por este usuário — não dá
+      // para listar "todos os clientes da Asaas", só os que passaram por
+      // uma cobrança feita pelo MEI Flow.
+      const snap = await db.collection("cobrancas").where("userId", "==", uid).get();
+      const idsClientes = Array.from(
+        new Set(
+          snap.docs
+            .map((d: any) => d.data())
+            .filter((c: any) => c.gateway === "asaas" && c.customerId)
+            .map((c: any) => String(c.customerId))
+        )
+      );
+
+      let corrigidos = 0;
+      const falhas: { customerId: string; erro: string }[] = [];
+
+      for (const customerId of idsClientes) {
+        try {
+          await desligarNotificacaoWhatsappAsaas(
+            contaDoUsuario.segredos || {},
+            contaDoUsuario.ambiente,
+            customerId
+          );
+          corrigidos++;
+        } catch (err: any) {
+          falhas.push({ customerId, erro: String(err?.message || err).slice(0, 200) });
+        }
+      }
+
+      res.json({
+        success: true,
+        totalClientes: idsClientes.length,
+        corrigidos,
+        falhas,
+        mensagem:
+          idsClientes.length === 0
+            ? "Nenhum cliente cobrado pela Asaas ainda."
+            : falhas.length
+            ? `${corrigidos} de ${idsClientes.length} cliente(s) corrigido(s). ${falhas.length} falharam — tente de novo.`
+            : `WhatsApp desligado para ${corrigidos} cliente(s). Cobranças novas para eles não devem mais gerar essa taxa.`,
+      });
+    } catch (err: any) {
+      if (
+        err.message === "NAO_AUTENTICADO" ||
+        err.message === "SEM_CREDENCIAIS_USUARIO" ||
+        err.message === "BANCO_SEM_EMISSAO" ||
+        err.message === "SEM_CHAVE_CRIPTO"
+      ) {
+        const { status, mensagem } = explicarFalhaConta(err);
+        return res.status(status).json({ success: false, mensagem });
+      }
+      console.error("[Asaas Notificações]", err.response?.data || err.message);
+      res.status(500).json({
+        success: false,
+        mensagem: `Erro ao desligar notificações: ${err.message}`,
+      });
     }
   });
 
