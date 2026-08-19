@@ -1092,6 +1092,62 @@ export function registrarRotasEfi(
   });
 
   // --------------------------------------------------------------------------
+  // MARCAR COMO CANCELADO SÓ AQUI — para quem já cancelou direto no banco
+  // --------------------------------------------------------------------------
+  //
+  // A rota acima recusa quando o boleto foi emitido por um banco diferente do
+  // que está conectado hoje (ver o comentário ali). Quando isso acontece, a
+  // única saída pela API seria reconectar o banco antigo — chato, mas às
+  // vezes a pessoa já foi direto no painel do banco e cancelou por lá.
+  //
+  // Esta rota NÃO fala com nenhum banco. Ela confia na palavra do usuário de
+  // que o boleto já está morto do outro lado, e só atualiza o registro local.
+  // Isso é seguro justamente PORQUE não muda nada na cobrança de verdade — se
+  // o usuário errou e o boleto continua ativo lá, o pior caso é o MEI Flow
+  // mostrar como cancelado um boleto que o cliente ainda pode pagar (a mesma
+  // situação de qualquer painel que não sincroniza na hora), não o contrário
+  // (nunca inventa uma cobrança nem mexe em dinheiro).
+  // --------------------------------------------------------------------------
+  app.post("/api/efi/boleto/:id/cancelar-local", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuarioAutenticado(req);
+      const id = String(req.params.id);
+
+      const snap = await db.collection("cobrancas").doc(id).get();
+      if (!snap.exists || snap.data().userId !== uid) {
+        return res.status(404).json({ success: false, mensagem: "Boleto não encontrado." });
+      }
+      const cobranca = snap.data();
+
+      if (STATUS_PAGOS.includes(String(cobranca.status || "").toLowerCase())) {
+        return res.status(400).json({
+          success: false,
+          mensagem: "Este boleto já foi pago — não é possível marcar como cancelado.",
+        });
+      }
+
+      await db.collection("cobrancas").doc(id).set(
+        {
+          status: "canceled",
+          canceladoEm: new Date().toISOString(),
+          // Fica registrado que ninguém confirmou isso com o banco — só o
+          // usuário disse que já tinha cancelado por fora.
+          canceladoLocalmente: true,
+        },
+        { merge: true }
+      );
+
+      res.json({ success: true, mensagem: "Boleto marcado como cancelado." });
+    } catch (err: any) {
+      if (err.message === "NAO_AUTENTICADO") {
+        return res.status(401).json({ success: false, mensagem: "Faça login para continuar." });
+      }
+      console.error("[Efí Cancelar Boleto — local]", err.message);
+      res.status(500).json({ success: false, mensagem: `Não foi possível atualizar: ${err.message}` });
+    }
+  });
+
+  // --------------------------------------------------------------------------
   // CARNÊ — parcelamento em vários boletos de uma vez
   // --------------------------------------------------------------------------
   //

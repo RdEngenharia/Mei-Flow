@@ -245,6 +245,13 @@ export default function CobrancasPanel({
    * ⚠️ Boleto pago não pode ser excluído por aqui: o servidor recusa antes de
    * chamar Efí/Asaas, porque cancelar não devolve o dinheiro que já entrou.
    * O botão nem aparece nessa situação (ver a lista mais abaixo).
+   *
+   * ⚠️ BANCO DIFERENTE DE QUEM EMITIU (status 428): o servidor tenta cancelar
+   * sempre no banco que emitiu aquele boleto específico, não no que está
+   * conectado hoje — quem trocou de banco tem cobranças antigas do outro. Sem
+   * as credenciais de volta não dá para chamar a API dele. Para não travar
+   * quem já foi lá e cancelou direto no painel do banco, oferecemos marcar
+   * como cancelado só aqui — ver `/cancelar-local` em efi.ts.
    */
   const excluirBoleto = async (it: Item) => {
     if (!window.confirm(
@@ -258,7 +265,25 @@ export default function CobrancasPanel({
         headers: await comToken(),
       });
       const d = await r.json();
-      if (!d.success) throw new Error(d.mensagem || "Não foi possível cancelar o boleto.");
+
+      if (!d.success) {
+        if (r.status === 428 && window.confirm(
+          `${d.mensagem}\n\nVocê já cancelou este boleto direto no painel do banco? ` +
+          `Posso só atualizar o registro aqui, sem falar com o banco de novo.`
+        )) {
+          const r2 = await fetch(getApiUrl(`/api/efi/boleto/${encodeURIComponent(it.id)}/cancelar-local`), {
+            method: "POST",
+            headers: await comToken(),
+          });
+          const d2 = await r2.json();
+          if (!d2.success) throw new Error(d2.mensagem || "Não foi possível atualizar aqui.");
+          triggerToast?.("✓ Marcado como cancelado.");
+          await carregar();
+          return;
+        }
+        throw new Error(d.mensagem || "Não foi possível cancelar o boleto.");
+      }
+
       triggerToast?.("✓ Boleto cancelado.");
       await carregar();
     } catch (e: any) {
