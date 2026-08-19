@@ -81,6 +81,57 @@ async function chamar(
   }
 }
 
+/** Achado ou criado — o mesmo cliente serve para boleto e para cartão. */
+type ClienteMinimo = {
+  clienteNome: string;
+  /** Só dígitos. */
+  clienteDocumento: string;
+  clienteEmail?: string;
+  clienteTelefone?: string;
+};
+
+/**
+ * Passos 1 e 2 do fluxo: procura o cliente pelo CPF/CNPJ, cria se não achar.
+ * Compartilhado entre boleto e cartão — os dois cobram da mesma carteira de
+ * clientes da Asaas, então duplicar essa busca criaria o mesmo cliente duas
+ * vezes (uma "boleto", outra "cartão") no painel dela.
+ */
+async function resolverClienteAsaas(
+  ambiente: string | undefined,
+  apiKey: string,
+  dados: ClienteMinimo
+): Promise<string> {
+  const documento = String(dados.clienteDocumento || "").replace(/\D/g, "");
+  if (documento.length !== 11 && documento.length !== 14) {
+    throw new Error(
+      "O cliente precisa ter um CPF (11 dígitos) ou CNPJ (14 dígitos) válido para cobrar."
+    );
+  }
+
+  const busca = await chamar(
+    ambiente,
+    apiKey,
+    "GET",
+    `/v3/customers?cpfCnpj=${encodeURIComponent(documento)}`
+  );
+
+  if (busca && Array.isArray(busca.data) && busca.data.length > 0) {
+    return busca.data[0].id;
+  }
+
+  const criado = await chamar(ambiente, apiKey, "POST", "/v3/customers", {
+    name: dados.clienteNome || "Cliente",
+    cpfCnpj: documento,
+    ...(dados.clienteEmail ? { email: dados.clienteEmail } : {}),
+    ...(dados.clienteTelefone
+      ? { mobilePhone: String(dados.clienteTelefone).replace(/\D/g, "") }
+      : {}),
+  });
+
+  if (!criado?.id) throw new Error("A Asaas não devolveu o cliente. Tente novamente.");
+  return criado.id;
+}
+
 export type DadosBoletoAsaas = {
   /** Em reais. */
   valor: number;
@@ -121,39 +172,8 @@ export async function emitirBoletoAsaas(
   const apiKey = String(credenciais?.apiKey || "").trim();
   if (!apiKey) throw new Error("SEM_CREDENCIAIS_USUARIO");
 
-  const documento = String(dados.clienteDocumento || "").replace(/\D/g, "");
-  // Conferir aqui evita gastar uma chamada de API só para descobrir isto pelo
-  // erro — e a mensagem sai clara em vez de "invalid customer".
-  if (documento.length !== 11 && documento.length !== 14) {
-    throw new Error(
-      "O cliente precisa ter um CPF (11 dígitos) ou CNPJ (14 dígitos) válido para emitir boleto."
-    );
-  }
-
   // 1 e 2 — cliente: procura antes de criar, para não duplicar.
-  let customerId = "";
-  const busca = await chamar(
-    ambiente,
-    apiKey,
-    "GET",
-    `/v3/customers?cpfCnpj=${encodeURIComponent(documento)}`
-  );
-
-  if (busca && Array.isArray(busca.data) && busca.data.length > 0) {
-    customerId = busca.data[0].id;
-  } else {
-    const criado = await chamar(ambiente, apiKey, "POST", "/v3/customers", {
-      name: dados.clienteNome || "Cliente",
-      cpfCnpj: documento,
-      ...(dados.clienteEmail ? { email: dados.clienteEmail } : {}),
-      ...(dados.clienteTelefone
-        ? { mobilePhone: String(dados.clienteTelefone).replace(/\D/g, "") }
-        : {}),
-    });
-    customerId = criado?.id || "";
-  }
-
-  if (!customerId) throw new Error("A Asaas não devolveu o cliente. Tente novamente.");
+  const customerId = await resolverClienteAsaas(ambiente, apiKey, dados);
 
   // 3 — a cobrança.
   const cobranca = await chamar(ambiente, apiKey, "POST", "/v3/payments", {
@@ -176,6 +196,201 @@ export async function emitirBoletoAsaas(
     valor: Number(dados.valor),
     vencimento: String(dados.vencimento).slice(0, 10),
   };
+}
+
+export type DadosCartaoAsaas = {
+  /** Valor total da venda — se parcelado, a Asaas divide entre as parcelas. */
+  valor: number;
+  /** ISO curto: 2026-09-10. Data do primeiro vencimento/cobrança. */
+  vencimento: string;
+  clienteNome: string;
+  /** Só dígitos. */
+  clienteDocumento: string;
+  clienteEmail?: string;
+  clienteTelefone?: string;
+  descricao?: string;
+  /** 1 = à vista. Até 21, mas o limite real depende da bandeira do cartão do cliente. */
+  parcelas?: number;
+};
+
+export type CobrancaCartaoEmitida = {
+  id: string;
+  /** Página da própria Asaas onde o cliente digita o cartão — nunca o MEI Flow. */
+  linkPagamento: string;
+  status: string;
+  valor: number;
+  parcelas: number;
+  vencimento: string;
+  /**
+   * ID do "plano de parcelamento" que a Asaas devolve quando `parcelas > 1`.
+   * ⚠️ NÃO CONFIRMADO: a documentação de criação de cobrança não deixou claro,
+   * na leitura feita, se este campo (`installment`) sempre volta na resposta
+   * quando se manda `installmentCount`. Guardamos aqui se vier; se não vier,
+   * quem for antecipar o parcelamento inteiro (ver `solicitarAntecipacaoAsaas`)
+   * não vai ter como, e cai no aviso de "não foi possível confirmar".
+   */
+  installmentId?: string;
+  /** Resposta crua da Asaas, para depurar quando um campo esperado não vem. */
+  bruto: any;
+};
+
+/**
+ * Emite uma cobrança em cartão de crédito, no modelo "checkout hospedado":
+ * o MEI Flow NUNCA recebe número de cartão. A Asaas devolve um link
+ * (`invoiceUrl`) — o mesmo mecanismo que o boleto já usa — e é lá, na página
+ * da própria Asaas, que o cliente digita os dados do cartão e escolhe em
+ * quantas vezes quer pagar (até o limite passado em `parcelas`).
+ *
+ * ⚠️ NUNCA ENVIAR `creditCard`/`creditCardHolderInfo` AQUI.
+ *
+ * A API da Asaas aceita receber o cartão diretamente, mas isso muda a conta
+ * de responsabilidade por completo: o servidor passaria a manipular dado de
+ * cartão de verdade, o que exige HTTPS ponta a ponta, cuidado com PCI-DSS e
+ * IP do pagador (`remoteIp`). O checkout hospedado evita tudo isso de
+ * propósito — a página é da Asaas, a responsabilidade de segurança do
+ * cartão é dela.
+ *
+ * ⚠️ ESTE CAMINHO (parcelas + checkout hospedado, sem dado de cartão) FOI
+ * ESCRITO A PARTIR DA DOCUMENTAÇÃO DA ASAAS, NÃO CONFIRMADO CONTRA UMA
+ * COBRANÇA REAL. Os campos `installmentCount`/`totalValue` são documentados
+ * na criação de cobrança comum (`/v3/payments`) para "cobrança parcelada",
+ * mas a doc não deixa 100% claro se, no cartão sem dado enviado, a Asaas
+ * respeita esse limite na tela dela ou deixa o cliente escolher livremente.
+ * Antes de usar para valer, gere uma cobrança pequena em homologação e
+ * confira se a página de pagamento realmente oferece as parcelas certas.
+ */
+export async function emitirCartaoAsaas(
+  credenciais: { apiKey?: string },
+  ambiente: string | undefined,
+  dados: DadosCartaoAsaas
+): Promise<CobrancaCartaoEmitida> {
+  const apiKey = String(credenciais?.apiKey || "").trim();
+  if (!apiKey) throw new Error("SEM_CREDENCIAIS_USUARIO");
+
+  const customerId = await resolverClienteAsaas(ambiente, apiKey, dados);
+
+  // Visa/Mastercard aceitam até 21x; outras bandeiras, até 12x — mas isso só
+  // se sabe depois que o cliente digita o cartão. Aqui só limitamos o teto
+  // absoluto; a bandeira específica quem resolve é a própria Asaas na hora.
+  const parcelas = Math.max(1, Math.min(21, Math.round(Number(dados.parcelas) || 1)));
+  const valorTotal = Number(dados.valor);
+
+  const payload: any = {
+    customer: customerId,
+    billingType: "CREDIT_CARD",
+    dueDate: String(dados.vencimento).slice(0, 10),
+    description: dados.descricao || undefined,
+  };
+
+  if (parcelas > 1) {
+    payload.installmentCount = parcelas;
+    payload.totalValue = valorTotal;
+  } else {
+    payload.value = valorTotal;
+  }
+
+  const cobranca = await chamar(ambiente, apiKey, "POST", "/v3/payments", payload);
+
+  return {
+    id: String(cobranca?.id || ""),
+    linkPagamento: cobranca?.invoiceUrl || "",
+    status: cobranca?.status || "PENDING",
+    valor: valorTotal,
+    parcelas,
+    vencimento: String(dados.vencimento).slice(0, 10),
+    installmentId: cobranca?.installment ? String(cobranca.installment) : undefined,
+    bruto: cobranca,
+  };
+}
+
+/**
+ * ============================================================================
+ * ANTECIPAÇÃO DE RECEBÍVEIS — "receber mês a mês" vs "receber tudo de uma vez"
+ * ============================================================================
+ *
+ * Por padrão, a Asaas repassa o dinheiro de uma cobrança em cartão no prazo
+ * normal dela (por volta de 32 dias corridos após a venda; parcelado, cada
+ * parcela cai separada, mês a mês). Quem quer o dinheiro adiantado — tudo de
+ * uma vez, hoje — pede uma ANTECIPAÇÃO, e paga uma taxa maior por isso. É uma
+ * chamada separada da criação da cobrança, não um campo que se manda junto.
+ *
+ * Para cobrança em cartão PARCELADA, dá para antecipar:
+ *   - o plano inteiro de uma vez, mandando `installment` (o id do parcelamento)
+ *   - ou parcela por parcela, mandando `payment` (o id de cada cobrança)
+ * Os dois campos são excludentes — nunca os dois juntos.
+ *
+ * ⚠️ NÃO CONFIRMADO CONTRA UMA RESPOSTA REAL: a documentação da Asaas para
+ * `/v3/anticipations/simulate` e `/v3/anticipations` não trouxe, na consulta
+ * feita, o formato exato da resposta (nomes dos campos de taxa e valor
+ * líquido). O código abaixo tenta os nomes mais prováveis (`netValue`,
+ * `fee`/`value`) e guarda a resposta crua em `bruto` para quem precisar
+ * conferir o campo certo na hora de depurar. Antes de confiar nisto para
+ * valer, peça para o usuário testar com uma cobrança pequena (ou em
+ * homologação) e comparar o valor mostrado aqui com o que aparece no painel
+ * da própria Asaas.
+ */
+
+export type AlvoAntecipacao =
+  | { tipo: "installment"; id: string }
+  | { tipo: "payment"; id: string };
+
+export type AntecipacaoAsaas = {
+  /** true se a Asaas aceitou o pedido — não necessariamente já pagou. */
+  status?: string;
+  /** Quanto seria descontado de taxa — campo ainda não confirmado, pode faltar. */
+  taxaEstimada?: number;
+  /** Quanto sobraria líquido — campo ainda não confirmado, pode faltar. */
+  valorLiquidoEstimado?: number;
+  /** Resposta crua da Asaas, para conferir/depurar os nomes reais dos campos. */
+  bruto: any;
+};
+
+async function chamarAntecipacaoAsaas(
+  credenciais: { apiKey?: string },
+  ambiente: string | undefined,
+  alvo: AlvoAntecipacao,
+  simular: boolean
+): Promise<AntecipacaoAsaas> {
+  const apiKey = String(credenciais?.apiKey || "").trim();
+  if (!apiKey) throw new Error("SEM_CREDENCIAIS_USUARIO");
+
+  const corpo = alvo.tipo === "installment" ? { installment: alvo.id } : { payment: alvo.id };
+  const caminho = simular ? "/v3/anticipations/simulate" : "/v3/anticipations";
+  const d = await chamar(ambiente, apiKey, "POST", caminho, corpo);
+
+  // Nomes de campo tentados na ordem mais provável primeiro — nenhum deles
+  // confirmado contra uma resposta real (ver aviso acima).
+  const valorLiquido = d?.netValue ?? d?.netAmount ?? d?.value ?? undefined;
+  const taxa =
+    d?.fee ??
+    (typeof d?.totalValue === "number" && typeof valorLiquido === "number"
+      ? Number((d.totalValue - valorLiquido).toFixed(2))
+      : undefined);
+
+  return {
+    status: d?.status ? String(d.status) : undefined,
+    taxaEstimada: typeof taxa === "number" ? taxa : undefined,
+    valorLiquidoEstimado: typeof valorLiquido === "number" ? valorLiquido : undefined,
+    bruto: d,
+  };
+}
+
+/** Simula a antecipação sem pedir de verdade — para mostrar a taxa antes de confirmar. */
+export function simularAntecipacaoAsaas(
+  credenciais: { apiKey?: string },
+  ambiente: string | undefined,
+  alvo: AlvoAntecipacao
+): Promise<AntecipacaoAsaas> {
+  return chamarAntecipacaoAsaas(credenciais, ambiente, alvo, true);
+}
+
+/** Pede a antecipação de verdade — dinheiro tudo de uma vez, com a taxa maior. */
+export function solicitarAntecipacaoAsaas(
+  credenciais: { apiKey?: string },
+  ambiente: string | undefined,
+  alvo: AlvoAntecipacao
+): Promise<AntecipacaoAsaas> {
+  return chamarAntecipacaoAsaas(credenciais, ambiente, alvo, false);
 }
 
 /**

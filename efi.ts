@@ -54,7 +54,10 @@ import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
 import {
   lerCredenciaisBanco, registrarRotasBanco, tokenWebhookConfere,
 } from "./bancoCofre.js";
-import { emitirBoletoAsaas, consultarCobrancaAsaas, situacaoAsaas, cancelarCobrancaAsaas } from "./bancoAsaas.js";
+import {
+  emitirBoletoAsaas, consultarCobrancaAsaas, situacaoAsaas, cancelarCobrancaAsaas, emitirCartaoAsaas,
+  solicitarAntecipacaoAsaas,
+} from "./bancoAsaas.js";
 import { exigirPremium, responderSePlano } from "./plano.js";
 
 /** URL pública do sistema — usada em webhooks e no retorno do banco. */
@@ -993,6 +996,192 @@ export function registrarRotasEfi(
         err.response?.data?.errors?.[0]?.message ||
         err.message;
       res.status(500).json({ success: false, mensagem: `Erro ao gerar boleto: ${detalhe}` });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // CARTÃO DE CRÉDITO PARCELADO — só para conta conectada via Asaas
+  // --------------------------------------------------------------------------
+  //
+  // Só existe pelo checkout hospedado da Asaas: o cliente digita o cartão na
+  // página dela, nunca aqui. Ver o comentário grande em `emitirCartaoAsaas`
+  // (bancoAsaas.ts) para o porquê disso e o que ainda falta confirmar contra
+  // uma cobrança real.
+  //
+  // ⚠️ A Efí não faz parte desta rota. Quem usa Efí recebe uma mensagem
+  // dizendo para conectar a Asaas, em vez de um erro genérico do banco.
+  // --------------------------------------------------------------------------
+  app.post("/api/efi/cartao", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuarioAutenticado(req);
+      await exigirPremium(db, uid, "boleto");
+      const { customerId, valor, vencimento, parcelas, mensagem, antecipar } = req.body;
+
+      const valorNum = Number(valor);
+      if (!customerId || !vencimento || !valorNum || valorNum <= 0) {
+        return res.status(400).json({
+          success: false,
+          mensagem: "Informe o cliente, o valor e a data de vencimento.",
+        });
+      }
+
+      const contaDoUsuario = await lerCredenciaisBanco(db, uid);
+      if (contaDoUsuario?.provedor !== "asaas") {
+        return res.status(428).json({
+          success: false,
+          mensagem:
+            "Cartão de crédito parcelado está disponível só para conta conectada via Asaas. " +
+            "Conecte a Asaas em Configurações → Banco para usar esta forma de cobrança.",
+        });
+      }
+
+      // Busca o cliente no banco. O app manda só o ID — CPF/CNPJ nunca trafega do navegador.
+      let cliente: any = null;
+      for (const col of ["customers", "clientes"]) {
+        const snap = await db.collection(col).doc(String(customerId)).get();
+        if (snap.exists) {
+          const d = snap.data();
+          if (d.userId === uid || d.mei_uid === uid) {
+            cliente = d;
+            break;
+          }
+        }
+      }
+      if (!cliente) {
+        return res.status(404).json({ success: false, mensagem: "Cliente não encontrado no seu cadastro." });
+      }
+
+      const doc = String(cliente.cpfCnpj || cliente.documento || "").replace(/\D/g, "");
+      if (doc.length !== 11 && doc.length !== 14) {
+        return res.status(400).json({
+          success: false,
+          mensagem: "O cliente precisa ter um CPF (11 dígitos) ou CNPJ (14 dígitos) válido para cobrar.",
+        });
+      }
+      const nomeCliente = cliente.name || cliente.nome || "Cliente";
+
+      const cobranca = await emitirCartaoAsaas(contaDoUsuario.segredos || {}, contaDoUsuario.ambiente, {
+        valor: valorNum,
+        vencimento,
+        clienteNome: nomeCliente,
+        clienteDocumento: doc,
+        clienteEmail: cliente.email || "",
+        clienteTelefone: cliente.telefone || "",
+        descricao: mensagem,
+        parcelas: Number(parcelas) || 1,
+      });
+
+      // --------------------------------------------------------------------
+      // ANTECIPAÇÃO — "receber tudo de uma vez" em vez de mês a mês a cada
+      // 32 dias. Só faz sentido para parcelado: à vista a Asaas já paga no
+      // prazo mais curto dela, então não há "mês a mês" para adiantar. É
+      // pedida DEPOIS de criar a cobrança, porque só agora existe o
+      // parcelamento a antecipar — a Asaas não aceita isso como campo junto
+      // na criação, é uma chamada separada (ver bancoAsaas.ts).
+      // --------------------------------------------------------------------
+      let antecipacao: {
+        solicitada: boolean;
+        status?: string;
+        valorLiquidoEstimado?: number;
+        aviso?: string;
+        erro?: string;
+      } = { solicitada: false };
+
+      if (antecipar && cobranca.parcelas > 1) {
+        if (!cobranca.installmentId) {
+          // ⚠️ Sem o id do plano de parcelamento devolvido pela Asaas, não dá
+          // para antecipar o pacote inteiro com segurança — ver o aviso em
+          // `emitirCartaoAsaas` (bancoAsaas.ts) sobre esse campo (`installment`)
+          // não ter sido confirmado contra uma resposta real. Em vez de
+          // arriscar mandar um id errado, avisamos e a cobrança segue normal.
+          antecipacao = {
+            solicitada: false,
+            aviso:
+              "A cobrança foi gerada, mas não foi possível confirmar automaticamente o " +
+              "identificador do parcelamento para pedir a antecipação. Peça a antecipação " +
+              "direto no painel da Asaas para esta cobrança, ou avise se isso continuar acontecendo.",
+          };
+        } else {
+          try {
+            const resultado = await solicitarAntecipacaoAsaas(
+              contaDoUsuario.segredos || {},
+              contaDoUsuario.ambiente,
+              { tipo: "installment", id: cobranca.installmentId }
+            );
+            antecipacao = {
+              solicitada: true,
+              status: resultado.status,
+              valorLiquidoEstimado: resultado.valorLiquidoEstimado,
+            };
+          } catch (errAntecip: any) {
+            // A cobrança em si já foi criada com sucesso — um erro ao pedir a
+            // antecipação não pode derrubar a resposta toda, só avisar.
+            antecipacao = {
+              solicitada: false,
+              erro:
+                errAntecip?.message ||
+                "Não foi possível pedir a antecipação agora. A cobrança foi gerada normalmente; " +
+                  "tente antecipar de novo pelo painel da Asaas.",
+            };
+          }
+        }
+      }
+
+      await db.collection("cobrancas").doc(String(cobranca.id)).set({
+        id: String(cobranca.id),
+        userId: uid,
+        customerId: String(customerId),
+        clienteNome: nomeCliente,
+        clienteDocumento: doc,
+        gateway: "asaas",
+        formaPagamento: "cartao",
+        parcelas: cobranca.parcelas,
+        valor: cobranca.valor,
+        vencimento: cobranca.vencimento,
+        status: cobranca.status,
+        barcode: "",
+        link: cobranca.linkPagamento,
+        pdfUrl: "",
+        criadoEm: new Date().toISOString(),
+        pagoEm: null,
+        installmentId: cobranca.installmentId || null,
+        recebimento: antecipar && cobranca.parcelas > 1 ? "antecipado" : "padrao",
+        antecipacaoSolicitada: antecipacao.solicitada,
+        ...(antecipacao.status ? { antecipacaoStatus: antecipacao.status } : {}),
+        ...(antecipacao.valorLiquidoEstimado != null
+          ? { antecipacaoValorLiquidoEstimado: antecipacao.valorLiquidoEstimado }
+          : {}),
+        ...(antecipacao.aviso ? { antecipacaoAviso: antecipacao.aviso } : {}),
+        ...(antecipacao.erro ? { antecipacaoErro: antecipacao.erro } : {}),
+      });
+
+      res.json({
+        success: true,
+        chargeId: cobranca.id,
+        valor: cobranca.valor,
+        parcelas: cobranca.parcelas,
+        link: cobranca.linkPagamento,
+        status: cobranca.status,
+        antecipacao,
+      });
+    } catch (err: any) {
+      if (responderSePlano(res, err)) return;
+      if (
+        err.message === "NAO_AUTENTICADO" ||
+        err.message === "SEM_CREDENCIAIS_USUARIO" ||
+        err.message === "BANCO_SEM_EMISSAO" ||
+        err.message === "SEM_CHAVE_CRIPTO"
+      ) {
+        const { status, mensagem } = explicarFalhaConta(err);
+        return res.status(status).json({ success: false, mensagem });
+      }
+      console.error("[Asaas Cartão]", err.response?.data || err.message);
+      const detalhe =
+        err.response?.data?.error_description?.message ||
+        err.response?.data?.error_description ||
+        err.response?.data?.errors?.[0]?.message ||
+        err.message;
+      res.status(500).json({ success: false, mensagem: `Erro ao gerar cobrança em cartão: ${detalhe}` });
     }
   });
 

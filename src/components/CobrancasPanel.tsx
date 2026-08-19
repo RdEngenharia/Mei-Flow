@@ -2,12 +2,13 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Receipt, Plus, X, Loader2, AlertTriangle, CheckCircle2, Copy, ExternalLink,
   TrendingUp, Clock, AlertOctagon, Wallet, ChevronRight, ChevronDown, RefreshCw, Search, Sparkles,
-  Trash2,
+  Trash2, CreditCard,
 } from "lucide-react";
 import { auth } from "../firebase";
 import { montarAgenda, ordemDaAba } from "../utils/agendaCobrancas";
 import { getApiUrl } from "../utils/nativeFile";
 import { Cliente } from "../types";
+import { simularRecebimentoCartao } from "../utils/taxasAsaas";
 
 /**
  * PAINEL DE COBRANÇAS — emitir boletos e acompanhar o que foi pago.
@@ -136,8 +137,16 @@ export default function CobrancasPanel({
   const [vencimento, setVencimento] = useState("");
   const [descricao, setDescricao] = useState("");
   const [gerado, setGerado] = useState<any>(null);
-  const [modo, setModo] = useState<"avista" | "carne">("avista");
+  const [modo, setModo] = useState<"avista" | "carne" | "cartao">("avista");
   const [parcelas, setParcelas] = useState(3);
+  /** Parcelas do cartão — faixa diferente da do carnê (1 a 21, não 2 a 24 boletos mensais). */
+  const [parcelasCartao, setParcelasCartao] = useState(1);
+  /**
+   * Só importa quando parcelasCartao > 1. Padrão da Asaas é `false`: o
+   * dinheiro cai mês a mês, a cada ~32 dias, por parcela — sem taxa extra.
+   * `true` pede a ANTECIPAÇÃO: tudo de uma vez, com uma taxa maior por isso.
+   */
+  const [antecipar, setAntecipar] = useState(false);
   const [sincronizando, setSincronizando] = useState(false);
 
   // Endereço: só aparece quando o banco exige (boleto registrado em produção).
@@ -323,43 +332,66 @@ export default function CobrancasPanel({
     setEmitindo(true);
     setErro(null);
     try {
-      const carne = modo === "carne";
-      const r = await fetch(getApiUrl(carne ? "/api/efi/carne" : "/api/efi/boleto"), {
+      const rota = modo === "carne" ? "/api/efi/carne" : modo === "cartao" ? "/api/efi/cartao" : "/api/efi/boleto";
+      const corpo =
+        modo === "carne"
+          ? {
+              customerId: clienteId,
+              valorTotal: valorNum,
+              parcelas,
+              primeiroVencimento: vencimento,
+              descricao: descricao || undefined,
+              ...(pedirEndereco ? { endereco: end } : {}),
+            }
+          : modo === "cartao"
+          ? {
+              customerId: clienteId,
+              valor: valorNum,
+              vencimento,
+              parcelas: parcelasCartao,
+              mensagem: descricao || undefined,
+              // Só o back-end decide se isso é aplicável (parcelasCartao > 1);
+              // mandar sempre é inofensivo para à vista, ele ignora.
+              antecipar,
+            }
+          : {
+              customerId: clienteId,
+              vencimento,
+              itens: [{ nome: descricao || "Serviço prestado", valor: valorNum, quantidade: 1 }],
+              mensagem: descricao || undefined,
+              ...(pedirEndereco ? { endereco: end } : {}),
+            };
+
+      const r = await fetch(getApiUrl(rota), {
         method: "POST",
         headers: await comToken(),
-        body: JSON.stringify(
-          carne
-            ? {
-                customerId: clienteId,
-                valorTotal: valorNum,
-                parcelas,
-                primeiroVencimento: vencimento,
-                descricao: descricao || undefined,
-                ...(pedirEndereco ? { endereco: end } : {}),
-              }
-            : {
-                customerId: clienteId,
-                vencimento,
-                itens: [{ nome: descricao || "Serviço prestado", valor: valorNum, quantidade: 1 }],
-                mensagem: descricao || undefined,
-                ...(pedirEndereco ? { endereco: end } : {}),
-              }
-        ),
+        body: JSON.stringify(corpo),
       });
       const d = await r.json();
       if (!d.success) {
         // O banco exige endereço do pagador no boleto registrado.
         if (d.precisaEndereco) setPedirEndereco(true);
-        throw new Error(d.mensagem || "Falha ao gerar o boleto.");
+        throw new Error(d.mensagem || "Falha ao gerar a cobrança.");
       }
 
       setGerado(d);
       setValor("");
       setDescricao("");
-      triggerToast?.(modo === "carne"
-        ? `✓ Carnê com ${d.parcelas} parcelas gerado!`
-        : "✓ Boleto gerado com sucesso!");
+      triggerToast?.(
+        modo === "carne"
+          ? `✓ Carnê com ${d.parcelas} parcelas gerado!`
+          : modo === "cartao"
+          ? d.parcelas > 1
+            ? antecipar
+              ? d.antecipacao?.solicitada
+                ? `✓ Cobrança em ${d.parcelas}x gerada — antecipação pedida!`
+                : `✓ Cobrança em ${d.parcelas}x gerada, mas a antecipação não pôde ser confirmada — veja abaixo.`
+              : `✓ Cobrança em cartão gerada — ${d.parcelas}x no link!`
+            : "✓ Cobrança em cartão gerada!"
+          : "✓ Boleto gerado com sucesso!"
+      );
       carregar();
+      onMudancaCobrancas?.();
     } catch (e: any) {
       setErro(e.message);
     } finally {
@@ -527,21 +559,37 @@ export default function CobrancasPanel({
                     </button>
                   </div>
 
-                  {/* À vista ou parcelado */}
+                  {/* À vista, boleto parcelado (carnê) ou cartão de crédito */}
                   <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl">
-                    {([["avista", "À vista"], ["carne", "Parcelado"]] as const).map(([k, r]) => (
+                    {([
+                      ["avista", "À vista"],
+                      ["carne", "Boleto parcelado"],
+                      ["cartao", "Cartão"],
+                    ] as const).map(([k, r]) => (
                       <button
                         key={k}
                         type="button"
                         onClick={() => setModo(k as any)}
-                        className={`flex-1 py-2 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                        className={`flex-1 py-2 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
                           modo === k ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-700"
                         }`}
                       >
+                        {k === "cartao" && <CreditCard className="w-3 h-3" />}
                         {r}
                       </button>
                     ))}
                   </div>
+
+                  {/*
+                    A rota de cartão recusa quem não estiver com a Asaas conectada — mensagem clara
+                    em vez de deixar o usuário só descobrir depois de preencher tudo.
+                  */}
+                  {modo === "cartao" && (
+                    <p className="text-[10px] text-slate-400 font-medium leading-relaxed -mt-1">
+                      O cliente recebe um link e digita o cartão numa página segura da Asaas — o MEI Flow
+                      nunca vê o número do cartão. Disponível só para conta conectada via Asaas.
+                    </p>
+                  )}
 
                   <div>
                     <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
@@ -561,7 +609,7 @@ export default function CobrancasPanel({
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
                       <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
-                        {modo === "carne" ? "Valor TOTAL (R$) *" : "Valor (R$) *"}
+                        {modo === "carne" ? "Valor TOTAL (R$) *" : modo === "cartao" ? "Valor da venda (R$) *" : "Valor (R$) *"}
                       </label>
                       <input
                         required
@@ -619,6 +667,111 @@ export default function CobrancasPanel({
                         O valor digitado é o <strong>total</strong> — ele é dividido entre as parcelas.
                         A data escolhida é o vencimento da primeira; as demais caem de mês em mês.
                       </p>
+                    </div>
+                  )}
+
+                  {/*
+                    SIMULADOR DE VENDAS — o mesmo que a Asaas tem no painel dela, aqui dentro.
+
+                    Taxa fixa + percentual descontados uma vez, sobre o valor total — nunca por
+                    parcela. Tabela padrão publicada pela Asaas (ver utils/taxasAsaas.ts); a taxa
+                    contratada da conta pode ser um pouco diferente, e o texto abaixo avisa isso.
+                  */}
+                  {modo === "cartao" && (
+                    <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-3 space-y-2">
+                      <label className="block text-[9px] uppercase tracking-wider font-extrabold text-indigo-800">
+                        Parcelas oferecidas ao cliente
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range" min={1} max={21} step={1}
+                          value={parcelasCartao}
+                          onChange={(e) => setParcelasCartao(Number(e.target.value))}
+                          className="flex-1 accent-indigo-600 cursor-pointer"
+                        />
+                        <span className="text-sm font-extrabold text-indigo-800 w-14 text-right">
+                          {parcelasCartao === 1 ? "à vista" : `até ${parcelasCartao}x`}
+                        </span>
+                      </div>
+
+                      {(() => {
+                        const total = parseFloat(String(valor).replace(",", ".")) || 0;
+                        if (total <= 0) {
+                          return (
+                            <p className="text-[11px] font-bold text-indigo-700">
+                              Digite o valor da venda acima para ver quanto sobra líquido.
+                            </p>
+                          );
+                        }
+                        const sim = simularRecebimentoCartao(total, parcelasCartao);
+                        return (
+                          <div className="bg-white border border-indigo-100 rounded-xl p-2.5 space-y-1">
+                            <p className="text-[11px] font-bold text-indigo-800">
+                              {sim.parcelas === 1
+                                ? `Cliente paga ${brl(total)} à vista.`
+                                : `Cliente paga em até ${sim.parcelas}x de ${brl(sim.valorParcela)}.`}
+                            </p>
+                            <p className="text-[11px] text-slate-500">
+                              Taxa estimada: {brl(sim.taxaFixa)} + {sim.taxaPercentual}% ={" "}
+                              <span className="font-bold text-rose-600">{brl(sim.valorTaxas)}</span>
+                            </p>
+                            <p className="text-[12px] font-extrabold text-emerald-700">
+                              Você recebe líquido: {brl(sim.valorLiquido)}
+                            </p>
+                          </div>
+                        );
+                      })()}
+
+                      <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed">
+                        Estimativa com a tabela padrão da Asaas — a taxa da sua conta pode ser um pouco
+                        diferente. O cliente escolhe, na página de pagamento, quantas parcelas quer usar
+                        (até este limite e até o que a bandeira do cartão dele permitir).
+                      </p>
+
+                      {/*
+                        RECEBIMENTO: mês a mês (padrão, taxa menor) vs de uma vez (antecipação,
+                        taxa maior). Só faz sentido quando é parcelado — à vista a Asaas já paga
+                        no prazo mais curto que ela tem, não há "mês a mês" para adiantar.
+                      */}
+                      {parcelasCartao > 1 && (
+                        <div className="pt-2 border-t border-indigo-100 space-y-1.5">
+                          <label className="block text-[9px] uppercase tracking-wider font-extrabold text-indigo-800">
+                            Quando você quer receber
+                          </label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setAntecipar(false)}
+                              className={`text-[10px] font-bold rounded-xl py-2 px-2 border transition-colors ${
+                                !antecipar
+                                  ? "bg-indigo-600 border-indigo-600 text-white"
+                                  : "bg-white border-indigo-200 text-indigo-700"
+                              }`}
+                            >
+                              Mês a mês (padrão)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setAntecipar(true)}
+                              className={`text-[10px] font-bold rounded-xl py-2 px-2 border transition-colors ${
+                                antecipar
+                                  ? "bg-indigo-600 border-indigo-600 text-white"
+                                  : "bg-white border-indigo-200 text-indigo-700"
+                              }`}
+                            >
+                              Tudo de uma vez
+                            </button>
+                          </div>
+                          <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed">
+                            {antecipar
+                              ? "Antecipação: você recebe o valor de uma vez, logo após a venda, mas a taxa " +
+                                "descontada é maior que a padrão. A gente pede a antecipação assim que a " +
+                                "cobrança é gerada."
+                              : "Padrão da Asaas: cada parcela cai separada, a cada ~32 dias, com a taxa " +
+                                "normal (a mesma da simulação acima)."}
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -701,12 +854,22 @@ export default function CobrancasPanel({
                     {emitindo ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>{modo === "carne" ? "Gerando carnê..." : "Gerando boleto..."}</span>
+                        <span>
+                          {modo === "carne" ? "Gerando carnê..." : modo === "cartao" ? "Gerando cobrança..." : "Gerando boleto..."}
+                        </span>
                       </>
                     ) : (
                       <>
                         <Sparkles className="w-4 h-4" />
-                        <span>{modo === "carne" ? `Gerar carnê ${parcelas}x` : "Gerar boleto"}</span>
+                        <span>
+                          {modo === "carne"
+                            ? `Gerar carnê ${parcelas}x`
+                            : modo === "cartao"
+                            ? parcelasCartao > 1
+                              ? `Gerar cobrança em até ${parcelasCartao}x`
+                              : "Gerar cobrança em cartão"
+                            : "Gerar boleto"}
+                        </span>
                       </>
                     )}
                   </button>
@@ -719,14 +882,37 @@ export default function CobrancasPanel({
                   <div className="flex items-center gap-2 text-emerald-800">
                     <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                     <h4 className="text-sm font-extrabold">
-                      {gerado.carneId ? "Carnê gerado!" : "Boleto gerado!"}
+                      {gerado.carneId ? "Carnê gerado!" : modo === "cartao" ? "Cobrança em cartão gerada!" : "Boleto gerado!"}
                     </h4>
                   </div>
                   <p className="text-xs text-emerald-700 font-medium">
                     {gerado.carneId
                       ? `${gerado.parcelas} parcelas de ${brl(gerado.valorParcela)}, totalizando ${brl(gerado.valorTotal)}. Envie o link do carnê para o seu cliente — todas as parcelas ficam nele.`
+                      : modo === "cartao"
+                      ? `Valor de ${brl(gerado.valor)}${gerado.parcelas > 1 ? `, em até ${gerado.parcelas}x` : " à vista"}. Envie o link abaixo — o cliente digita o cartão numa página segura da Asaas.`
                       : `Valor de ${brl(gerado.valor)}. Envie o link abaixo para o seu cliente.`}
                   </p>
+
+                  {modo === "cartao" && gerado.parcelas > 1 && antecipar && (
+                    <div
+                      className={`rounded-xl p-2.5 text-[11px] font-medium leading-relaxed ${
+                        gerado.antecipacao?.solicitada
+                          ? "bg-emerald-100 border border-emerald-200 text-emerald-800"
+                          : "bg-amber-50 border border-amber-200 text-amber-800"
+                      }`}
+                    >
+                      {gerado.antecipacao?.solicitada
+                        ? `Antecipação pedida — você recebe o valor de uma vez, sem esperar as parcelas caírem mês a mês.${
+                            gerado.antecipacao?.valorLiquidoEstimado != null
+                              ? ` Valor líquido estimado: ${brl(gerado.antecipacao.valorLiquidoEstimado)}.`
+                              : ""
+                          }`
+                        : gerado.antecipacao?.aviso ||
+                          gerado.antecipacao?.erro ||
+                          "Não foi possível confirmar a antecipação automaticamente — a cobrança em si foi gerada normalmente."}
+                    </div>
+                  )}
+
                   <div className="flex gap-2">
                     <button
                       onClick={() => copiar(gerado.link || gerado.pdf || "")}
