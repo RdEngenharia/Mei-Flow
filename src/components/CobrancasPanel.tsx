@@ -570,7 +570,7 @@ export default function CobrancasPanel({
                   onClick={desligarWhatsapp}
                   disabled={desligandoWhatsapp}
                   className="w-9 h-9 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-full flex items-center justify-center transition-colors cursor-pointer disabled:opacity-50"
-                  title="Parar de pagar notificação por WhatsApp (clientes já cadastrados)"
+                  title="Parar de pagar notificação por WhatsApp para clientes já cadastrados (só contas Asaas)"
                 >
                   {desligandoWhatsapp ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -678,10 +678,16 @@ export default function CobrancasPanel({
                     em vez de deixar o usuário só descobrir depois de preencher tudo.
                   */}
                   {modo === "cartao" && (
-                    <p className="text-[10px] text-slate-400 font-medium leading-relaxed -mt-1">
-                      O cliente recebe um link e digita o cartão numa página segura da Asaas — o MEI Flow
-                      nunca vê o número do cartão. Disponível só para conta conectada via Asaas.
-                    </p>
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 -mt-1 space-y-1">
+                      <p className="text-[10px] text-amber-800 font-bold leading-relaxed">
+                        ⚠️ Só funciona com a Asaas como banco principal (Configurações → Banco). Com Efí ou
+                        outro banco conectado, cartão de crédito não aparece como opção.
+                      </p>
+                      <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
+                        O cliente recebe um link e digita o cartão numa página segura da Asaas — o MEI Flow
+                        nunca vê o número do cartão.
+                      </p>
+                    </div>
                   )}
 
                   <div>
@@ -836,6 +842,13 @@ export default function CobrancasPanel({
                             Cliente (com repasse)
                           </button>
                         </div>
+                        <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed">
+                          ⚠️ Isto só muda QUEM paga a taxa — não muda QUANDO o dinheiro cai na sua conta.
+                          Com ou sem repasse, por padrão a Asaas só libera o valor a cada ~32 dias (mês a
+                          mês, se for parcelado). Para receber tudo de uma vez, mais rápido, é a opção
+                          "Tudo de uma vez" mais abaixo (antecipação — taxa maior, e só existe para
+                          parcelado).
+                        </p>
                       </div>
 
                       {/*
