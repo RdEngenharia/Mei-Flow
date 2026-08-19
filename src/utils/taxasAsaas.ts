@@ -8,39 +8,58 @@
  * parcelamento. Isto aqui é a mesma ideia, dentro do MEI Flow — para o MEI
  * decidir ANTES de gerar a cobrança, sem trocar de aba.
  *
- * ⚠️ TABELA PADRÃO, NÃO A TAXA DA SUA CONTA.
+ * ⚠️ TAXA PROMOCIONAL, COM VALIDADE — NÃO NECESSARIAMENTE A DA SUA CONTA.
  *
- * Os números abaixo são os publicados em asaas.com/precos-e-taxas (consulta
- * de agosto de 2026). A própria página da Asaas avisa: "as taxas apresentadas
- * são padrão" — a conta de cada usuário pode ter uma taxa negociada diferente
- * (por volume, por tempo de conta, por campanha). Este simulador serve para
- * uma ESTIMATIVA rápida na hora de decidir o parcelamento, não é o valor
- * exato que vai cair na conta. Se um dia a Asaas expuser a taxa contratada
- * via API, vale trocar esta tabela fixa por uma consulta de verdade.
+ * A tabela abaixo foi corrigida a partir de dois lugares que precisam bater
+ * um com o outro: o "Simulador de vendas" da própria Asaas
+ * (asaas.com/paymentSimulator) e a página de Configurações → Preços e taxas
+ * da conta (conferida em 19/08/2026). Os dois mostraram a mesma coisa: hoje
+ * a conta está com um PREÇO PROMOCIONAL, um ponto percentual abaixo da taxa
+ * "padrão" publicada em asaas.com/precos-e-taxas — foi aí que a versão
+ * anterior desta tabela errou, usando a taxa padrão em vez da promocional.
  *
- * FAIXAS (valor fixo por cobrança + percentual sobre o total):
- *   à vista (1x)   → R$ 0,49 + 2,99%
+ * A própria tela da Asaas mostra a validade: **promoção válida até
+ * 10/09/2026**. Depois dessa data, o certo é a taxa "padrão" (a fixa some,
+ * só a percentual sobe 1 ponto em cada faixa — deixada comentada abaixo para
+ * não perder o valor):
+ *   à vista (1x)   → R$ 0,49 + 2,99%  (padrão, sem promoção)
  *   2 a 6x         → R$ 0,49 + 3,49%
  *   7 a 12x        → R$ 0,49 + 3,99%
  *   13 a 21x       → R$ 0,49 + 4,29%
  *
+ * FAIXAS ATUAIS, com a promoção (valor fixo + percentual sobre o total):
+ *   à vista (1x)   → R$ 0,49 + 1,99%
+ *   2 a 6x         → R$ 0,49 + 2,49%
+ *   7 a 12x        → R$ 0,49 + 2,99%
+ *   13 a 21x       → R$ 0,49 + 3,29%
+ *
  * A taxa fixa é cobrada UMA VEZ por cobrança, não por parcela — é assim que
  * a maioria dos adquirentes brasileiros opera, e bate com a forma como a
  * cobrança nasce aqui: uma `payment` só, parcelada pela Asaas.
+ *
+ * ⚠️ MESMO CORRIGIDA, ESTA CONTINUA SENDO UMA TABELA FIXA NO CÓDIGO — não uma
+ * consulta em tempo real à Asaas. Promoção pode mudar de novo antes de
+ * 10/09/2026, ou a conta pode ter uma taxa negociada à parte. O número exato
+ * de centavos também pode variar um pouco: a Asaas parece arredondar taxa
+ * por parcela, este simulador arredonda uma vez sobre o total — a diferença
+ * fica em 1 ou 2 centavos, não é motivo pra desconfiar do cálculo, mas para
+ * um valor grande vale sempre conferir no simulador da própria Asaas antes
+ * de fechar. Se um dia a Asaas expuser a taxa contratada via API, vale
+ * trocar esta tabela fixa por uma consulta de verdade.
  */
 
 export type FaixaTaxaCartao = {
   min: number;
   max: number;
   taxaFixa: number; // R$, cobrado uma vez por cobrança
-  taxaPercentual: number; // ex.: 2.99 para 2,99% sobre o valor total
+  taxaPercentual: number; // ex.: 2.49 para 2,49% sobre o valor total
 };
 
 export const TABELA_TAXAS_CARTAO_ASAAS: FaixaTaxaCartao[] = [
-  { min: 1, max: 1, taxaFixa: 0.49, taxaPercentual: 2.99 },
-  { min: 2, max: 6, taxaFixa: 0.49, taxaPercentual: 3.49 },
-  { min: 7, max: 12, taxaFixa: 0.49, taxaPercentual: 3.99 },
-  { min: 13, max: 21, taxaFixa: 0.49, taxaPercentual: 4.29 },
+  { min: 1, max: 1, taxaFixa: 0.49, taxaPercentual: 1.99 },
+  { min: 2, max: 6, taxaFixa: 0.49, taxaPercentual: 2.49 },
+  { min: 7, max: 12, taxaFixa: 0.49, taxaPercentual: 2.99 },
+  { min: 13, max: 21, taxaFixa: 0.49, taxaPercentual: 3.29 },
 ];
 
 const arredondar = (n: number) => Math.round(n * 100) / 100;

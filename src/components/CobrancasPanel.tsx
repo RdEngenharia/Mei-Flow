@@ -678,14 +678,10 @@ export default function CobrancasPanel({
                     em vez de deixar o usuário só descobrir depois de preencher tudo.
                   */}
                   {modo === "cartao" && (
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 -mt-1 space-y-1">
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 -mt-1">
                       <p className="text-[10px] text-amber-800 font-bold leading-relaxed">
                         ⚠️ Só funciona com a Asaas como banco principal (Configurações → Banco). Com Efí ou
                         outro banco conectado, cartão de crédito não aparece como opção.
-                      </p>
-                      <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
-                        O cliente recebe um link e digita o cartão numa página segura da Asaas — o MEI Flow
-                        nunca vê o número do cartão.
                       </p>
                     </div>
                   )}
@@ -915,10 +911,13 @@ export default function CobrancasPanel({
                       )}
 
                       <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed">
-                        Estimativa com a tabela padrão da Asaas — a taxa da sua conta pode ser um pouco
-                        diferente. Em "sem repasse" o valor digitado é o que o cliente paga; em "com
-                        repasse" é o que você quer receber líquido, e o preço cobrado do cliente já
-                        vem maior para cobrir a taxa.
+                        Estimativa com a taxa promocional da Asaas (válida até 10/09/2026) — depois
+                        disso, ou se sua conta tiver uma taxa negociada à parte, o número real pode
+                        mudar. Para confirmar antes de uma venda grande, veja o simulador da própria
+                        Asaas em asaas.com/paymentSimulator (Cobranças → Simulador de vendas). Em "sem
+                        repasse" o valor digitado é o que o cliente paga; em "com repasse" é o que você
+                        quer receber líquido, e o preço cobrado do cliente já vem maior para cobrir a
+                        taxa.
                       </p>
 
                       {/*

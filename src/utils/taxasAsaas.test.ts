@@ -29,33 +29,33 @@ function bloco(titulo: string) { console.log(`\n${titulo}`); }
 /* ========================================================================== */
 bloco("Faixas de taxa — valores e bordas");
 
-t("1x (à vista) é 2,99%", taxaParaParcelas(1).taxaPercentual === 2.99);
-t("2x entra na faixa 2-6x (3,49%)", taxaParaParcelas(2).taxaPercentual === 3.49);
-t("6x ainda é 3,49%", taxaParaParcelas(6).taxaPercentual === 3.49);
-t("7x já é 3,99%", taxaParaParcelas(7).taxaPercentual === 3.99);
-t("12x ainda é 3,99%", taxaParaParcelas(12).taxaPercentual === 3.99);
-t("13x já é 4,29%", taxaParaParcelas(13).taxaPercentual === 4.29);
-t("21x ainda é 4,29%", taxaParaParcelas(21).taxaPercentual === 4.29);
+t("1x (à vista) é 1,99% (promocional, válida até 10/09/2026)", taxaParaParcelas(1).taxaPercentual === 1.99);
+t("2x entra na faixa 2-6x (2,49%)", taxaParaParcelas(2).taxaPercentual === 2.49);
+t("6x ainda é 2,49%", taxaParaParcelas(6).taxaPercentual === 2.49);
+t("7x já é 2,99%", taxaParaParcelas(7).taxaPercentual === 2.99);
+t("12x ainda é 2,99%", taxaParaParcelas(12).taxaPercentual === 2.99);
+t("13x já é 3,29%", taxaParaParcelas(13).taxaPercentual === 3.29);
+t("21x ainda é 3,29%", taxaParaParcelas(21).taxaPercentual === 3.29);
 t("taxa fixa é sempre R$ 0,49, em qualquer faixa", [1, 5, 10, 20].every((p) => taxaParaParcelas(p).taxaFixa === 0.49));
 
 /* ========================================================================== */
 bloco("Parcelas fora do intervalo não travam o cálculo");
 
-t("0 parcelas vira 1x (à vista)", taxaParaParcelas(0).taxaPercentual === 2.99);
-t("parcela negativa vira 1x", taxaParaParcelas(-5).taxaPercentual === 2.99);
-t("22 parcelas (acima do limite) vira 21x", taxaParaParcelas(22).taxaPercentual === 4.29);
-t("100 parcelas vira 21x", taxaParaParcelas(100).taxaPercentual === 4.29);
+t("0 parcelas vira 1x (à vista)", taxaParaParcelas(0).taxaPercentual === 1.99);
+t("parcela negativa vira 1x", taxaParaParcelas(-5).taxaPercentual === 1.99);
+t("22 parcelas (acima do limite) vira 21x", taxaParaParcelas(22).taxaPercentual === 3.29);
+t("100 parcelas vira 21x", taxaParaParcelas(100).taxaPercentual === 3.29);
 
 /* ========================================================================== */
 bloco("Simulação — valores calculados");
 
 const s1 = simularRecebimentoCartao(1000, 1);
-t("à vista de R$1000: taxa = 0,49 + 2,99% de 1000 = 29,90 + 0,49 = 30,39", s1.valorTaxas === 30.39, s1);
-t("à vista de R$1000: líquido = 1000 - 30,39 = 969,61", s1.valorLiquido === 969.61, s1);
+t("à vista de R$1000: taxa = 0,49 + 1,99% de 1000 = 19,90 + 0,49 = 20,39", s1.valorTaxas === 20.39, s1);
+t("à vista de R$1000: líquido = 1000 - 20,39 = 979,61", s1.valorLiquido === 979.61, s1);
 t("à vista: valor da parcela é o total", s1.valorParcela === 1000);
 
 const s2 = simularRecebimentoCartao(1200, 6);
-t("R$1200 em 6x: taxa = 0,49 + 3,49% de 1200 = 41,88 + 0,49 = 42,37", s2.valorTaxas === 42.37, s2);
+t("R$1200 em 6x: taxa = 0,49 + 2,49% de 1200 = 29,88 + 0,49 = 30,37", s2.valorTaxas === 30.37, s2);
 t("R$1200 em 6x: parcela de R$200", s2.valorParcela === 200, s2);
 
 t("líquido + taxas sempre fecha com o valor da venda",
@@ -74,6 +74,8 @@ t("venda de R$0 não gera taxa negativa nem líquido negativo", semValor.valorLi
 const negativo = simularRecebimentoCartao(-50, 1);
 t("valor negativo é tratado como zero, não como venda de fato", negativo.valorTaxas === 0.49 && negativo.valorLiquido === 0, negativo);
 
+t("bordas certas para taxas negativas de venda: taxaFixa não muda", negativo.taxaFixa === 0.49, negativo);
+
 /* ========================================================================== */
 bloco("valorBruto — sem repasse é sempre o valor digitado");
 
@@ -84,8 +86,8 @@ t("6x: valorBruto continua o total, não a parcela", simularRecebimentoCartao(12
 bloco("Repasse de taxa — cobrar do cliente para o MEI receber o líquido pedido");
 
 const r1 = calcularValorComRepasse(1000, 1);
-// X = (1000 + 0,49) / (1 - 0,0299) = 1000,49 / 0,9701 ≈ 1031,33
-t("à vista de R$1000 líquido: valorBruto ≈ 1031,33", Math.abs(r1.valorBruto - 1031.33) < 0.02, r1);
+// X = (1000 + 0,49) / (1 - 0,0199) = 1000,49 / 0,9801 ≈ 1020,80
+t("à vista de R$1000 líquido: valorBruto ≈ 1020,80", Math.abs(r1.valorBruto - 1020.8) < 0.02, r1);
 t("à vista: valorLiquido é exatamente o que foi pedido", r1.valorLiquido === 1000, r1);
 t("à vista: valorBruto − valorTaxas fecha com o líquido pedido (a menos de 1 centavo)",
   Math.abs(r1.valorBruto - r1.valorTaxas - 1000) < 0.01, r1);
