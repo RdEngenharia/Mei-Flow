@@ -32,6 +32,8 @@ import { registrarRotasCreditos } from "./creditos.js";
 import { registrarRotasNfse } from "./nfse.js";
 import { registrarRotasEquipe } from "./equipe.js";
 import { registrarRotasPlano } from "./plano.js";
+import { registrarRotasAgendamento } from "./agendamento.js";
+import { registrarRotasGoogleCalendar } from "./googleCalendar.js";
 
 // ---------------------------------------------------------------------------
 // Firebase Admin — mesmo padrão do server.ts e dos outros arquivos de api/
@@ -123,6 +125,8 @@ registrarRotasCreditos(app, db);
 registrarRotasNfse(app, db, adminStorage, firebaseConfig);
 registrarRotasEquipe(app, db);
 registrarRotasPlano(app, db);
+registrarRotasAgendamento(app, db);
+registrarRotasGoogleCalendar(app, db);
 
 // Rede de segurança: se alguém chamar uma rota que não existe, responde em
 // JSON explicando, em vez da página de erro genérica da Vercel.
