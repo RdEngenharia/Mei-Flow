@@ -217,6 +217,83 @@ export async function obterAccessTokenValido(db: any, uid: string): Promise<stri
 }
 
 // ============================================================================
+// FASE 3 — CONSULTAR OCUPAÇÃO E CRIAR EVENTO
+// ============================================================================
+//
+// As duas funções que a Fase 2 deixou prontas para esta hora chegar. As duas
+// seguem a mesma regra: a conexão com o Google é OPCIONAL do início ao fim —
+// se não estiver conectado, ou se o Google falhar por qualquer motivo, quem
+// chamou recebe "sem informação"/"sem evento", nunca uma exceção. Um
+// agendamento não pode travar por causa do calendário de terceiro.
+// ============================================================================
+
+export type IntervaloOcupado = { inicio: string; fim: string };
+
+/**
+ * Períodos ocupados na agenda do profissional entre `inicioISO` e `fimISO`
+ * (formato aceito pela Calendar API: ISO com fuso, ex. 2026-08-25T00:00:00-03:00).
+ * Cruza compromissos que o profissional tem FORA do MEI Flow — reunião,
+ * consulta, outro cliente marcado direto na agenda dele.
+ */
+export async function consultarOcupacaoGoogle(
+  db: any,
+  uid: string,
+  inicioISO: string,
+  fimISO: string
+): Promise<IntervaloOcupado[]> {
+  const token = await obterAccessTokenValido(db, uid);
+  if (!token) return [];
+
+  try {
+    const { data } = await axios.post(
+      "https://www.googleapis.com/calendar/v3/freeBusy",
+      { timeMin: inicioISO, timeMax: fimISO, items: [{ id: "primary" }] },
+      { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 }
+    );
+    const ocupados = data?.calendars?.primary?.busy || [];
+    return ocupados
+      .filter((b: any) => b?.start && b?.end)
+      .map((b: any) => ({ inicio: String(b.start), fim: String(b.end) }));
+  } catch (err: any) {
+    console.error("[Google Calendar] Falha ao consultar ocupação:", err?.response?.data || err?.message);
+    return [];
+  }
+}
+
+/**
+ * Cria o evento na agenda do profissional quando um agendamento é confirmado.
+ * Devolve o id do evento criado, ou `null` se o profissional não estiver
+ * conectado ou se o Google recusar a chamada — quem chama trata `null` como
+ * "o agendamento existe, só não foi sincronizado", nunca como erro fatal.
+ */
+export async function criarEventoAgendamento(
+  db: any,
+  uid: string,
+  dados: { titulo: string; descricao?: string; local?: string; inicioISO: string; fimISO: string }
+): Promise<string | null> {
+  const token = await obterAccessTokenValido(db, uid);
+  if (!token) return null;
+
+  try {
+    const { data } = await axios.post(
+      "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+      {
+        summary: dados.titulo,
+        description: dados.descricao || undefined,
+        location: dados.local || undefined,
+        start: { dateTime: dados.inicioISO },
+        end: { dateTime: dados.fimISO },
+      },
+      { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 }
+    );
+    return data?.id ? String(data.id) : null;
+  } catch (err: any) {
+    console.error("[Google Calendar] Falha ao criar evento:", err?.response?.data || err?.message);
+    return null;
+  }
+}
+
+// ============================================================================
 // ROTAS
 // ============================================================================
 

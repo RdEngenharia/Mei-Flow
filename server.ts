@@ -15,6 +15,7 @@ import { registrarRotasCobrancas } from "./cobrancas";
 import { registrarRotasCreditos } from "./creditos";
 import { registrarRotasAgendamento } from "./agendamento";
 import { registrarRotasGoogleCalendar } from "./googleCalendar";
+import { registrarRotasAgendamentoPublico } from "./agendamentoPublico";
 
 // Load environment variables
 dotenv.config();
@@ -210,6 +211,7 @@ async function startServer() {
   registrarRotasCreditos(app, db);
   registrarRotasAgendamento(app, db);
   registrarRotasGoogleCalendar(app, db);
+  registrarRotasAgendamentoPublico(app, db);
 
   // ==========================================
   // EXPIRAÇÃO AUTOMÁTICA DO PLANO PREMIUM

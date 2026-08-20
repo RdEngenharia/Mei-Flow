@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import {
   CalendarClock, Plus, Pencil, Trash2, Loader2, AlertTriangle, Save,
   X, Wallet, Clock, Info, CheckCircle2, ExternalLink, Unlink, Mail, ShieldCheck,
+  Link2, Copy, Check,
 } from "lucide-react";
 import { auth } from "../firebase";
 import { getApiUrl } from "../utils/nativeFile";
@@ -36,6 +37,7 @@ type TipoAgendamento = {
   nome: string;
   duracaoPadraoMin: number;
   exigePagamento: boolean;
+  valor: number | null;
   ativo: boolean;
 };
 
@@ -70,7 +72,11 @@ function formatarDuracao(min: number): string {
   return resto ? `${h}h ${resto}min` : `${h}h`;
 }
 
-const TIPO_VAZIO = { nome: "", duracaoPadraoMin: 60, exigePagamento: false };
+const TIPO_VAZIO = { nome: "", duracaoPadraoMin: 60, exigePagamento: false, valor: 0 };
+
+function formatarReais(valor: number): string {
+  return valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
 
 type StatusGoogle = {
   conectado: boolean;
@@ -89,6 +95,20 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
   const [conectandoGoogle, setConectandoGoogle] = useState(false);
   const [desconectandoGoogle, setDesconectandoGoogle] = useState(false);
   const [confirmandoDesconexao, setConfirmandoDesconexao] = useState(false);
+
+  const [linkCopiado, setLinkCopiado] = useState(false);
+  const linkPublico = auth.currentUser?.uid ? `${window.location.origin}/agendar/${auth.currentUser.uid}` : "";
+
+  const copiarLinkPublico = async () => {
+    if (!linkPublico) return;
+    try {
+      await navigator.clipboard.writeText(linkPublico);
+      setLinkCopiado(true);
+      setTimeout(() => setLinkCopiado(false), 2000);
+    } catch {
+      triggerToast?.("Não foi possível copiar. Selecione o link manualmente.");
+    }
+  };
 
   // ---------------------------------------------------------------- Tipos --
   const [tipos, setTipos] = useState<TipoAgendamento[]>([]);
@@ -215,7 +235,12 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
 
   const abrirEdicaoTipo = (t: TipoAgendamento) => {
     setEditandoId(t.id);
-    setFormTipo({ nome: t.nome, duracaoPadraoMin: t.duracaoPadraoMin, exigePagamento: t.exigePagamento });
+    setFormTipo({
+      nome: t.nome,
+      duracaoPadraoMin: t.duracaoPadraoMin,
+      exigePagamento: t.exigePagamento,
+      valor: t.valor || 0,
+    });
     setErro(null);
   };
 
@@ -228,6 +253,10 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
     if (!formTipo) return;
     if (!formTipo.nome.trim()) {
       setErro("Informe o nome do serviço.");
+      return;
+    }
+    if (formTipo.exigePagamento && (!formTipo.valor || formTipo.valor <= 0)) {
+      setErro("Informe o valor do serviço — ele é cobrado do cliente ao confirmar o agendamento.");
       return;
     }
     setSalvandoTipo(true);
@@ -358,9 +387,11 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
         <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-4 flex gap-3">
           <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
           <p className="text-xs text-indigo-900/80 leading-relaxed">
-            Esta é a base do agendamento: cadastre os serviços que você oferece e os horários em
-            que atende. O link público para o cliente marcar horário, a conexão com o Google
-            Calendar e o relatório mensal chegam nas próximas etapas.
+            Cadastre os serviços que você oferece e os horários em que atende. A partir daqui, o
+            cliente marca horário sozinho pelo seu link público (abaixo), o agendamento confirmado
+            já aparece no seu Google Calendar (se conectado), e — se o serviço exigir pagamento —
+            o cliente paga no cartão antes de confirmar. As mensagens prontas para o WhatsApp e o
+            relatório mensal chegam nas próximas etapas.
           </p>
         </div>
 
@@ -368,6 +399,27 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
           <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex gap-3">
             <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
             <p className="text-xs text-red-900 leading-relaxed">{erro}</p>
+          </div>
+        )}
+
+        {linkPublico && (
+          <div className="bg-white border border-slate-200/70 rounded-2xl p-4 flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100 shrink-0">
+              <Link2 className="w-4 h-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                Seu link de agendamento
+              </p>
+              <p className="text-xs text-slate-700 truncate font-mono">{linkPublico}</p>
+            </div>
+            <button
+              onClick={copiarLinkPublico}
+              className="shrink-0 px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-[11px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-colors cursor-pointer"
+            >
+              {linkCopiado ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+              {linkCopiado ? "Copiado" : "Copiar"}
+            </button>
           </div>
         )}
 
@@ -520,6 +572,27 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
                   </span>
                 </label>
 
+                {formTipo.exigePagamento && (
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase tracking-widest text-slate-400 mb-1.5">
+                      Valor do serviço (R$)
+                    </label>
+                    <input
+                      type="number"
+                      min={0.01}
+                      step={0.01}
+                      value={formTipo.valor || ""}
+                      onChange={(e) => setFormTipo({ ...formTipo, valor: Number(e.target.value) })}
+                      placeholder="0,00"
+                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Cobrado do cliente no cartão de crédito ao confirmar o agendamento pelo link
+                      público. Exige a Asaas conectada em Configurações → Banco.
+                    </p>
+                  </div>
+                )}
+
                 <div className="flex gap-2 pt-1">
                   <button
                     onClick={salvarTipo}
@@ -559,7 +632,7 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
                     </span>
                     {t.exigePagamento && (
                       <span className="inline-flex items-center gap-1 bg-emerald-100/60 text-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">
-                        <Wallet className="w-2.5 h-2.5" /> Exige pagamento
+                        <Wallet className="w-2.5 h-2.5" /> {t.valor ? formatarReais(t.valor) : "sem valor definido"}
                       </span>
                     )}
                   </div>

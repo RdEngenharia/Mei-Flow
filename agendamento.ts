@@ -7,11 +7,18 @@
  *
  * Primeira fase da feature de agendamento com Google Calendar, desenhada em
  * conversa com o usuário e documentada em claude/AGENDAMENTO_GOOGLE_CALENDAR_ESTRUTURA.md
- * (projeto "Mei Flow"). Esta fase só cobre a FUNDAÇÃO: o profissional cadastra
- * os tipos de serviço que oferece e os horários em que atende. Ainda NÃO tem:
- * conexão com Google Calendar, página pública de agendamento, página de
- * acompanhamento do cliente, mensagens pré-configuradas nem relatório mensal —
- * isso vem nas fases seguintes, cada uma com sua própria entrega.
+ * (projeto "Mei Flow"). Esta fase cobre a FUNDAÇÃO: o profissional cadastra os
+ * tipos de serviço que oferece (nome, duração e — desde a Fase 3 — o preço,
+ * quando o tipo exige pagamento) e os horários em que atende.
+ *
+ * ⚠️ O campo `valor` foi adicionado na Fase 3 (agendamento público), que
+ * PRECISA saber quanto cobrar. Tipo criado antes disso não tem preço — ainda
+ * pode ser usado sem pagamento, mas exigir pagamento sem preço é bloqueado em
+ * `validarTipo`.
+ *
+ * As rotas PÚBLICAS (sem login, para o cliente marcar horário e pagar) vivem
+ * em `agendamentoPublico.ts` — este arquivo aqui é só o cadastro, feito pelo
+ * profissional logado.
  *
  * ----------------------------------------------------------------------------
  * COMO INSTALAR
@@ -70,13 +77,20 @@ function montarTipo(d: any) {
     nome: d.nome,
     duracaoPadraoMin: d.duracaoPadraoMin,
     exigePagamento: !!d.exigePagamento,
+    // Preço do serviço — usado pela Fase 3 (agendamento público) para saber
+    // quanto cobrar. Tipo antigo, criado antes desta fase, chega aqui como
+    // `null`: continua existindo e podendo ser editado, só não pode exigir
+    // pagamento até alguém preencher o valor (ver validarTipo).
+    valor: typeof d.valor === "number" && d.valor > 0 ? d.valor : null,
     ativo: d.ativo !== false,
     criadoEm: d.criadoEm || null,
     atualizadoEm: d.atualizadoEm || null,
   };
 }
 
-function validarTipo(body: any): { erro?: string; nome?: string; duracaoPadraoMin?: number; exigePagamento?: boolean } {
+function validarTipo(
+  body: any
+): { erro?: string; nome?: string; duracaoPadraoMin?: number; exigePagamento?: boolean; valor?: number | null } {
   const nome = String(body?.nome || "").trim();
   if (!nome) return { erro: "Informe o nome do serviço." };
   if (nome.length > 80) return { erro: "O nome do serviço pode ter no máximo 80 caracteres." };
@@ -86,7 +100,20 @@ function validarTipo(body: any): { erro?: string; nome?: string; duracaoPadraoMi
     return { erro: `A duração precisa estar entre ${DURACAO_MIN_MINUTOS} minutos e ${DURACAO_MAX_MINUTOS / 60} horas.` };
   }
 
-  return { nome, duracaoPadraoMin, exigePagamento: !!body?.exigePagamento };
+  const exigePagamento = !!body?.exigePagamento;
+
+  // Sem valor não dá para cobrar — mas só travamos quando o pagamento está
+  // ligado. Um tipo gratuito não precisa de preço nenhum.
+  let valor: number | null = null;
+  if (exigePagamento) {
+    valor = Number(body?.valor);
+    if (!Number.isFinite(valor) || valor <= 0) {
+      return { erro: "Informe o valor do serviço — ele é cobrado do cliente ao confirmar o agendamento." };
+    }
+    valor = Math.round(valor * 100) / 100;
+  }
+
+  return { nome, duracaoPadraoMin, exigePagamento, valor };
 }
 
 // ============================================================================
@@ -184,6 +211,7 @@ export function registrarRotasAgendamento(app: any, db: any) {
         nome: v.nome,
         duracaoPadraoMin: v.duracaoPadraoMin,
         exigePagamento: v.exigePagamento,
+        valor: v.valor,
         ativo: true,
         criadoEm: agora(),
         atualizadoEm: agora(),
@@ -212,6 +240,7 @@ export function registrarRotasAgendamento(app: any, db: any) {
         nome: v.nome,
         duracaoPadraoMin: v.duracaoPadraoMin,
         exigePagamento: v.exigePagamento,
+        valor: v.valor,
         ativo: req.body?.ativo !== false,
         atualizadoEm: agora(),
       };

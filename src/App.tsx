@@ -92,6 +92,7 @@ import CobrancasPanel from "./components/CobrancasPanel";
 import NotaFiscalPanel from "./components/NotaFiscalPanel";
 import BancoCredenciaisPanel from "./components/BancoCredenciaisPanel";
 import AgendamentoConfigPanel from "./components/AgendamentoConfigPanel";
+import AgendamentoPublicoPage from "./components/AgendamentoPublicoPage";
 import Navbar from "./components/Navbar";
 import Sidebar from "./components/Sidebar";
 import EquipePanel from "./components/EquipePanel";
@@ -129,6 +130,26 @@ import { onAuthStateChanged, User } from "firebase/auth";
 import { onSnapshot, doc, setDoc } from "firebase/firestore";
 
 export default function App() {
+  /**
+   * ==========================================================================
+   * ROTA PÚBLICA DE AGENDAMENTO — ANTES DE QUALQUER COISA DE AUTENTICAÇÃO
+   * ==========================================================================
+   *
+   * /agendar/{uid} é aberta por um CLIENTE, sem conta no MEI Flow — não pode
+   * passar por nenhum hook de login, nem montar o resto da árvore autenticada
+   * (que faria chamadas exigindo usuário logado e devolveria erro à toa).
+   *
+   * O app não tem roteador (decisão registrada mais abaixo, na seta de
+   * voltar): checar `window.location.pathname` direto e retornar cedo é o
+   * mesmo truque de sempre, sem precisar instalar um. Isto é seguro porque o
+   * caminho não muda durante a vida desta instância do componente — sem
+   * roteador, trocar de rota é sempre um carregamento de página novo, então a
+   * ordem dos hooks abaixo nunca varia entre renders desta mesma instância.
+   */
+  if (window.location.pathname.startsWith("/agendar/")) {
+    return <AgendamentoPublicoPage />;
+  }
+
   // Controle de Navegação por Abas/Módulos
   const [currentView, setCurrentView] = useState<
     | "home" | "clientes" | "financeiro" | "orcamentos" | "catalogo"

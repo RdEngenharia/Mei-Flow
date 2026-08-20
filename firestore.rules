@@ -193,5 +193,16 @@ service cloud.firestore {
     match /google_oauth_estado/{doc} {
       allow read, write: if false;
     }
+
+    // agendamentos guarda os agendamentos criados pela página pública (Fase 3
+    // — ver claude/AGENDAMENTO_GOOGLE_CALENDAR_ESTRUTURA.md), incluindo dados
+    // do cliente e da cobrança. A página pública não usa o SDK do Firestore no
+    // navegador — fala só com as rotas de agendamentoPublico.ts, que rodam no
+    // servidor e passam por cima destas regras. Nenhum app, autenticado ou
+    // não, lê ou escreve aqui direto.
+
+    match /agendamentos/{doc} {
+      allow read, write: if false;
+    }
   }
 }

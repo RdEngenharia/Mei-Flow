@@ -39,6 +39,10 @@
     {
       "source": "/api/agendamento/:path*",
       "destination": "/api/mf?__rota=agendamento/:path*"
+    },
+    {
+      "source": "/agendar/:path*",
+      "destination": "/index.html"
     }
   ]
 }

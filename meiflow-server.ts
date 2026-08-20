@@ -34,6 +34,7 @@ import { registrarRotasEquipe } from "./equipe.js";
 import { registrarRotasPlano } from "./plano.js";
 import { registrarRotasAgendamento } from "./agendamento.js";
 import { registrarRotasGoogleCalendar } from "./googleCalendar.js";
+import { registrarRotasAgendamentoPublico } from "./agendamentoPublico.js";
 
 // ---------------------------------------------------------------------------
 // Firebase Admin — mesmo padrão do server.ts e dos outros arquivos de api/
@@ -127,6 +128,7 @@ registrarRotasEquipe(app, db);
 registrarRotasPlano(app, db);
 registrarRotasAgendamento(app, db);
 registrarRotasGoogleCalendar(app, db);
+registrarRotasAgendamentoPublico(app, db);
 
 // Rede de segurança: se alguém chamar uma rota que não existe, responde em
 // JSON explicando, em vez da página de erro genérica da Vercel.
