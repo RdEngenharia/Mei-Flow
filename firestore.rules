@@ -204,5 +204,13 @@ service cloud.firestore {
     match /agendamentos/{doc} {
       allow read, write: if false;
     }
+
+    // modelos_mensagem guarda os 3 textos que o profissional edita na tela
+    // "Modelos de mensagem" (Fase 5). Mesmo padrão dos outros — só o
+    // servidor, pelo Admin SDK, toca aqui.
+
+    match /modelos_mensagem/{doc} {
+      allow read, write: if false;
+    }
   }
 }

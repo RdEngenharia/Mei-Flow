@@ -115,10 +115,19 @@ function dataHoraBR(iso: string): string {
   return `${data} às ${hora}`;
 }
 
+type Mensagens = { convite: string; confirmacao: string; avaliacao: string; linkAvaliacaoGoogle: string };
+
+const MENSAGENS_VAZIAS: Mensagens = { convite: "", confirmacao: "", avaliacao: "", linkAvaliacaoGoogle: "" };
+
+/** Troca {chave} pelo valor correspondente — sobra {chave} sem valor não vira erro, só fica visível. */
+function substituirPlaceholders(modelo: string, valores: Record<string, string>): string {
+  return Object.entries(valores).reduce((txt, [chave, valor]) => txt.split(`{${chave}}`).join(valor), modelo);
+}
+
 export default function AgendamentoConfigPanel({ triggerToast }: Props) {
-  const [abaInterna, setAbaInterna] = useState<"agendamentos" | "google" | "tipos" | "disponibilidade">(
-    "agendamentos"
-  );
+  const [abaInterna, setAbaInterna] = useState<
+    "agendamentos" | "google" | "tipos" | "disponibilidade" | "mensagens"
+  >("agendamentos");
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -139,6 +148,77 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
       setTimeout(() => setLinkCopiado(false), 2000);
     } catch {
       triggerToast?.("Não foi possível copiar. Selecione o link manualmente.");
+    }
+  };
+
+  // -------------------------------------------------------------- Mensagens --
+  const [mensagens, setMensagens] = useState<Mensagens>(MENSAGENS_VAZIAS);
+  const [formMensagens, setFormMensagens] = useState<Mensagens>(MENSAGENS_VAZIAS);
+  const [salvandoMensagens, setSalvandoMensagens] = useState(false);
+  const [mensagensAlteradas, setMensagensAlteradas] = useState(false);
+  const [convitecopiado, setConviteCopiado] = useState(false);
+
+  const copiarConvite = async () => {
+    if (!linkPublico) return;
+    try {
+      const texto = substituirPlaceholders(mensagens.convite, { link: linkPublico });
+      await navigator.clipboard.writeText(texto);
+      setConviteCopiado(true);
+      setTimeout(() => setConviteCopiado(false), 2000);
+    } catch {
+      triggerToast?.("Não foi possível copiar. Tente novamente.");
+    }
+  };
+
+  const copiarMensagemAgendamento = async (
+    tipo: "confirmacao" | "avaliacao",
+    a: Agendamento
+  ): Promise<void> => {
+    if (tipo === "avaliacao" && !mensagens.linkAvaliacaoGoogle) {
+      triggerToast?.("Configure seu link de avaliação do Google na aba Modelos de mensagem primeiro.");
+      return;
+    }
+    const link =
+      tipo === "confirmacao" ? `${window.location.origin}/acompanhar/${a.id}` : mensagens.linkAvaliacaoGoogle;
+    const texto = substituirPlaceholders(mensagens[tipo], {
+      nome_do_cliente: a.clienteNome || "cliente",
+      data_hora: dataHoraBR(a.dataHoraInicio),
+      link,
+    });
+    try {
+      await navigator.clipboard.writeText(texto);
+      triggerToast?.(tipo === "confirmacao" ? "Mensagem de confirmação copiada." : "Mensagem de avaliação copiada.");
+    } catch {
+      triggerToast?.("Não foi possível copiar. Tente novamente.");
+    }
+  };
+
+  const salvarMensagens = async () => {
+    setSalvandoMensagens(true);
+    setErro(null);
+    try {
+      const h = await comToken();
+      const r = await fetch(getApiUrl("/api/agendamento/mensagens"), {
+        method: "PUT",
+        headers: h,
+        body: JSON.stringify(formMensagens),
+      });
+      const d = await r.json();
+      if (!r.ok || !d?.success) throw new Error(d?.mensagem || "Não foi possível guardar os modelos.");
+      const atualizado = {
+        convite: d.convite,
+        confirmacao: d.confirmacao,
+        avaliacao: d.avaliacao,
+        linkAvaliacaoGoogle: d.linkAvaliacaoGoogle || "",
+      };
+      setMensagens(atualizado);
+      setFormMensagens(atualizado);
+      setMensagensAlteradas(false);
+      triggerToast?.("Modelos de mensagem guardados.");
+    } catch (e: any) {
+      setErro(e?.message || "Não foi possível guardar.");
+    } finally {
+      setSalvandoMensagens(false);
     }
   };
 
@@ -166,15 +246,28 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
     setErro(null);
     try {
       const h = await comToken();
-      const [rAgendamentos, rTipos, rDisp, rGoogle] = await Promise.all([
+      const [rAgendamentos, rTipos, rDisp, rGoogle, rMensagens] = await Promise.all([
         fetch(getApiUrl("/api/agendamento/lista"), { headers: h }),
         fetch(getApiUrl("/api/agendamento/tipos"), { headers: h }),
         fetch(getApiUrl("/api/agendamento/disponibilidade"), { headers: h }),
         fetch(getApiUrl("/api/agendamento/google/status"), { headers: h }),
+        fetch(getApiUrl("/api/agendamento/mensagens"), { headers: h }),
       ]);
 
       const dAgendamentos = await rAgendamentos.json();
       if (dAgendamentos?.success) setAgendamentos(dAgendamentos.agendamentos || []);
+
+      const dMensagens = await rMensagens.json();
+      if (dMensagens?.success) {
+        const carregado = {
+          convite: dMensagens.convite,
+          confirmacao: dMensagens.confirmacao,
+          avaliacao: dMensagens.avaliacao,
+          linkAvaliacaoGoogle: dMensagens.linkAvaliacaoGoogle || "",
+        };
+        setMensagens(carregado);
+        setFormMensagens(carregado);
+      }
 
       const dTipos = await rTipos.json();
       if (dTipos?.success) setTipos(dTipos.tipos || []);
@@ -503,18 +596,29 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
               </p>
               <p className="text-xs text-slate-700 truncate font-mono">{linkPublico}</p>
             </div>
-            <button
-              onClick={copiarLinkPublico}
-              className="shrink-0 px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-[11px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-colors cursor-pointer"
-            >
-              {linkCopiado ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-              {linkCopiado ? "Copiado" : "Copiar"}
-            </button>
+            <div className="shrink-0 flex items-center gap-1.5">
+              <button
+                onClick={copiarLinkPublico}
+                className="px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-[11px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-colors cursor-pointer"
+                title="Copia só o endereço do link"
+              >
+                {linkCopiado ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                {linkCopiado ? "Copiado" : "Link"}
+              </button>
+              <button
+                onClick={copiarConvite}
+                className="px-3 py-2 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-xl text-[11px] font-bold flex items-center gap-1.5 hover:bg-indigo-100 transition-colors cursor-pointer"
+                title="Copia a mensagem de convite pronta, com o link dentro"
+              >
+                {convitecopiado ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                {convitecopiado ? "Copiado" : "Mensagem"}
+              </button>
+            </div>
           </div>
         )}
 
         <div className="flex gap-1.5 bg-slate-100 rounded-2xl p-1 w-fit overflow-x-auto">
-          {(["agendamentos", "google", "tipos", "disponibilidade"] as const).map((aba) => (
+          {(["agendamentos", "google", "tipos", "disponibilidade", "mensagens"] as const).map((aba) => (
             <button
               key={aba}
               onClick={() => setAbaInterna(aba)}
@@ -528,7 +632,9 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
                 ? "Google Calendar"
                 : aba === "tipos"
                 ? "Tipos de agendamento"
-                : "Disponibilidade"}
+                : aba === "disponibilidade"
+                ? "Disponibilidade"
+                : "Modelos de mensagem"}
             </button>
           ))}
         </div>
@@ -600,7 +706,7 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
                       </button>
                     )}
 
-                    {(a.status === "confirmado" || a.status === "a_caminho") && (
+                    {(a.status === "confirmado" || a.status === "a_caminho" || a.status === "concluido") && (
                       <button
                         onClick={() => copiarLinkAcompanhamento(a.id)}
                         className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-colors cursor-pointer"
@@ -611,6 +717,24 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
                           <Copy className="w-3 h-3" />
                         )}
                         {linkCopiadoId === a.id ? "Copiado" : "Link do cliente"}
+                      </button>
+                    )}
+
+                    {(a.status === "confirmado" || a.status === "a_caminho" || a.status === "concluido") && (
+                      <button
+                        onClick={() => copiarMensagemAgendamento("confirmacao", a)}
+                        className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-colors cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3" /> Msg. confirmação
+                      </button>
+                    )}
+
+                    {a.status === "concluido" && (
+                      <button
+                        onClick={() => copiarMensagemAgendamento("avaliacao", a)}
+                        className="px-3 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-emerald-100 transition-colors cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3" /> Msg. avaliação
                       </button>
                     )}
 
@@ -878,7 +1002,7 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
               </div>
             ))}
           </div>
-        ) : (
+        ) : abaInterna === "disponibilidade" ? (
           <div className="space-y-3">
             <div className="space-y-2.5">
               {ORDEM_DIAS.map(({ chave, label }) => (
@@ -939,6 +1063,87 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
                 <CheckCircle2 className="w-4 h-4" />
               )}
               {disponibilidadeAlterada ? "Salvar disponibilidade" : "Disponibilidade salva"}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-4 flex gap-3">
+              <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+              <p className="text-xs text-indigo-900/80 leading-relaxed">
+                Como o envio é manual (você quem cola no seu WhatsApp), estas mensagens não passam
+                pela API oficial — edite à vontade. <span className="font-mono">{"{link}"}</span>,{" "}
+                <span className="font-mono">{"{nome_do_cliente}"}</span> e{" "}
+                <span className="font-mono">{"{data_hora}"}</span> são preenchidos sozinhos na hora
+                de copiar.
+              </p>
+            </div>
+
+            {(
+              [
+                { chave: "convite" as const, titulo: "Convite para agendamento", dica: "Usa {link} — o seu link fixo de agendamento. Fica pronta para copiar no card acima." },
+                { chave: "confirmacao" as const, titulo: "Confirmação de agendamento", dica: "Usa {nome_do_cliente}, {data_hora} e {link} — o link de acompanhamento daquele agendamento. Botão \"Msg. confirmação\" no card do agendamento." },
+                { chave: "avaliacao" as const, titulo: "Pedido de avaliação", dica: "Usa {nome_do_cliente} e {link} — o link de avaliação do Google configurado abaixo. Botão \"Msg. avaliação\" aparece no card só depois que o serviço é concluído." },
+              ] as const
+            ).map(({ chave, titulo, dica }) => (
+              <div key={chave} className="bg-white border border-slate-200/70 rounded-2xl p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                    {titulo}
+                  </label>
+                  <button
+                    onClick={() => {
+                      setFormMensagens((f) => ({ ...f, [chave]: MODELOS_PADRAO[chave] }));
+                      setMensagensAlteradas(true);
+                    }}
+                    className="text-[10px] font-bold text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    Restaurar padrão
+                  </button>
+                </div>
+                <textarea
+                  value={formMensagens[chave]}
+                  onChange={(e) => {
+                    setFormMensagens({ ...formMensagens, [chave]: e.target.value });
+                    setMensagensAlteradas(true);
+                  }}
+                  rows={3}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition resize-y"
+                />
+                <p className="text-[10px] text-slate-400">{dica}</p>
+              </div>
+            ))}
+
+            <div className="bg-white border border-slate-200/70 rounded-2xl p-4 space-y-2">
+              <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                Link de avaliação do Google
+              </label>
+              <input
+                value={formMensagens.linkAvaliacaoGoogle}
+                onChange={(e) => {
+                  setFormMensagens({ ...formMensagens, linkAvaliacaoGoogle: e.target.value });
+                  setMensagensAlteradas(true);
+                }}
+                placeholder="https://g.page/r/.../review"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition"
+              />
+              <p className="text-[10px] text-slate-400">
+                Vai direto pra tela de avaliação do Google, sem passar por nenhuma tela do MEI Flow.
+              </p>
+            </div>
+
+            <button
+              onClick={salvarMensagens}
+              disabled={salvandoMensagens || !mensagensAlteradas}
+              className="w-full py-3 bg-indigo-600 text-white rounded-2xl text-xs font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed sticky bottom-4"
+            >
+              {salvandoMensagens ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : mensagensAlteradas ? (
+                <Save className="w-4 h-4" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4" />
+              )}
+              {mensagensAlteradas ? "Salvar modelos" : "Modelos salvos"}
             </button>
           </div>
         )}
