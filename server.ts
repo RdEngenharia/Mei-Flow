@@ -13,6 +13,8 @@ import { MercadoPagoConfig, Payment, CardToken } from "mercadopago";
 import { registrarRotasEfi } from "./efi";
 import { registrarRotasCobrancas } from "./cobrancas";
 import { registrarRotasCreditos } from "./creditos";
+import { registrarRotasAgendamento } from "./agendamento";
+import { registrarRotasGoogleCalendar } from "./googleCalendar";
 
 // Load environment variables
 dotenv.config();
@@ -206,6 +208,8 @@ async function startServer() {
   registrarRotasEfi(app, db, adminStorage, firebaseConfig);
   registrarRotasCobrancas(app, db);
   registrarRotasCreditos(app, db);
+  registrarRotasAgendamento(app, db);
+  registrarRotasGoogleCalendar(app, db);
 
   // ==========================================
   // EXPIRAÇÃO AUTOMÁTICA DO PLANO PREMIUM
