@@ -187,6 +187,56 @@ export function provedorConhecido(id: string): DefinicaoProvedor | null {
 }
 
 // ============================================================================
+// LINK DE PAGAMENTO — um SEGUNDO provedor, independente do banco principal
+// ============================================================================
+//
+// Até aqui, cada usuário tinha UM banco (`PROVEDORES` acima): ele emite o
+// boleto, recebe o Pix, avisa o pagamento. A InfinitePay não encaixa nesse
+// papel — ela não emite boleto nem substitui o banco principal, é só MAIS UM
+// jeito de cobrar no cartão, para quem quer oferecer a maquininha física ou
+// fugir da taxa de antecipação da Asaas em parcelamentos maiores.
+//
+// Por isso ganha um slot PRÓPRIO, guardado junto no mesmo documento
+// (`banco_credenciais/{uid}`, campo `linkPagamento`) mas sem mexer nos campos
+// do banco principal — os dois convivem. Cadastrar a InfinitePay não troca
+// nem apaga o banco já configurado para boleto.
+
+export type ProvedorLinkPagamento = "infinitepay";
+
+export type DefinicaoProvedorLinkPagamento = {
+  id: ProvedorLinkPagamento;
+  nome: string;
+  /** Parcelamento máximo que este provedor aceita. */
+  maxParcelas: number;
+  situacao: string;
+  credenciais: CampoCredencial[];
+};
+
+export const PROVEDORES_LINK_PAGAMENTO: DefinicaoProvedorLinkPagamento[] = [
+  {
+    id: "infinitepay",
+    nome: "InfinitePay",
+    maxParcelas: 12,
+    situacao:
+      "Gera um link de cobrança em cartão fora da Asaas — útil para quem prefere pagar na " +
+      "maquininha física ou para receber em até 1 dia útil, sem a taxa de antecipação à parte. " +
+      "Parcela em até 12x. Cadastre o seu identificador (handle) para ativar.",
+    credenciais: [
+      {
+        id: "handle",
+        label: "Handle (usuário InfiniteTag)",
+        tipo: "text",
+        dica: "O nome de usuário da sua conta InfinitePay, sem o @ — aparece no app InfinitePay em Meu Perfil.",
+      },
+    ],
+  },
+];
+
+export function provedorLinkPagamentoConhecido(id: string): DefinicaoProvedorLinkPagamento | null {
+  return PROVEDORES_LINK_PAGAMENTO.find((p) => p.id === id) || null;
+}
+
+// ============================================================================
 // CIFRA
 // ============================================================================
 
@@ -544,6 +594,112 @@ export async function resumoCredenciais(db: any, uid: string): Promise<ResumoCre
 }
 
 // ============================================================================
+// LINK DE PAGAMENTO — ler, gravar, apagar (mesmo documento, campo separado)
+// ============================================================================
+
+export type CredenciaisLinkPagamento = {
+  provedor: ProvedorLinkPagamento;
+  segredos: SegredosBanco;
+};
+
+export type ResumoLinkPagamento = {
+  cadastrado: boolean;
+  provedor?: ProvedorLinkPagamento;
+  provedorNome?: string;
+  identificacao?: string;
+  atualizadoEm?: string;
+};
+
+/** Credenciais abertas do link de pagamento. USO EXCLUSIVO DO SERVIDOR. */
+export async function lerCredenciaisLinkPagamento(
+  db: any,
+  uid: string
+): Promise<CredenciaisLinkPagamento | null> {
+  if (!db || !uid) return null;
+  try {
+    const snap = await db.collection(COLECAO_CREDENCIAIS).doc(uid).get();
+    if (!snap.exists) return null;
+    const bloco = snap.data()?.linkPagamento;
+    if (!bloco?.segredosCifrados) return null;
+    const cru = JSON.parse(decifrar(bloco.segredosCifrados));
+    return {
+      provedor: (bloco.provedor || "infinitepay") as ProvedorLinkPagamento,
+      segredos: cru && typeof cru === "object" ? cru : {},
+    };
+  } catch (err: any) {
+    console.error("[Cofre do banco] Falha ao abrir credenciais de link de pagamento:", err?.message || err);
+    return null;
+  }
+}
+
+export async function guardarCredenciaisLinkPagamento(
+  db: any,
+  uid: string,
+  entrada: Record<string, any>
+): Promise<ResumoLinkPagamento> {
+  if (!db) throw new Error("SEM_BANCO");
+  if (!uid) throw new Error("NAO_AUTENTICADO");
+
+  const provedor = (limpar(entrada.provedor) || "infinitepay") as ProvedorLinkPagamento;
+  const def = provedorLinkPagamentoConhecido(provedor);
+  if (!def) throw new Error("PROVEDOR_DESCONHECIDO");
+
+  const atual = await lerCredenciaisLinkPagamento(db, uid);
+  const anteriores: SegredosBanco = atual?.provedor === provedor ? atual.segredos : {};
+
+  const segredos: SegredosBanco = {};
+  for (const campo of def.credenciais) {
+    const valor = limpar(entrada[campo.id]) || anteriores[campo.id] || "";
+    if (!campo.opcional && !valor) throw new Error("CREDENCIAIS_INCOMPLETAS");
+    if (valor) segredos[campo.id] = valor;
+  }
+  const principal = segredos[def.credenciais[0]?.id] || "";
+  const agora = new Date().toISOString();
+
+  await db.collection(COLECAO_CREDENCIAIS).doc(uid).set(
+    {
+      linkPagamento: {
+        provedor,
+        segredosCifrados: cifrar(JSON.stringify(segredos)),
+        identificacao: mascarar(principal),
+        atualizadoEm: agora,
+      },
+    },
+    { merge: true }
+  );
+
+  return await resumoCredenciaisLinkPagamento(db, uid);
+}
+
+export async function resumoCredenciaisLinkPagamento(db: any, uid: string): Promise<ResumoLinkPagamento> {
+  if (!db || !uid) return { cadastrado: false };
+
+  let bloco: any = null;
+  try {
+    const snap = await db.collection(COLECAO_CREDENCIAIS).doc(uid).get();
+    if (snap.exists) bloco = snap.data()?.linkPagamento || null;
+  } catch (err: any) {
+    console.error("[Cofre do banco] Falha ao ler resumo de link de pagamento:", err?.message || err);
+  }
+  if (!bloco?.segredosCifrados) return { cadastrado: false };
+
+  const def = provedorLinkPagamentoConhecido(bloco.provedor || "infinitepay");
+  return {
+    cadastrado: true,
+    provedor: (bloco.provedor || "infinitepay") as ProvedorLinkPagamento,
+    provedorNome: def?.nome || bloco.provedor,
+    identificacao: bloco.identificacao || "",
+    atualizadoEm: bloco.atualizadoEm || "",
+  };
+}
+
+/** Apaga só o bloco de link de pagamento — o banco principal não é tocado. */
+export async function apagarCredenciaisLinkPagamento(db: any, uid: string): Promise<void> {
+  if (!db || !uid) return;
+  await db.collection(COLECAO_CREDENCIAIS).doc(uid).set({ linkPagamento: null }, { merge: true });
+}
+
+// ============================================================================
 // ROTAS
 // ============================================================================
 //
@@ -675,6 +831,52 @@ export function registrarRotasBanco(app: any, db: any) {
       const uid = await verificarLogin(req);
       await apagarCredenciaisBanco(db, uid);
       res.json({ success: true, mensagem: "Credenciais removidas.", cadastrado: false });
+    } catch (err: any) {
+      responderErro(res, err);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // LINK DE PAGAMENTO — segundo provedor, independente do banco principal
+  // --------------------------------------------------------------------------
+
+  /** Quais provedores de link de pagamento o sistema opera hoje. */
+  app.get("/api/banco/link-pagamento/provedores", (_req: any, res: any) => {
+    res.json({
+      success: true,
+      cofreDisponivel: cofreDisponivel(),
+      provedores: PROVEDORES_LINK_PAGAMENTO,
+    });
+  });
+
+  /** O resumo do que este usuário cadastrou. Sem segredo. */
+  app.get("/api/banco/link-pagamento", async (req: any, res: any) => {
+    try {
+      const uid = await verificarLogin(req);
+      res.json({ success: true, ...(await resumoCredenciaisLinkPagamento(db, uid)) });
+    } catch (err: any) {
+      responderErro(res, err);
+    }
+  });
+
+  const gravarLinkPagamento = async (req: any, res: any) => {
+    try {
+      const uid = await verificarLogin(req);
+      const resumo = await guardarCredenciaisLinkPagamento(db, uid, req.body || {});
+      res.json({ success: true, mensagem: "Dados do link de pagamento guardados.", ...resumo });
+    } catch (err: any) {
+      responderErro(res, err);
+    }
+  };
+  app.put("/api/banco/link-pagamento", gravarLinkPagamento);
+  app.post("/api/banco/link-pagamento", gravarLinkPagamento);
+
+  /** Apagar. Não mexe no banco principal. */
+  app.delete("/api/banco/link-pagamento", async (req: any, res: any) => {
+    try {
+      const uid = await verificarLogin(req);
+      await apagarCredenciaisLinkPagamento(db, uid);
+      res.json({ success: true, mensagem: "Dados removidos.", cadastrado: false });
     } catch (err: any) {
       responderErro(res, err);
     }
