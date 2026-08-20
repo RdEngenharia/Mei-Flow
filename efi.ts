@@ -53,13 +53,11 @@ import crypto from "crypto";
 import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
 import {
   lerCredenciaisBanco, registrarRotasBanco, tokenWebhookConfere,
-  lerCredenciaisLinkPagamento,
 } from "./bancoCofre.js";
 import {
   emitirBoletoAsaas, consultarCobrancaAsaas, situacaoAsaas, cancelarCobrancaAsaas, emitirCartaoAsaas,
   solicitarAntecipacaoAsaas, desligarNotificacaoWhatsappAsaas,
 } from "./bancoAsaas.js";
-import { criarLinkInfinitePay, verificarPagamentoInfinitePay } from "./infinitePay.js";
 import { exigirPremium, responderSePlano } from "./plano.js";
 
 /** URL pública do sistema — usada em webhooks e no retorno do banco. */
@@ -1217,111 +1215,6 @@ export function registrarRotasEfi(
   });
 
   // --------------------------------------------------------------------------
-  // LINK DE PAGAMENTO (InfinitePay) — segunda opção de cartão, fora da Asaas
-  // --------------------------------------------------------------------------
-  //
-  // Diferente de "/api/efi/cartao": aqui não se pede a Asaas como banco
-  // principal — o link de pagamento é um provedor À PARTE (ver
-  // bancoCofre.ts, PROVEDORES_LINK_PAGAMENTO), cadastrado independente do
-  // banco que emite boleto. Serve para quem quer oferecer ao cliente a
-  // maquininha física da InfinitePay, ou fugir da taxa de antecipação da
-  // Asaas — em troca de um teto menor de parcelas (12x contra 21x).
-  //
-  // A cobrança entra na MESMA coleção `cobrancas` que boleto/cartão Asaas,
-  // com `gateway: "infinitepay"` — assim ela aparece no mesmo painel, no
-  // mesmo Sincronizar, e o pagamento confirmado passa pelo MESMO
-  // `concluirPagamento` (lançamento no livro caixa + nota fiscal), sem
-  // duplicar aquela lógica aqui.
-  app.post("/api/efi/link-pagamento", async (req: any, res: any) => {
-    try {
-      const uid = await exigirUsuarioAutenticado(req);
-      await exigirPremium(db, uid, "boleto");
-      const { customerId, valor, mensagem } = req.body;
-
-      const valorNum = Number(valor);
-      if (!customerId || !valorNum || valorNum <= 0) {
-        return res.status(400).json({
-          success: false,
-          mensagem: "Informe o cliente e o valor.",
-        });
-      }
-
-      const credLink = await lerCredenciaisLinkPagamento(db, uid);
-      if (!credLink?.segredos?.handle) {
-        return res.status(428).json({
-          success: false,
-          mensagem:
-            "Cadastre o seu identificador (handle) da InfinitePay em Configurações → Banco → " +
-            "Link de pagamento antes de gerar um link.",
-        });
-      }
-
-      let cliente: any = null;
-      for (const col of ["customers", "clientes"]) {
-        const snap = await db.collection(col).doc(String(customerId)).get();
-        if (snap.exists) {
-          const d = snap.data();
-          if (d.userId === uid || d.mei_uid === uid) {
-            cliente = d;
-            break;
-          }
-        }
-      }
-      if (!cliente) {
-        return res.status(404).json({ success: false, mensagem: "Cliente não encontrado no seu cadastro." });
-      }
-
-      const nomeCliente = cliente.name || cliente.nome || "Cliente";
-      const doc = String(cliente.cpfCnpj || cliente.documento || "").replace(/\D/g, "");
-      const descricao = String(mensagem || "").trim() || "Emitido via MEI Flow";
-
-      // Id nosso, não da InfinitePay — ela não devolve um id de pedido antes
-      // do link ser criado. Vira o `order_nsu` mandado pra ela, e é por ele
-      // que o webhook acha a cobrança de volta.
-      const id = `ip_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-
-      const link = await criarLinkInfinitePay(credLink.segredos.handle, {
-        valor: valorNum,
-        descricao,
-        orderNsu: id,
-        webhookUrl: `${APP_URL}/api/banco/webhook/infinitepay`,
-      });
-
-      await db.collection("cobrancas").doc(id).set({
-        id,
-        userId: uid,
-        customerId: String(customerId),
-        clienteNome: nomeCliente,
-        clienteDocumento: doc,
-        gateway: "infinitepay",
-        formaPagamento: "link_pagamento",
-        parcelas: null, // quem escolhe é o cliente, na hora de pagar (até 12x)
-        valor: valorNum,
-        vencimento: null,
-        status: "pending",
-        barcode: "",
-        link: link.url,
-        pdfUrl: "",
-        descricao,
-        criadoEm: new Date().toISOString(),
-        pagoEm: null,
-      });
-
-      res.json({ success: true, chargeId: id, link: link.url, valor: valorNum });
-    } catch (err: any) {
-      if (responderSePlano(res, err)) return;
-      if (err.message === "NAO_AUTENTICADO") {
-        return res.status(401).json({ success: false, mensagem: "Faça login para gerar o link." });
-      }
-      console.error("[InfinitePay Link]", err?.message || err);
-      res.status(500).json({
-        success: false,
-        mensagem: `Erro ao gerar o link de pagamento: ${err?.message || "erro desconhecido"}`,
-      });
-    }
-  });
-
-  // --------------------------------------------------------------------------
   // CANCELAR/EXCLUIR um boleto já emitido
   // --------------------------------------------------------------------------
   //
@@ -2324,70 +2217,6 @@ export function registrarRotasEfi(
     } catch (err: any) {
       console.error("[Asaas Webhook Erro]", err?.response?.data || err?.message || err);
       await registrarAviso(false, String(err?.message || err).slice(0, 200));
-      if (!res.headersSent) res.status(200).json({ recebido: true, processado: false });
-    }
-  });
-
-  // --------------------------------------------------------------------------
-  // WEBHOOK — InfinitePay
-  // --------------------------------------------------------------------------
-  //
-  // Mesma regra da Asaas logo acima: a resposta 200 só sai DEPOIS do
-  // processamento terminar (serverless pode encerrar a função assim que a
-  // resposta é enviada), e o corpo do aviso nunca é aceito como verdade —
-  // `verificarPagamentoInfinitePay` pergunta direto à InfinitePay antes de
-  // dar baixa. `processadoEm`, já gravado por `concluirPagamento`, segue
-  // sendo o que impede reprocessar um pagamento avisado duas vezes.
-  app.post("/api/banco/webhook/infinitepay", async (req: any, res: any) => {
-    try {
-      const corpo =
-        typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
-      const orderNsu = String(corpo?.order_nsu || corpo?.orderNsu || "").trim();
-      const transactionNsu = corpo?.transaction_nsu || corpo?.transactionNsu;
-
-      if (!orderNsu) {
-        console.warn("[InfinitePay Webhook] Aviso sem order_nsu. Ignorado.");
-        return res.status(200).json({ recebido: true });
-      }
-
-      const snap = await db.collection("cobrancas").doc(orderNsu).get();
-      if (!snap.exists) {
-        console.warn(`[InfinitePay Webhook] Cobrança ${orderNsu} desconhecida.`);
-        return res.status(200).json({ recebido: true });
-      }
-      const cobranca = snap.data();
-      if (cobranca.gateway !== "infinitepay") {
-        console.warn(`[InfinitePay Webhook] ${orderNsu} não é uma cobrança InfinitePay. Ignorado.`);
-        return res.status(200).json({ recebido: true });
-      }
-      if (cobranca.processadoEm) {
-        console.log(`[InfinitePay Webhook] ${orderNsu} já foi processada. Nada a fazer.`);
-        return res.status(200).json({ recebido: true });
-      }
-
-      const credLink = await lerCredenciaisLinkPagamento(db, cobranca.userId);
-      if (!credLink?.segredos?.handle) {
-        console.warn(`[InfinitePay Webhook] Sem handle guardado para ${cobranca.userId}. Ignorado.`);
-        return res.status(200).json({ recebido: true });
-      }
-
-      // ⚠️ A CONFIRMAÇÃO É AQUI. Não é o corpo do webhook que dá baixa — é
-      //    a resposta da própria InfinitePay a esta pergunta.
-      const statusReal = await verificarPagamentoInfinitePay(credLink.segredos.handle, {
-        orderNsu,
-        transactionNsu,
-      });
-
-      if (!statusReal.pago) {
-        console.log(`[InfinitePay Webhook] ${orderNsu} avisado, mas a InfinitePay ainda não confirma.`);
-        return res.status(200).json({ recebido: true });
-      }
-
-      const resultado = await concluirPagamento(orderNsu);
-      console.log(`[InfinitePay Webhook] ${orderNsu} processado:`, resultado?.ok, resultado?.falhas);
-      res.status(200).json({ recebido: true });
-    } catch (err: any) {
-      console.error("[InfinitePay Webhook Erro]", err?.message || err);
       if (!res.headersSent) res.status(200).json({ recebido: true, processado: false });
     }
   });
