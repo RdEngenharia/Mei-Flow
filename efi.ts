@@ -2011,8 +2011,12 @@ export function registrarRotasEfi(
       return res.status(401).json({ erro: "token invalido" });
     }
 
-    res.status(200).json({ status: "recebido" });
-
+    // ⚠️ A resposta só sai no FIM, depois do processamento — não mais na
+    // primeira linha. Ver o comentário equivalente no webhook da Asaas: num
+    // ambiente serverless, responder antes de terminar o `await` arrisca o
+    // servidor ser encerrado no meio do processamento, e o reenvio (o motivo
+    // original de responder cedo) já é coberto pela trava de idempotência de
+    // `concluirPagamento` (`processadoEm`).
     try {
       // A Efí pode mandar como JSON ou como formulário; aceitamos os dois.
       const notificationToken =
@@ -2020,7 +2024,7 @@ export function registrarRotasEfi(
         (typeof req.body === "string" ? new URLSearchParams(req.body).get("notification") : null);
       if (!notificationToken) {
         console.warn("[Efí Webhook] Sem token de notificação no corpo.");
-        return;
+        return res.status(200).json({ status: "recebido" });
       }
 
       // De quem é esta cobrança? Vem no próprio endereço que a Efí chamou,
@@ -2048,15 +2052,17 @@ export function registrarRotasEfi(
       const chargeId = String(ultimo?.identifiers?.charge_id || ultimo?.charge_id || "");
 
       console.log(`[Efí Webhook] Cobrança ${chargeId} → status "${statusAtual}"`);
-      if (!chargeId) return;
+      if (!chargeId) return res.status(200).json({ status: "recebido" });
 
       if (statusAtual === "paid" || statusAtual === "settled") {
         await concluirPagamento(chargeId, ultimo?.received_by_bank_at);
       } else if (statusAtual) {
         await db.collection("cobrancas").doc(chargeId).set({ status: statusAtual }, { merge: true });
       }
+      res.status(200).json({ status: "recebido" });
     } catch (err: any) {
       console.error("[Efí Webhook Erro]", err.response?.data || err.message);
+      if (!res.headersSent) res.status(200).json({ status: "recebido", processado: false });
     }
   });
 
@@ -2081,18 +2087,66 @@ export function registrarRotasEfi(
   // O token é a primeira porta, não a garantia. Ele evita que qualquer robô
   // faça o servidor consultar a Asaas à toa.
   app.post("/api/banco/webhook/asaas", async (req: any, res: any) => {
-    // Responde já. Webhook que demora vira reenvio, e reenvio vira pagamento
-    // processado duas vezes.
-    res.status(200).json({ recebido: true });
+    // ⚠️ POR QUE A RESPOSTA SAI SÓ NO FIM, E NÃO NA PRIMEIRA LINHA.
+    //
+    // A versão anterior respondia 200 ANTES de fazer qualquer coisa, com a
+    // ideia de que "webhook que demora vira reenvio, e reenvio vira pagamento
+    // processado duas vezes". Fazia sentido no papel — mas na prática, num
+    // ambiente serverless (Vercel), depois que a resposta HTTP é enviada o
+    // servidor pode ser encerrado a qualquer momento, inclusive no meio do
+    // `await` seguinte. Um caso real confirmou isso: a Asaas mostra "200,
+    // {recebido:true}" no log dela — prova que a chamada chegou — mas a
+    // cobrança nunca foi confirmada, e só a Sincronização manual resolveu.
+    //
+    // A preocupação original (reenvio duplicando o processamento) já tinha
+    // outra trava, feita antes: `processadoEm`. Reenvio de um pagamento já
+    // processado cai no `if (snap.data()?.processadoEm)` mais abaixo e não
+    // faz nada. Ou seja, dá pra esperar o processamento terminar antes de
+    // responder sem reintroduzir o problema que a resposta antecipada tentava
+    // evitar — e ganha a garantia de que o trabalho realmente aconteceu antes
+    // de dizer "recebido" pra Asaas.
+    let idCobranca = "";
+    let uid = "";
+
+    /** Deixa rastro na própria cobrança — pra não repetir o erro de antes,
+     *  onde a única prova de que algo falhou era um `console.warn` que
+     *  morria no log da Vercel e ninguém no MEI Flow via. */
+    const registrarAviso = async (ok: boolean, motivo: string, evento?: string) => {
+      if (!idCobranca) return;
+      try {
+        await db.collection("cobrancas").doc(idCobranca).set(
+          {
+            ultimoWebhookAsaas: {
+              recebidoEm: new Date().toISOString(),
+              evento: evento || null,
+              ok,
+              motivo,
+            },
+          },
+          { merge: true }
+        );
+      } catch {
+        // Se nem isso gravar, não há mais o que fazer — o essencial (o
+        // pagamento em si) já tentou ser processado antes desta chamada.
+      }
+    };
 
     try {
-      const uid = String(req.query?.u || "").trim();
-      if (!uid) return console.warn("[Asaas Webhook] Aviso sem dono no endereço. Ignorado.");
+      uid = String(req.query?.u || "").trim();
+      if (!uid) {
+        console.warn("[Asaas Webhook] Aviso sem dono no endereço. Ignorado.");
+        return res.status(200).json({ recebido: true });
+      }
 
       const conta = await lerCredenciaisBanco(db, uid);
       if (!conta || conta.provedor !== "asaas") {
-        return console.warn(`[Asaas Webhook] ${uid} não usa Asaas. Ignorado.`);
+        console.warn(`[Asaas Webhook] ${uid} não usa Asaas. Ignorado.`);
+        return res.status(200).json({ recebido: true });
       }
+
+      const corpo =
+        typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
+      idCobranca = String(corpo?.payment?.id || "").trim();
 
       const enviado =
         req.headers?.["asaas-access-token"] ||
@@ -2100,13 +2154,15 @@ export function registrarRotasEfi(
         req.query?.token ||
         "";
       if (!tokenWebhookConfere(conta.segredos.webhookToken || "", String(enviado))) {
-        return console.warn(`[Asaas Webhook] Token inválido para ${uid}. Recusado.`);
+        console.warn(`[Asaas Webhook] Token inválido para ${uid}. Recusado.`);
+        await registrarAviso(false, "token_invalido", corpo?.event);
+        return res.status(200).json({ recebido: true });
       }
 
-      const corpo =
-        typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
-      const idCobranca = String(corpo?.payment?.id || "").trim();
-      if (!idCobranca) return console.warn("[Asaas Webhook] Aviso sem id de cobrança.");
+      if (!idCobranca) {
+        console.warn("[Asaas Webhook] Aviso sem id de cobrança.");
+        return res.status(200).json({ recebido: true });
+      }
 
       // ⚠️ AQUI ESTÁ A CONFIRMAÇÃO. O status usado é o que a Asaas responde
       //    agora, não o que veio no aviso.
@@ -2124,29 +2180,44 @@ export function registrarRotasEfi(
       if (situacao !== "pago") {
         await db.collection("cobrancas").doc(idCobranca)
           .set({ status: confirmado.status }, { merge: true });
-        return;
+        await registrarAviso(true, `status_${situacao}`, corpo?.event);
+        return res.status(200).json({ recebido: true });
       }
 
       // A cobrança precisa ser DESTE usuário. Sem esta conferência, um aviso
       // com o id de uma cobrança alheia daria baixa na cobrança de outra
       // pessoa — e emitiria a nota fiscal dela.
       const snap = await db.collection("cobrancas").doc(idCobranca).get();
-      if (!snap.exists) return console.warn(`[Asaas Webhook] Cobrança ${idCobranca} não é do MEI Flow.`);
+      if (!snap.exists) {
+        console.warn(`[Asaas Webhook] Cobrança ${idCobranca} não é do MEI Flow.`);
+        return res.status(200).json({ recebido: true });
+      }
       if (snap.data()?.userId !== uid) {
-        return console.warn(`[Asaas Webhook] Cobrança ${idCobranca} não pertence a ${uid}. Recusado.`);
+        console.warn(`[Asaas Webhook] Cobrança ${idCobranca} não pertence a ${uid}. Recusado.`);
+        return res.status(200).json({ recebido: true });
       }
       // ⚠️ A trava é `processadoEm`, não o status. Uma cobrança marcada como
       //    paga que falhou no meio do caminho PRECISA ser retomada — antes,
       //    este `return` a deixava presa para sempre.
       if (snap.data()?.processadoEm) {
-        return console.log(`[Asaas Webhook] ${idCobranca} já foi processada. Nada a fazer.`);
+        console.log(`[Asaas Webhook] ${idCobranca} já foi processada. Nada a fazer.`);
+        await registrarAviso(true, "ja_processada", corpo?.event);
+        return res.status(200).json({ recebido: true });
       }
 
-      // Daqui em diante é o MESMO caminho da Efí: registra o recebimento,
-      // arquiva o comprovante e emite a nota fiscal, se estiver ligado.
-      await concluirPagamento(idCobranca, confirmado.pagoEm || new Date().toISOString());
+      // Daqui em diante é o MESMO caminho da Efí: registra o recebimento e
+      // emite a nota fiscal, se estiver ligado.
+      const resultado = await concluirPagamento(idCobranca, confirmado.pagoEm || new Date().toISOString());
+      await registrarAviso(
+        resultado?.ok !== false,
+        resultado?.falhas?.length ? `pendencias: ${resultado.falhas.join(" | ")}` : "processado",
+        corpo?.event
+      );
+      res.status(200).json({ recebido: true });
     } catch (err: any) {
       console.error("[Asaas Webhook Erro]", err?.response?.data || err?.message || err);
+      await registrarAviso(false, String(err?.message || err).slice(0, 200));
+      if (!res.headersSent) res.status(200).json({ recebido: true, processado: false });
     }
   });
 
