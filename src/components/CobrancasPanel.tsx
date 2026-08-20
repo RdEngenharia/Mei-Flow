@@ -857,7 +857,13 @@ export default function CobrancasPanel({
                         </div>
                       </div>
 
-                      {/* 4) RESULTADO — um número grande, batendo com a escolha acima. */}
+                      {/*
+                        4) RESULTADO — o total cobrado é o número grande (pedido do usuário:
+                        prefere ver o total em destaque, com as parcelas menores ao lado). O
+                        card inteiro é clicável: toca nele e o valor que você digitou vira o
+                        líquido que você recebe agora, já em modo "repassar taxa" — um jeito
+                        rápido de travar "eu quero receber exatamente isso" sem redigitar.
+                      */}
                       <div className="pt-1 border-t border-indigo-100">
                         {totalCartaoDigitado <= 0 ? (
                           <p className="text-[12px] font-bold text-indigo-700">
@@ -871,18 +877,25 @@ export default function CobrancasPanel({
                               : calcularValorComRepasse(totalCartaoDigitado, parcelasCartao);
                             const selecionado = repasseTaxa ? comRepasse : semRepasse;
                             const taxaAntecip = (comRepasse as any).valorTaxaAntecipacao;
+                            const usarValorLiquidoComoMeta = () => {
+                              setValor(selecionado.valorLiquido.toFixed(2).replace(".", ","));
+                              setRepasseTaxa(true);
+                            };
                             return (
-                              <div className="bg-indigo-600 rounded-xl p-3 text-center text-white space-y-0.5">
+                              <button
+                                type="button"
+                                onClick={usarValorLiquidoComoMeta}
+                                className="w-full bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 rounded-xl p-3 text-center text-white space-y-0.5 transition-colors cursor-pointer"
+                                title="Toque para usar este valor líquido como o que você quer receber"
+                              >
                                 <p className="text-[11px] uppercase tracking-wider font-bold opacity-80">
                                   {repasseTaxa ? "Cobre do cliente" : "O cliente paga"}
                                 </p>
-                                <p className="text-2xl font-extrabold">
-                                  {selecionado.parcelas === 1
-                                    ? brl(selecionado.valorBruto)
-                                    : `${selecionado.parcelas}x de ${brl(selecionado.valorParcela)}`}
+                                <p className="text-3xl font-extrabold">
+                                  {brl(selecionado.valorBruto)}
                                 </p>
                                 <p className="text-[12px] opacity-90">
-                                  {selecionado.parcelas > 1 && `total ${brl(selecionado.valorBruto)} · `}
+                                  {selecionado.parcelas > 1 && `${selecionado.parcelas}x de ${brl(selecionado.valorParcela)} · `}
                                   você recebe {brl(selecionado.valorLiquido)}
                                 </p>
                                 {repasseTaxa && antecipar && taxaAntecip != null && (
@@ -890,7 +903,10 @@ export default function CobrancasPanel({
                                     estimativa — confira no simulador da Asaas antes de fechar valores altos
                                   </p>
                                 )}
-                              </div>
+                                <p className="text-[9px] opacity-70 pt-1">
+                                  toque para usar {brl(selecionado.valorLiquido)} como valor a receber
+                                </p>
+                              </button>
                             );
                           })()
                         )}
