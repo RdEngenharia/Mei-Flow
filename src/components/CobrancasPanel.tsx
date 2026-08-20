@@ -718,7 +718,7 @@ export default function CobrancasPanel({
                           : modo === "cartao"
                           ? repasseTaxa
                             ? "Quanto você quer receber líquido (R$) *"
-                            : "Valor da venda (R$) *"
+                            : "Quanto o cliente vai pagar (R$) *"
                           : "Valor (R$) *"}
                       </label>
                       <input
@@ -730,6 +730,11 @@ export default function CobrancasPanel({
                         placeholder="150,00"
                         className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none focus:bg-white font-mono"
                       />
+                      {modo === "cartao" && (
+                        <p className="text-[9px] text-slate-400 mt-1 font-medium">
+                          Escolha "quem paga a taxa" logo abaixo — o sentido deste campo muda conforme essa escolha.
+                        </p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
@@ -789,39 +794,18 @@ export default function CobrancasPanel({
                   */}
                   {modo === "cartao" && (
                     <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-3 space-y-2">
-                      <label className="block text-[9px] uppercase tracking-wider font-extrabold text-indigo-800">
-                        Parcelas oferecidas ao cliente
-                      </label>
-                      <select
-                        value={parcelasCartao}
-                        onChange={(e) => setParcelasCartao(Number(e.target.value))}
-                        className="w-full bg-white border border-indigo-200 text-indigo-800 rounded-xl py-2.5 px-3 text-xs font-bold focus:ring-1 focus:ring-indigo-500 focus:outline-none cursor-pointer"
-                      >
-                        {opcoesParcelasCartao.map(({ n, parcela }) => (
-                          <option key={n} value={n}>
-                            {n === 1
-                              ? "À vista (1x)"
-                              : totalCartaoDigitado > 0
-                              ? `${n}x de ${brl(parcela)}`
-                              : `Até ${n}x`}
-                          </option>
-                        ))}
-                      </select>
-                      {totalCartaoDigitado > 0 && opcoesParcelasCartao[opcoesParcelasCartao.length - 1]?.n < 21 && (
-                        <p className="text-[9px] text-indigo-700/70 font-medium">
-                          Parcelas acima de {opcoesParcelasCartao[opcoesParcelasCartao.length - 1]?.n}x não aparecem
-                          porque a parcela ficaria abaixo do mínimo de R$ 5,00.
-                        </p>
-                      )}
-
                       {/*
-                        QUEM PAGA A TAXA — "sem repasse" (o MEI absorve, valor digitado é o que
-                        o cliente paga) vs "com repasse" (o valor digitado é o que o MEI quer
-                        receber líquido, e a taxa é embutida no preço cobrado do cliente).
+                        REORDENADO (pedido do usuário: a tela original confundia porque o campo de
+                        valor lá em cima mudava de sentido dependendo de um botão que só aparecia
+                        bem mais abaixo). Ordem agora segue o fluxo natural de decisão:
+                        1) quem paga a taxa  2) quantas parcelas  3) quando quer receber
+                        4) resultado — um único número grande: "cobre do cliente".
                       */}
-                      <div className="pt-2 border-t border-indigo-100 space-y-1.5">
+
+                      {/* 1) QUEM PAGA A TAXA */}
+                      <div className="space-y-1.5">
                         <label className="block text-[9px] uppercase tracking-wider font-extrabold text-indigo-800">
-                          Quem paga a taxa do cartão
+                          1. Quem paga a taxa do cartão
                         </label>
                         <div className="grid grid-cols-2 gap-1.5">
                           <button
@@ -848,116 +832,46 @@ export default function CobrancasPanel({
                           </button>
                         </div>
                         <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed">
-                          ⚠️ Isto só muda QUEM paga a taxa — não muda QUANDO o dinheiro cai na sua conta.
-                          Com ou sem repasse, por padrão a Asaas só libera o valor uns 32 dias depois —
-                          mês a mês se for parcelado, ou de uma vez só (mas ainda em ~32 dias) se for à
-                          vista. Para receber mais rápido, é a opção "Tudo de uma vez (agora)" mais
-                          abaixo — antecipação, com taxa maior, disponível para qualquer parcelamento.
+                          {repasseTaxa
+                            ? "O valor que você digitou acima é o que SOBRA PARA VOCÊ — o preço cobrado do cliente já vem maior, para cobrir a taxa."
+                            : "O valor que você digitou acima é o que O CLIENTE PAGA — a taxa sai do que sobra para você."}
                         </p>
                       </div>
 
-                      {/*
-                        CALCULADORA — mostra as duas contas lado a lado (com e sem repasse) para
-                        o MEI comparar antes de decidir; o botão acima é o que efetivamente vale
-                        na hora de gerar a cobrança.
-                      */}
-                      {totalCartaoDigitado <= 0 ? (
-                        <p className="text-[11px] font-bold text-indigo-700">
-                          Digite o valor acima para ver a comparação de taxas.
-                        </p>
-                      ) : (
-                        (() => {
-                          const semRepasse = simularRecebimentoCartao(totalCartaoDigitado, parcelasCartao);
-                          const comRepasse = antecipar
-                            ? calcularValorComRepasseTotal(totalCartaoDigitado, parcelasCartao)
-                            : calcularValorComRepasse(totalCartaoDigitado, parcelasCartao);
-                          return (
-                            <div className="space-y-1.5">
-                              <div
-                                className={`bg-white border rounded-xl p-2.5 space-y-1 ${
-                                  !repasseTaxa ? "border-indigo-400 ring-1 ring-indigo-300" : "border-indigo-100"
-                                }`}
-                              >
-                                <p className="text-[9px] uppercase tracking-wider font-extrabold text-indigo-700">
-                                  Sem repasse {!repasseTaxa && "· selecionado"}
-                                </p>
-                                <p className="text-[11px] font-bold text-indigo-800">
-                                  {semRepasse.parcelas === 1
-                                    ? `Cliente paga ${brl(semRepasse.valorBruto)} à vista.`
-                                    : `Cliente paga em ${semRepasse.parcelas}x de ${brl(semRepasse.valorParcela)}.`}
-                                </p>
-                                <p className="text-[11px] text-slate-500">
-                                  Taxa: {brl(semRepasse.taxaFixa)} + {semRepasse.taxaPercentual}% ={" "}
-                                  <span className="font-bold text-rose-600">{brl(semRepasse.valorTaxas)}</span>
-                                  {antecipar && " (só a do cartão — a antecipação some do seu líquido do mesmo jeito)"}
-                                </p>
-                                <p className="text-[12px] font-extrabold text-emerald-700">
-                                  Você recebe líquido: {brl(semRepasse.valorLiquido)}
-                                  {antecipar && " (antes de descontar a antecipação)"}
-                                </p>
-                              </div>
-
-                              <div
-                                className={`bg-white border rounded-xl p-2.5 space-y-1 ${
-                                  repasseTaxa ? "border-indigo-400 ring-1 ring-indigo-300" : "border-indigo-100"
-                                }`}
-                              >
-                                <p className="text-[9px] uppercase tracking-wider font-extrabold text-indigo-700">
-                                  {antecipar ? "Com repasse (cartão + antecipação)" : "Com repasse"}
-                                  {repasseTaxa && " · selecionado"}
-                                </p>
-                                <p className="text-[11px] font-bold text-indigo-800">
-                                  {comRepasse.parcelas === 1
-                                    ? `Cliente paga ${brl(comRepasse.valorBruto)} à vista.`
-                                    : `Cliente paga em ${comRepasse.parcelas}x de ${brl(comRepasse.valorParcela)}.`}
-                                </p>
-                                <p className="text-[11px] text-slate-500">
-                                  Taxa embutida no preço:{" "}
-                                  <span className="font-bold text-rose-600">{brl(comRepasse.valorTaxas)}</span>
-                                  {antecipar && (comRepasse as any).valorTaxaAntecipacao != null && (
-                                    <>
-                                      {" "}
-                                      (cartão {brl(comRepasse.valorTaxas - (comRepasse as any).valorTaxaAntecipacao)} +
-                                      antecipação {brl((comRepasse as any).valorTaxaAntecipacao)})
-                                    </>
-                                  )}
-                                </p>
-                                <p className="text-[12px] font-extrabold text-emerald-700">
-                                  Você recebe líquido: {brl(comRepasse.valorLiquido)} (o valor que você digitou)
-                                </p>
-                                {antecipar && (
-                                  <p className="text-[9px] text-amber-700 font-bold">
-                                    ⚠️ Estimativa — a Asaas não publica a fórmula exata da antecipação por
-                                    parcela. Confira no Simulador de vendas dela antes de fechar valores altos.
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })()
-                      )}
-
-                      <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed">
-                        Estimativa com a taxa promocional da Asaas (válida até 10/09/2026) — depois
-                        disso, ou se sua conta tiver uma taxa negociada à parte, o número real pode
-                        mudar. Para confirmar antes de uma venda grande, veja o simulador da própria
-                        Asaas em asaas.com/paymentSimulator (Cobranças → Simulador de vendas). Em "sem
-                        repasse" o valor digitado é o que o cliente paga; em "com repasse" é o que você
-                        quer receber líquido, e o preço cobrado do cliente já vem maior para cobrir a
-                        taxa.
-                      </p>
-
-                      {/*
-                        RECEBIMENTO: padrão (~32 dias) vs antecipação (agora, taxa maior). Vale
-                        para à vista também, não só parcelado — uma venda em 1x de R$100 fica presa
-                        32 dias do mesmo jeito, a menos que se peça antecipação. Uma versão anterior
-                        desta tela só mostrava isto para parcelado, achando que à vista já recebia
-                        rápido — não recebia; a Asaas confirma "recebimento em 32 dias" pra cartão em
-                        qualquer parcelamento, inclusive à vista.
-                      */}
+                      {/* 2) PARCELAS */}
                       <div className="pt-2 border-t border-indigo-100 space-y-1.5">
                         <label className="block text-[9px] uppercase tracking-wider font-extrabold text-indigo-800">
-                          Quando você quer receber
+                          2. Parcelas oferecidas ao cliente
+                        </label>
+                        <select
+                          value={parcelasCartao}
+                          onChange={(e) => setParcelasCartao(Number(e.target.value))}
+                          className="w-full bg-white border border-indigo-200 text-indigo-800 rounded-xl py-2.5 px-3 text-xs font-bold focus:ring-1 focus:ring-indigo-500 focus:outline-none cursor-pointer"
+                        >
+                          {opcoesParcelasCartao.map(({ n, parcela }) => (
+                            <option key={n} value={n}>
+                              {n === 1
+                                ? "À vista (1x)"
+                                : totalCartaoDigitado > 0
+                                ? `${n}x de ${brl(parcela)}`
+                                : `Até ${n}x`}
+                            </option>
+                          ))}
+                        </select>
+                        {totalCartaoDigitado > 0 && opcoesParcelasCartao[opcoesParcelasCartao.length - 1]?.n < 21 && (
+                          <p className="text-[9px] text-indigo-700/70 font-medium">
+                            Parcelas acima de {opcoesParcelasCartao[opcoesParcelasCartao.length - 1]?.n}x não aparecem
+                            porque a parcela ficaria abaixo do mínimo de R$ 5,00.
+                          </p>
+                        )}
+                      </div>
+
+                      {/* 3) QUANDO VOCÊ QUER RECEBER — vale para à vista também, não só
+                          parcelado: uma venda em 1x de R$100 fica presa 32 dias do mesmo jeito,
+                          a menos que se peça antecipação. */}
+                      <div className="pt-2 border-t border-indigo-100 space-y-1.5">
+                        <label className="block text-[9px] uppercase tracking-wider font-extrabold text-indigo-800">
+                          3. Quando você quer receber
                         </label>
                         <div className="grid grid-cols-2 gap-1.5">
                           <button
@@ -989,12 +903,80 @@ export default function CobrancasPanel({
                               "descontada é maior que a padrão. A gente pede a antecipação assim que a " +
                               "cobrança é gerada."
                             : parcelasCartao > 1
-                            ? "Padrão da Asaas: cada parcela cai separada, a cada ~32 dias, com a taxa " +
-                              "normal (a mesma da simulação acima)."
+                            ? "Padrão da Asaas: cada parcela cai separada, a cada ~32 dias, com a taxa normal."
                             : "Padrão da Asaas: o valor só cai na conta uns 32 dias depois do pagamento, " +
-                              "com a taxa normal (a mesma da simulação acima) — mesmo sendo à vista."}
+                              "com a taxa normal — mesmo sendo à vista."}
                         </p>
                       </div>
+
+                      {/* 4) RESULTADO — um número grande, batendo com a escolha acima. É este
+                          valor (não o que foi digitado lá em cima) que o cliente efetivamente vê
+                          na hora de pagar quando "com repasse" está ligado. */}
+                      <div className="pt-2 border-t border-indigo-100 space-y-2">
+                        {totalCartaoDigitado <= 0 ? (
+                          <p className="text-[11px] font-bold text-indigo-700">
+                            Digite o valor acima para ver quanto cobrar.
+                          </p>
+                        ) : (
+                          (() => {
+                            const semRepasse = simularRecebimentoCartao(totalCartaoDigitado, parcelasCartao);
+                            const comRepasse = antecipar
+                              ? calcularValorComRepasseTotal(totalCartaoDigitado, parcelasCartao)
+                              : calcularValorComRepasse(totalCartaoDigitado, parcelasCartao);
+                            const selecionado = repasseTaxa ? comRepasse : semRepasse;
+                            return (
+                              <>
+                                <div className="bg-indigo-600 rounded-xl p-3 text-center text-white">
+                                  <p className="text-[9px] uppercase tracking-wider font-bold opacity-80">
+                                    {repasseTaxa ? "Cobre do cliente" : "O cliente paga"}
+                                  </p>
+                                  <p className="text-xl font-extrabold">
+                                    {selecionado.parcelas === 1
+                                      ? brl(selecionado.valorBruto)
+                                      : `${selecionado.parcelas}x de ${brl(selecionado.valorParcela)}`}
+                                  </p>
+                                  {selecionado.parcelas > 1 && (
+                                    <p className="text-[10px] opacity-90">
+                                      total {brl(selecionado.valorBruto)}
+                                    </p>
+                                  )}
+                                  <p className="text-[10px] opacity-90 pt-1">
+                                    {repasseTaxa
+                                      ? `você recebe líquido: ${brl(selecionado.valorLiquido)} (o valor que digitou)`
+                                      : `você recebe líquido: ${brl(selecionado.valorLiquido)}`}
+                                  </p>
+                                </div>
+
+                                {repasseTaxa && antecipar && (comRepasse as any).valorTaxaAntecipacao != null && (
+                                  <p className="text-[10px] text-indigo-700 font-medium leading-relaxed">
+                                    Taxa embutida nesse preço: {brl(comRepasse.valorTaxas)} — sendo{" "}
+                                    {brl(comRepasse.valorTaxas - (comRepasse as any).valorTaxaAntecipacao)} de cartão e{" "}
+                                    {brl((comRepasse as any).valorTaxaAntecipacao)} de antecipação.{" "}
+                                    <span className="text-amber-700 font-bold">
+                                      ⚠️ Estimativa — confira no Simulador de vendas da Asaas antes de fechar
+                                      valores altos.
+                                    </span>
+                                  </p>
+                                )}
+                                {!repasseTaxa && (
+                                  <p className="text-[10px] text-indigo-700 font-medium">
+                                    Taxa que sai do seu bolso: {brl(semRepasse.valorTaxas)}
+                                    {antecipar &&
+                                      " + a taxa de antecipação (some do líquido — não aparece neste número)."}
+                                  </p>
+                                )}
+                              </>
+                            );
+                          })()
+                        )}
+                      </div>
+
+                      <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed pt-1">
+                        Estimativa com a taxa promocional da Asaas (válida até 10/09/2026) — depois
+                        disso, ou se sua conta tiver uma taxa negociada à parte, o número real pode
+                        mudar. Para confirmar antes de uma venda grande, veja o simulador da própria
+                        Asaas em asaas.com/paymentSimulator (Cobranças → Simulador de vendas).
+                      </p>
                     </div>
                   )}
 
