@@ -1072,12 +1072,21 @@ export function registrarRotasEfi(
       });
 
       // --------------------------------------------------------------------
-      // ANTECIPAÇÃO — "receber tudo de uma vez" em vez de mês a mês a cada
-      // 32 dias. Só faz sentido para parcelado: à vista a Asaas já paga no
-      // prazo mais curto dela, então não há "mês a mês" para adiantar. É
-      // pedida DEPOIS de criar a cobrança, porque só agora existe o
-      // parcelamento a antecipar — a Asaas não aceita isso como campo junto
-      // na criação, é uma chamada separada (ver bancoAsaas.ts).
+      // ANTECIPAÇÃO — "receber tudo de uma vez" em vez de esperar o prazo
+      // padrão da Asaas (~32 dias — mês a mês, se for parcelado).
+      //
+      // ⚠️ VALE PARA À VISTA TAMBÉM, NÃO SÓ PARCELADO. Uma versão anterior
+      // deste código dizia que à vista "já paga no prazo mais curto", como
+      // se antecipação não fizesse sentido — isso estava errado: a própria
+      // tela de Configurações → Preços e taxas da Asaas mostra "Recebimento
+      // em 32 dias após o pagamento" para cartão de crédito em qualquer
+      // parcelamento, incluindo à vista. Uma venda de R$100 à vista também
+      // fica presa 32 dias até cair na conta, a menos que se peça
+      // antecipação — com a taxa maior de sempre.
+      //
+      // É pedida DEPOIS de criar a cobrança, porque só agora existe o que
+      // antecipar — a Asaas não aceita isso como campo junto na criação, é
+      // uma chamada separada (ver bancoAsaas.ts).
       // --------------------------------------------------------------------
       let antecipacao: {
         solicitada: boolean;
@@ -1087,13 +1096,20 @@ export function registrarRotasEfi(
         erro?: string;
       } = { solicitada: false };
 
-      if (antecipar && cobranca.parcelas > 1) {
-        if (!cobranca.installmentId) {
-          // ⚠️ Sem o id do plano de parcelamento devolvido pela Asaas, não dá
-          // para antecipar o pacote inteiro com segurança — ver o aviso em
-          // `emitirCartaoAsaas` (bancoAsaas.ts) sobre esse campo (`installment`)
-          // não ter sido confirmado contra uma resposta real. Em vez de
-          // arriscar mandar um id errado, avisamos e a cobrança segue normal.
+      if (antecipar) {
+        // Parcelado: antecipa o PLANO inteiro, pelo id do parcelamento — mas
+        // só se a Asaas devolveu esse id (ver aviso em `emitirCartaoAsaas`
+        // sobre o campo `installment` não ter sido confirmado). À vista: não
+        // existe plano, antecipa direto pelo id da própria cobrança — esse
+        // caminho não depende de nenhum campo incerto.
+        const alvo: { tipo: "installment" | "payment"; id: string } | null =
+          cobranca.parcelas > 1
+            ? cobranca.installmentId
+              ? { tipo: "installment", id: cobranca.installmentId }
+              : null
+            : { tipo: "payment", id: String(cobranca.id) };
+
+        if (!alvo) {
           antecipacao = {
             solicitada: false,
             aviso:
@@ -1106,7 +1122,7 @@ export function registrarRotasEfi(
             const resultado = await solicitarAntecipacaoAsaas(
               contaDoUsuario.segredos || {},
               contaDoUsuario.ambiente,
-              { tipo: "installment", id: cobranca.installmentId }
+              alvo
             );
             antecipacao = {
               solicitada: true,
@@ -1145,7 +1161,7 @@ export function registrarRotasEfi(
         criadoEm: new Date().toISOString(),
         pagoEm: null,
         installmentId: cobranca.installmentId || null,
-        recebimento: antecipar && cobranca.parcelas > 1 ? "antecipado" : "padrao",
+        recebimento: antecipar ? "antecipado" : "padrao",
         antecipacaoSolicitada: antecipacao.solicitada,
         ...(antecipacao.status ? { antecipacaoStatus: antecipacao.status } : {}),
         ...(antecipacao.valorLiquidoEstimado != null
@@ -1900,18 +1916,21 @@ export function registrarRotasEfi(
   });
 
   // --------------------------------------------------------------------------
-  // DESLIGAR NOTIFICAÇÃO POR WHATSAPP — corrige clientes já cadastrados
+  // DESLIGAR NOTIFICAÇÕES PAGAS (WhatsApp, SMS, ligação) — corrige clientes
+  // já cadastrados
   // --------------------------------------------------------------------------
   //
-  // A partir de agora, todo cliente NOVO (ou reutilizado) já sai com o
-  // WhatsApp desligado — ver `resolverClienteAsaas` em bancoAsaas.ts. Mas
-  // isso só vale a partir da PRÓXIMA cobrança de cada cliente; quem já tem
-  // clientes cadastrados de antes continua sendo cobrado por notificação até
-  // que essa rotina rode uma vez para eles. É por isso que esta rota existe:
-  // um botão de "corrigir agora, de uma vez" para os clientes já usados.
+  // A partir de agora, todo cliente NOVO (ou reutilizado) já sai com esses
+  // três canais desligados — ver `resolverClienteAsaas` em bancoAsaas.ts.
+  // Mas isso só vale a partir da PRÓXIMA cobrança de cada cliente; quem já
+  // tem clientes cadastrados de antes continua sendo cobrado por notificação
+  // até que essa rotina rode uma vez para eles. É por isso que esta rota
+  // existe: um botão de "corrigir agora, de uma vez" para os clientes já
+  // usados.
   //
-  // ⚠️ Só Asaas — a Efí não tem esse mecanismo de notificação paga por
-  // WhatsApp neste app.
+  // ⚠️ E-mail continua ligado — é grátis e o cliente ainda precisa saber que
+  // tem uma cobrança. ⚠️ Só Asaas — a Efí não tem esse mecanismo de
+  // notificação paga neste app.
   // --------------------------------------------------------------------------
   app.post("/api/efi/notificacoes/desativar-whatsapp", async (req: any, res: any) => {
     try {
@@ -1964,7 +1983,7 @@ export function registrarRotasEfi(
             ? "Nenhum cliente cobrado pela Asaas ainda."
             : falhas.length
             ? `${corrigidos} de ${idsClientes.length} cliente(s) corrigido(s). ${falhas.length} falharam — tente de novo.`
-            : `WhatsApp desligado para ${corrigidos} cliente(s). Cobranças novas para eles não devem mais gerar essa taxa.`,
+            : `Notificações pagas (WhatsApp/SMS/ligação) desligadas para ${corrigidos} cliente(s). Cobranças novas para eles não devem mais gerar essa taxa.`,
       });
     } catch (err: any) {
       if (

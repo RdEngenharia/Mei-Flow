@@ -142,9 +142,11 @@ export default function CobrancasPanel({
   /** Parcelas do cartão — faixa diferente da do carnê (1 a 21, não 2 a 24 boletos mensais). */
   const [parcelasCartao, setParcelasCartao] = useState(1);
   /**
-   * Só importa quando parcelasCartao > 1. Padrão da Asaas é `false`: o
-   * dinheiro cai mês a mês, a cada ~32 dias, por parcela — sem taxa extra.
-   * `true` pede a ANTECIPAÇÃO: tudo de uma vez, com uma taxa maior por isso.
+   * Vale para qualquer número de parcelas, inclusive à vista — a Asaas só
+   * libera o dinheiro do cartão em ~32 dias por padrão, mesmo numa venda em
+   * 1x. Padrão (`false`): dinheiro cai no prazo normal, sem taxa extra —
+   * mês a mês se for parcelado. `true` pede a ANTECIPAÇÃO: tudo de uma vez,
+   * logo após a venda, com uma taxa maior por isso.
    */
   const [antecipar, setAntecipar] = useState(false);
   /**
@@ -268,9 +270,10 @@ export default function CobrancasPanel({
 
   /**
    * Corrige, de uma vez, os clientes já cadastrados que ainda geram taxa de
-   * notificação por WhatsApp — cliente novo já sai correto a partir de agora
-   * (ver bancoAsaas.ts), mas quem já cobrou antes precisa rodar isto uma vez
-   * para os clientes antigos pararem de gerar a taxa também.
+   * notificação (WhatsApp, SMS ou ligação) — cliente novo já sai correto a
+   * partir de agora (ver bancoAsaas.ts), mas quem já cobrou antes precisa
+   * rodar isto uma vez para os clientes antigos pararem de gerar a taxa
+   * também. E-mail continua ligado — é grátis.
    */
   const desligarWhatsapp = async () => {
     setDesligandoWhatsapp(true);
@@ -462,12 +465,12 @@ export default function CobrancasPanel({
         modo === "carne"
           ? `✓ Carnê com ${d.parcelas} parcelas gerado!`
           : modo === "cartao"
-          ? d.parcelas > 1
-            ? antecipar
-              ? d.antecipacao?.solicitada
-                ? `✓ Cobrança em ${d.parcelas}x gerada — antecipação pedida!`
-                : `✓ Cobrança em ${d.parcelas}x gerada, mas a antecipação não pôde ser confirmada — veja abaixo.`
-              : `✓ Cobrança em cartão gerada — ${d.parcelas}x no link!`
+          ? antecipar
+            ? d.antecipacao?.solicitada
+              ? `✓ Cobrança gerada — antecipação pedida!`
+              : `✓ Cobrança gerada, mas a antecipação não pôde ser confirmada — veja abaixo.`
+            : d.parcelas > 1
+            ? `✓ Cobrança em cartão gerada — ${d.parcelas}x no link!`
             : "✓ Cobrança em cartão gerada!"
           : "✓ Boleto gerado com sucesso!"
       );
@@ -570,7 +573,7 @@ export default function CobrancasPanel({
                   onClick={desligarWhatsapp}
                   disabled={desligandoWhatsapp}
                   className="w-9 h-9 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-full flex items-center justify-center transition-colors cursor-pointer disabled:opacity-50"
-                  title="Parar de pagar notificação por WhatsApp para clientes já cadastrados (só contas Asaas)"
+                  title="Parar de pagar notificação (WhatsApp/SMS/ligação) para clientes já cadastrados (só contas Asaas)"
                 >
                   {desligandoWhatsapp ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -840,10 +843,10 @@ export default function CobrancasPanel({
                         </div>
                         <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed">
                           ⚠️ Isto só muda QUEM paga a taxa — não muda QUANDO o dinheiro cai na sua conta.
-                          Com ou sem repasse, por padrão a Asaas só libera o valor a cada ~32 dias (mês a
-                          mês, se for parcelado). Para receber tudo de uma vez, mais rápido, é a opção
-                          "Tudo de uma vez" mais abaixo (antecipação — taxa maior, e só existe para
-                          parcelado).
+                          Com ou sem repasse, por padrão a Asaas só libera o valor uns 32 dias depois —
+                          mês a mês se for parcelado, ou de uma vez só (mas ainda em ~32 dias) se for à
+                          vista. Para receber mais rápido, é a opção "Tudo de uma vez (agora)" mais
+                          abaixo — antecipação, com taxa maior, disponível para qualquer parcelamento.
                         </p>
                       </div>
 
@@ -921,49 +924,53 @@ export default function CobrancasPanel({
                       </p>
 
                       {/*
-                        RECEBIMENTO: mês a mês (padrão, taxa menor) vs de uma vez (antecipação,
-                        taxa maior). Só faz sentido quando é parcelado — à vista a Asaas já paga
-                        no prazo mais curto que ela tem, não há "mês a mês" para adiantar.
+                        RECEBIMENTO: padrão (~32 dias) vs antecipação (agora, taxa maior). Vale
+                        para à vista também, não só parcelado — uma venda em 1x de R$100 fica presa
+                        32 dias do mesmo jeito, a menos que se peça antecipação. Uma versão anterior
+                        desta tela só mostrava isto para parcelado, achando que à vista já recebia
+                        rápido — não recebia; a Asaas confirma "recebimento em 32 dias" pra cartão em
+                        qualquer parcelamento, inclusive à vista.
                       */}
-                      {parcelasCartao > 1 && (
-                        <div className="pt-2 border-t border-indigo-100 space-y-1.5">
-                          <label className="block text-[9px] uppercase tracking-wider font-extrabold text-indigo-800">
-                            Quando você quer receber
-                          </label>
-                          <div className="grid grid-cols-2 gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => setAntecipar(false)}
-                              className={`text-[10px] font-bold rounded-xl py-2 px-2 border transition-colors ${
-                                !antecipar
-                                  ? "bg-indigo-600 border-indigo-600 text-white"
-                                  : "bg-white border-indigo-200 text-indigo-700"
-                              }`}
-                            >
-                              Mês a mês (padrão)
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setAntecipar(true)}
-                              className={`text-[10px] font-bold rounded-xl py-2 px-2 border transition-colors ${
-                                antecipar
-                                  ? "bg-indigo-600 border-indigo-600 text-white"
-                                  : "bg-white border-indigo-200 text-indigo-700"
-                              }`}
-                            >
-                              Tudo de uma vez
-                            </button>
-                          </div>
-                          <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed">
-                            {antecipar
-                              ? "Antecipação: você recebe o valor de uma vez, logo após a venda, mas a taxa " +
-                                "descontada é maior que a padrão. A gente pede a antecipação assim que a " +
-                                "cobrança é gerada."
-                              : "Padrão da Asaas: cada parcela cai separada, a cada ~32 dias, com a taxa " +
-                                "normal (a mesma da simulação acima)."}
-                          </p>
+                      <div className="pt-2 border-t border-indigo-100 space-y-1.5">
+                        <label className="block text-[9px] uppercase tracking-wider font-extrabold text-indigo-800">
+                          Quando você quer receber
+                        </label>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setAntecipar(false)}
+                            className={`text-[10px] font-bold rounded-xl py-2 px-2 border transition-colors ${
+                              !antecipar
+                                ? "bg-indigo-600 border-indigo-600 text-white"
+                                : "bg-white border-indigo-200 text-indigo-700"
+                            }`}
+                          >
+                            {parcelasCartao > 1 ? "Mês a mês (padrão)" : "Padrão (~32 dias)"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAntecipar(true)}
+                            className={`text-[10px] font-bold rounded-xl py-2 px-2 border transition-colors ${
+                              antecipar
+                                ? "bg-indigo-600 border-indigo-600 text-white"
+                                : "bg-white border-indigo-200 text-indigo-700"
+                            }`}
+                          >
+                            Tudo de uma vez (agora)
+                          </button>
                         </div>
-                      )}
+                        <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed">
+                          {antecipar
+                            ? "Antecipação: você recebe o valor de uma vez, logo após a venda, mas a taxa " +
+                              "descontada é maior que a padrão. A gente pede a antecipação assim que a " +
+                              "cobrança é gerada."
+                            : parcelasCartao > 1
+                            ? "Padrão da Asaas: cada parcela cai separada, a cada ~32 dias, com a taxa " +
+                              "normal (a mesma da simulação acima)."
+                            : "Padrão da Asaas: o valor só cai na conta uns 32 dias depois do pagamento, " +
+                              "com a taxa normal (a mesma da simulação acima) — mesmo sendo à vista."}
+                        </p>
+                      </div>
                     </div>
                   )}
 
@@ -1092,7 +1099,7 @@ export default function CobrancasPanel({
                     </p>
                   )}
 
-                  {modo === "cartao" && gerado.parcelas > 1 && antecipar && (
+                  {modo === "cartao" && antecipar && (
                     <div
                       className={`rounded-xl p-2.5 text-[11px] font-medium leading-relaxed ${
                         gerado.antecipacao?.solicitada
@@ -1101,7 +1108,9 @@ export default function CobrancasPanel({
                       }`}
                     >
                       {gerado.antecipacao?.solicitada
-                        ? `Antecipação pedida — você recebe o valor de uma vez, sem esperar as parcelas caírem mês a mês.${
+                        ? `Antecipação pedida — você recebe o valor de uma vez, sem esperar ${
+                            gerado.parcelas > 1 ? "as parcelas caírem mês a mês" : "os ~32 dias do padrão"
+                          }.${
                             gerado.antecipacao?.valorLiquidoEstimado != null
                               ? ` Valor líquido estimado: ${brl(gerado.antecipacao.valorLiquidoEstimado)}.`
                               : ""
