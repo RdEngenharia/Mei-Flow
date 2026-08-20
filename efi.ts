@@ -1629,46 +1629,24 @@ export function registrarRotasEfi(
     const perfilSnap = await db.collection("users").doc(cobranca.userId).get();
     const perfil = perfilSnap.exists ? perfilSnap.data() : {};
 
-    let documento: any = null;
-    try {
-      const pdf = await gerarComprovantePdf({
-        titulo: "Comprovante de Recebimento",
-        meiNome: perfil.name || perfil.meiName || "Microempreendedor Individual",
-        meiCnpj: perfil.cnpjPrestador || perfil.cnpj || "",
-        linhas: [
-          ["Pagador", cobranca.clienteNome || "-"],
-          ["CPF / CNPJ do pagador", cobranca.clienteDocumento || "-"],
-          ["Valor recebido", `R$ ${Number(cobranca.valor).toFixed(2).replace(".", ",")}`],
-          ["Vencimento do boleto", paraDataBR(cobranca.vencimento)],
-          ["Data do pagamento", paraDataBR(pago)],
-          // ⚠️ Já foi "Boleto bancario (Efi)", fixo. Com a Asaas emitindo
-          //    também, o comprovante passava a nomear o banco errado — num
-          //    documento que o usuário guarda por cinco anos e o contador lê.
-          [
-            "Forma de pagamento",
-            cobranca.gateway === "asaas"
-              ? "Boleto bancario (Asaas)"
-              : "Boleto bancario (Efi)",
-          ],
-          ["Identificador da cobranca", String(chargeId)],
-        ],
-      });
-
-      documento = await arquivarComprovante(db, adminStorage, firebaseConfig, {
-        userId: cobranca.userId,
-        pdfBuffer: pdf,
-        nomeArquivo: `Recebimento_${mes}_${ano}_${chargeId}.pdf`,
-        ano, mes,
-        origem: "efi_cobranca",
-        referenciaId: String(chargeId),
-      });
-    } catch (err: any) {
-      // Sem credenciais de Storage o arquivamento falha, mas o pagamento
-      // continua válido — marcar como pago é mais importante que o PDF.
-      // O que mudou: agora isso FICA REGISTRADO, em vez de sumir num log.
-      console.warn(`[MEI Flow] Comprovante de ${chargeId} não arquivado:`, err.message);
-      falhas.push(`comprovante: ${String(err?.message || err).slice(0, 160)}`);
-    }
+    // ⚠️ "COMPROVANTE DE RECEBIMENTO" DESLIGADO DE PROPÓSITO.
+    //
+    // Este PDF interno (gerarComprovantePdf + arquivarComprovante) foi pedido
+    // no início do projeto, mas o usuário identificou que, ao lado da nota
+    // fiscal de verdade emitida pela prefeitura, ele é redundante — a nota já
+    // é o documento fiscal válido. Gerar os dois só duplicava arquivo no
+    // Arquivo Digital.
+    //
+    // `documento` fica null de propósito: `documentoId` é só um vínculo
+    // opcional entre o lançamento no livro caixa e um PDF arquivado — nada
+    // mais depende dele (nenhuma tela do app lê `documentoId`), então deixar
+    // nulo aqui não quebra nada, só deixa de arquivar um PDF que não é mais
+    // gerado.
+    //
+    // Se um dia quiser o comprovante de volta, a função `gerarComprovantePdf`
+    // e `arquivarComprovante` continuam abaixo (usadas pelo Pix enviado) —
+    // bastaria restaurar o bloco que chamava as duas aqui.
+    const documento: any = null;
 
     const lancamento = await criarLancamento(db, {
       userId: cobranca.userId,
