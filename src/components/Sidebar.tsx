@@ -2,6 +2,7 @@ import React from "react";
 import {
   LayoutDashboard, Users, BookOpen, FileText, Package,
   Building, Calendar, Receipt, X, Crown, Barcode, FolderArchive, Landmark, UserCog, Boxes,
+  CalendarClock,
 } from "lucide-react";
 
 /**
@@ -43,7 +44,8 @@ export type TelaMeiFlow =
   | "arquivos"
   | "banco"
   | "usuarios"
-  | "estoque";
+  | "estoque"
+  | "agendamentos";
 
 /**
  * ============================================================================
@@ -173,6 +175,13 @@ export default function Sidebar({
     // Cadastros
     { id: "clientes", rotulo: "Clientes", icone: Users, contador: totalClientes, grupo: "cadastro" },
     { id: "catalogo", rotulo: "Catálogo", icone: Package, bloqueado: free, grupo: "cadastro" },
+    /*
+      Fase 1 do agendamento: só cadastro (tipos de serviço + horários de
+      atendimento), por isso mora em "Cadastros" por enquanto. Quando a Fase 3
+      trouxer a agenda ao vivo (visitas confirmadas, "a caminho", etc.), este
+      item deve migrar para o grupo "trabalho" — é lá que vive o dia a dia.
+    */
+    { id: "agendamentos", rotulo: "Agendamento", icone: CalendarClock, grupo: "cadastro" },
 
     // Fiscal — cada serviço com caminho próprio, e não empilhado numa tela só
     { id: "notafiscal", rotulo: "Nota fiscal", icone: Receipt, bloqueado: free, grupo: "fiscal", acao: onEmitirNota },

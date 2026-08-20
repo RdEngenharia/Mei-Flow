@@ -164,5 +164,19 @@ service cloud.firestore {
     match /equipe/{doc} {
       allow read, write: if false;
     }
+
+    // tipos_agendamento e disponibilidade_agenda alimentam a feature de
+    // agendamento (Fase 1 — ver claude/AGENDAMENTO_GOOGLE_CALENDAR_ESTRUTURA.md
+    // no projeto). Mesmo padrão de `cobrancas`: só o servidor, pelo Admin SDK,
+    // toca nessas coleções — a validação de dono e de formato mora nas rotas
+    // de agendamento.ts, não em regra de segurança.
+
+    match /tipos_agendamento/{doc} {
+      allow read, write: if false;
+    }
+
+    match /disponibilidade_agenda/{doc} {
+      allow read, write: if false;
+    }
   }
 }

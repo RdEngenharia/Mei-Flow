@@ -91,6 +91,7 @@ import ArquivoDigitalMei from "./components/ArquivoDigitalMei";
 import CobrancasPanel from "./components/CobrancasPanel";
 import NotaFiscalPanel from "./components/NotaFiscalPanel";
 import BancoCredenciaisPanel from "./components/BancoCredenciaisPanel";
+import AgendamentoConfigPanel from "./components/AgendamentoConfigPanel";
 import Navbar from "./components/Navbar";
 import Sidebar from "./components/Sidebar";
 import EquipePanel from "./components/EquipePanel";
@@ -3555,6 +3556,10 @@ ${meiName}`;
 
         {currentView === "banco" && (
           <BancoCredenciaisPanel modoPagina triggerToast={triggerToast} />
+        )}
+
+        {currentView === "agendamentos" && (
+          <AgendamentoConfigPanel triggerToast={triggerToast} />
         )}
 
         {/*

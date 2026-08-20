@@ -35,6 +35,10 @@
     {
       "source": "/api/plano",
       "destination": "/api/mf?__rota=plano"
+    },
+    {
+      "source": "/api/agendamento/:path*",
+      "destination": "/api/mf?__rota=agendamento/:path*"
     }
   ]
 }
