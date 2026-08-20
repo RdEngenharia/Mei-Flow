@@ -43,6 +43,10 @@
     {
       "source": "/agendar/:path*",
       "destination": "/index.html"
+    },
+    {
+      "source": "/acompanhar/:path*",
+      "destination": "/index.html"
     }
   ]
 }

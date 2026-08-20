@@ -261,6 +261,58 @@ export async function consultarOcupacaoGoogle(
 }
 
 /**
+ * Move um evento já criado para um novo horário — usado pela Fase 4 quando o
+ * cliente reagenda. Devolve `false` (sem lançar) se o profissional não
+ * estiver conectado ou se o Google recusar: quem chama trata isso como "o
+ * agendamento no MEI Flow já mudou de horário, só a cópia no Google Calendar
+ * é que ficou desatualizada" — nunca bloqueia o reagendamento por causa disso.
+ */
+export async function atualizarEventoAgendamento(
+  db: any,
+  uid: string,
+  eventId: string,
+  dados: { inicioISO: string; fimISO: string }
+): Promise<boolean> {
+  const token = await obterAccessTokenValido(db, uid);
+  if (!token || !eventId) return false;
+
+  try {
+    await axios.patch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`,
+      { start: { dateTime: dados.inicioISO }, end: { dateTime: dados.fimISO } },
+      { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 }
+    );
+    return true;
+  } catch (err: any) {
+    console.error("[Google Calendar] Falha ao mover evento:", err?.response?.data || err?.message);
+    return false;
+  }
+}
+
+/**
+ * Remove o evento da agenda do profissional quando um agendamento é
+ * cancelado. Nunca lança — "não conseguiu tirar do Google" não pode impedir
+ * o cancelamento de valer no MEI Flow.
+ */
+export async function excluirEventoAgendamento(db: any, uid: string, eventId: string): Promise<void> {
+  const token = await obterAccessTokenValido(db, uid);
+  if (!token || !eventId) return;
+
+  try {
+    await axios.delete(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`,
+      { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 }
+    );
+  } catch (err: any) {
+    // 410/404 (evento já removido do lado do Google) não é erro de verdade.
+    const status = err?.response?.status;
+    if (status !== 404 && status !== 410) {
+      console.error("[Google Calendar] Falha ao remover evento:", err?.response?.data || err?.message);
+    }
+  }
+}
+
+/**
  * Cria o evento na agenda do profissional quando um agendamento é confirmado.
  * Devolve o id do evento criado, ou `null` se o profissional não estiver
  * conectado ou se o Google recusar a chamada — quem chama trata `null` como

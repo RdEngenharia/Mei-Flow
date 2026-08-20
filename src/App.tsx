@@ -93,6 +93,7 @@ import NotaFiscalPanel from "./components/NotaFiscalPanel";
 import BancoCredenciaisPanel from "./components/BancoCredenciaisPanel";
 import AgendamentoConfigPanel from "./components/AgendamentoConfigPanel";
 import AgendamentoPublicoPage from "./components/AgendamentoPublicoPage";
+import AgendamentoAcompanhamentoPage from "./components/AgendamentoAcompanhamentoPage";
 import Navbar from "./components/Navbar";
 import Sidebar from "./components/Sidebar";
 import EquipePanel from "./components/EquipePanel";
@@ -148,6 +149,12 @@ export default function App() {
    */
   if (window.location.pathname.startsWith("/agendar/")) {
     return <AgendamentoPublicoPage />;
+  }
+  // /acompanhar/{id} — a página que o cliente reabre para ver o status do
+  // agendamento (Fase 4). Mesmo raciocínio da rota acima: sem login, sem
+  // roteador, retorno antecipado antes de qualquer hook de autenticação.
+  if (window.location.pathname.startsWith("/acompanhar/")) {
+    return <AgendamentoAcompanhamentoPage />;
   }
 
   // Controle de Navegação por Abas/Módulos

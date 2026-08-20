@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import {
   CalendarClock, Plus, Pencil, Trash2, Loader2, AlertTriangle, Save,
   X, Wallet, Clock, Info, CheckCircle2, ExternalLink, Unlink, Mail, ShieldCheck,
-  Link2, Copy, Check,
+  Link2, Copy, Check, Truck, MapPin, Phone, Ban, ClipboardList,
 } from "lucide-react";
 import { auth } from "../firebase";
 import { getApiUrl } from "../utils/nativeFile";
@@ -85,8 +85,40 @@ type StatusGoogle = {
   configuradoNoServidor?: boolean;
 };
 
+type StatusAgendamento = "aguardando_pagamento" | "confirmado" | "a_caminho" | "concluido" | "cancelado";
+
+type Agendamento = {
+  id: string;
+  tipoNome: string;
+  duracaoMin: number;
+  status: StatusAgendamento;
+  dataHoraInicio: string;
+  enderecoTexto: string;
+  clienteNome: string;
+  clienteTelefone: string;
+  valor: number;
+  exigePagamento: boolean;
+};
+
+const RUBRICA_STATUS: Record<StatusAgendamento, { rotulo: string; classe: string }> = {
+  aguardando_pagamento: { rotulo: "Aguardando pagamento", classe: "bg-amber-100/60 text-amber-700" },
+  confirmado: { rotulo: "Confirmado", classe: "bg-indigo-100/60 text-indigo-700" },
+  a_caminho: { rotulo: "A caminho", classe: "bg-amber-100/60 text-amber-700" },
+  concluido: { rotulo: "Concluído", classe: "bg-emerald-100/60 text-emerald-700" },
+  cancelado: { rotulo: "Cancelado", classe: "bg-slate-200/60 text-slate-500" },
+};
+
+function dataHoraBR(iso: string): string {
+  const d = new Date(iso);
+  const data = d.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit" });
+  const hora = d.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" });
+  return `${data} às ${hora}`;
+}
+
 export default function AgendamentoConfigPanel({ triggerToast }: Props) {
-  const [abaInterna, setAbaInterna] = useState<"google" | "tipos" | "disponibilidade">("tipos");
+  const [abaInterna, setAbaInterna] = useState<"agendamentos" | "google" | "tipos" | "disponibilidade">(
+    "agendamentos"
+  );
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -110,6 +142,13 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
     }
   };
 
+  // ----------------------------------------------------------- Agendamentos --
+  const [agendamentos, setAgendamentos] = useState<Agendamento[]>([]);
+  const [marcandoACaminhoId, setMarcandoACaminhoId] = useState<string | null>(null);
+  const [confirmandoCancelamentoId, setConfirmandoCancelamentoId] = useState<string | null>(null);
+  const [cancelandoId, setCancelandoId] = useState<string | null>(null);
+  const [linkCopiadoId, setLinkCopiadoId] = useState<string | null>(null);
+
   // ---------------------------------------------------------------- Tipos --
   const [tipos, setTipos] = useState<TipoAgendamento[]>([]);
   const [formTipo, setFormTipo] = useState<typeof TIPO_VAZIO | null>(null);
@@ -127,11 +166,15 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
     setErro(null);
     try {
       const h = await comToken();
-      const [rTipos, rDisp, rGoogle] = await Promise.all([
+      const [rAgendamentos, rTipos, rDisp, rGoogle] = await Promise.all([
+        fetch(getApiUrl("/api/agendamento/lista"), { headers: h }),
         fetch(getApiUrl("/api/agendamento/tipos"), { headers: h }),
         fetch(getApiUrl("/api/agendamento/disponibilidade"), { headers: h }),
         fetch(getApiUrl("/api/agendamento/google/status"), { headers: h }),
       ]);
+
+      const dAgendamentos = await rAgendamentos.json();
+      if (dAgendamentos?.success) setAgendamentos(dAgendamentos.agendamentos || []);
 
       const dTipos = await rTipos.json();
       if (dTipos?.success) setTipos(dTipos.tipos || []);
@@ -222,6 +265,53 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
       setErro(e?.message || "Não foi possível desconectar.");
     } finally {
       setDesconectandoGoogle(false);
+    }
+  };
+
+  // ----------------------------------------------------------- Agendamentos --
+
+  const marcarACaminho = async (id: string) => {
+    setMarcandoACaminhoId(id);
+    setErro(null);
+    try {
+      const h = await comToken();
+      const r = await fetch(getApiUrl(`/api/agendamento/${id}/a-caminho`), { method: "POST", headers: h });
+      const d = await r.json();
+      if (!r.ok || !d?.success) throw new Error(d?.mensagem || "Não foi possível marcar como a caminho.");
+      setAgendamentos((lista) => lista.map((a) => (a.id === id ? { ...a, status: "a_caminho" } : a)));
+      triggerToast?.("Marcado como a caminho.");
+    } catch (e: any) {
+      setErro(e?.message || "Não foi possível marcar como a caminho.");
+    } finally {
+      setMarcandoACaminhoId(null);
+    }
+  };
+
+  const cancelarAgendamento = async (id: string) => {
+    setCancelandoId(id);
+    setErro(null);
+    try {
+      const h = await comToken();
+      const r = await fetch(getApiUrl(`/api/agendamento/${id}/cancelar`), { method: "POST", headers: h });
+      const d = await r.json();
+      if (!r.ok || !d?.success) throw new Error(d?.mensagem || "Não foi possível cancelar.");
+      setAgendamentos((lista) => lista.map((a) => (a.id === id ? { ...a, status: "cancelado" } : a)));
+      setConfirmandoCancelamentoId(null);
+      triggerToast?.("Agendamento cancelado.");
+    } catch (e: any) {
+      setErro(e?.message || "Não foi possível cancelar.");
+    } finally {
+      setCancelandoId(null);
+    }
+  };
+
+  const copiarLinkAcompanhamento = async (id: string) => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/acompanhar/${id}`);
+      setLinkCopiadoId(id);
+      setTimeout(() => setLinkCopiadoId(null), 2000);
+    } catch {
+      triggerToast?.("Não foi possível copiar. Tente novamente.");
     }
   };
 
@@ -423,16 +513,22 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
           </div>
         )}
 
-        <div className="flex gap-1.5 bg-slate-100 rounded-2xl p-1 w-fit">
-          {(["google", "tipos", "disponibilidade"] as const).map((aba) => (
+        <div className="flex gap-1.5 bg-slate-100 rounded-2xl p-1 w-fit overflow-x-auto">
+          {(["agendamentos", "google", "tipos", "disponibilidade"] as const).map((aba) => (
             <button
               key={aba}
               onClick={() => setAbaInterna(aba)}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
                 abaInterna === aba ? "bg-white text-indigo-700 shadow-xs" : "text-slate-500 hover:text-slate-700"
               }`}
             >
-              {aba === "google" ? "Google Calendar" : aba === "tipos" ? "Tipos de agendamento" : "Disponibilidade"}
+              {aba === "agendamentos"
+                ? "Agendamentos"
+                : aba === "google"
+                ? "Google Calendar"
+                : aba === "tipos"
+                ? "Tipos de agendamento"
+                : "Disponibilidade"}
             </button>
           ))}
         </div>
@@ -441,6 +537,112 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
           <div className="py-16 flex flex-col items-center gap-3 text-slate-400">
             <Loader2 className="w-6 h-6 animate-spin" />
             <p className="text-xs font-medium">Carregando…</p>
+          </div>
+        ) : abaInterna === "agendamentos" ? (
+          <div className="space-y-3">
+            {agendamentos.length === 0 ? (
+              <div className="py-10 flex flex-col items-center gap-2.5 text-center">
+                <ClipboardList className="w-8 h-8 text-slate-300" />
+                <p className="text-xs text-slate-400 max-w-xs">
+                  Nenhum agendamento ainda. Assim que um cliente marcar horário pelo seu link
+                  público, ele aparece aqui.
+                </p>
+              </div>
+            ) : (
+              agendamentos.map((a) => (
+                <div key={a.id} className="bg-white border border-slate-200/70 rounded-2xl p-4 space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-slate-800 truncate">{a.tipoNome}</p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">{dataHoraBR(a.dataHoraInicio)}</p>
+                    </div>
+                    <span
+                      className={`shrink-0 px-2 py-1 rounded-lg text-[9px] font-extrabold uppercase ${RUBRICA_STATUS[a.status].classe}`}
+                    >
+                      {RUBRICA_STATUS[a.status].rotulo}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    {a.clienteNome && (
+                      <span className="text-xs text-slate-600">{a.clienteNome}</span>
+                    )}
+                    {a.clienteTelefone && (
+                      <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
+                        <Phone className="w-3 h-3" /> {a.clienteTelefone}
+                      </span>
+                    )}
+                    {a.enderecoTexto && (
+                      <span className="inline-flex items-start gap-1.5 text-[11px] text-slate-400">
+                        <MapPin className="w-3 h-3 shrink-0 mt-0.5" /> {a.enderecoTexto}
+                      </span>
+                    )}
+                    {a.exigePagamento && (
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-indigo-600">
+                        <Wallet className="w-3 h-3" /> {formatarReais(a.valor)}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5 pt-1 flex-wrap">
+                    {a.status === "confirmado" && (
+                      <button
+                        onClick={() => marcarACaminho(a.id)}
+                        disabled={marcandoACaminhoId === a.id}
+                        className="px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-100 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-amber-100 transition-colors cursor-pointer disabled:opacity-60"
+                      >
+                        {marcandoACaminhoId === a.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Truck className="w-3 h-3" />
+                        )}
+                        Marcar a caminho
+                      </button>
+                    )}
+
+                    {(a.status === "confirmado" || a.status === "a_caminho") && (
+                      <button
+                        onClick={() => copiarLinkAcompanhamento(a.id)}
+                        className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-colors cursor-pointer"
+                      >
+                        {linkCopiadoId === a.id ? (
+                          <Check className="w-3 h-3 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-3 h-3" />
+                        )}
+                        {linkCopiadoId === a.id ? "Copiado" : "Link do cliente"}
+                      </button>
+                    )}
+
+                    {(a.status === "confirmado" || a.status === "a_caminho") &&
+                      (confirmandoCancelamentoId === a.id ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <button
+                            onClick={() => cancelarAgendamento(a.id)}
+                            disabled={cancelandoId === a.id}
+                            className="px-2.5 py-1.5 bg-red-600 text-white rounded-lg text-[10px] font-bold hover:bg-red-700 transition-colors cursor-pointer"
+                          >
+                            Confirmar
+                          </button>
+                          <button
+                            onClick={() => setConfirmandoCancelamentoId(null)}
+                            className="px-2.5 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold hover:bg-slate-200 transition-colors cursor-pointer"
+                          >
+                            Voltar
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmandoCancelamentoId(a.id)}
+                          className="px-3 py-1.5 bg-white text-slate-400 border border-slate-200 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-red-50 hover:text-red-600 hover:border-red-100 transition-colors cursor-pointer"
+                        >
+                          <Ban className="w-3 h-3" /> Cancelar
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         ) : abaInterna === "google" ? (
           <div className="space-y-3">

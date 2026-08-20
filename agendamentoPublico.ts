@@ -89,7 +89,12 @@
 import { lerCredenciaisBanco } from "./bancoCofre.js";
 import { emitirCartaoAsaas } from "./bancoAsaas.js";
 import { classificar, diasAte } from "./cobrancas.js";
-import { consultarOcupacaoGoogle, criarEventoAgendamento } from "./googleCalendar.js";
+import {
+  consultarOcupacaoGoogle,
+  criarEventoAgendamento,
+  atualizarEventoAgendamento,
+  excluirEventoAgendamento,
+} from "./googleCalendar.js";
 
 const agora = () => new Date().toISOString();
 
@@ -159,7 +164,8 @@ async function carregarAgendamentosOcupados(
   db: any,
   uid: string,
   inicioDia: Date,
-  fimDia: Date
+  fimDia: Date,
+  excluirId?: string
 ): Promise<Array<{ inicio: Date; fim: Date }>> {
   const snap = await db
     .collection("agendamentos")
@@ -169,6 +175,7 @@ async function carregarAgendamentosOcupados(
 
   const ocupados: Array<{ inicio: Date; fim: Date }> = [];
   for (const doc of snap.docs) {
+    if (excluirId && doc.id === excluirId) continue; // reagendamento: não conta contra si mesmo
     const a = doc.data();
     const inicio = new Date(a.dataHoraInicio);
     const fim = new Date(a.dataHoraFimPrevisto);
@@ -212,12 +219,17 @@ function gerarSlots(params: {
   return slots;
 }
 
-/** Recalcula a grade de um dia inteiro — usada tanto por /horarios quanto para revalidar em /agendar. */
+/**
+ * Recalcula a grade de um dia inteiro — usada por /horarios, para revalidar
+ * em /agendar, e para revalidar em /reagendar (com `excluirId`, para o
+ * próprio agendamento sendo movido não contar como conflito consigo mesmo).
+ */
 async function calcularHorariosDoDia(
   db: any,
   uid: string,
   dataISO: string,
-  duracaoMin: number
+  duracaoMin: number,
+  excluirId?: string
 ): Promise<string[]> {
   const janelas = await carregarJanelasDoDia(db, uid, dataISO);
   if (janelas.length === 0) return [];
@@ -226,7 +238,7 @@ async function calcularHorariosDoDia(
   const fimDia = new Date(`${dataISO}T23:59:59-03:00`);
 
   const [ocupadosAgenda, ocupadosGoogle] = await Promise.all([
-    carregarAgendamentosOcupados(db, uid, inicioDia, fimDia),
+    carregarAgendamentosOcupados(db, uid, inicioDia, fimDia, excluirId),
     consultarOcupacaoGoogle(db, uid, inicioDia.toISOString(), fimDia.toISOString()),
   ]);
 
@@ -244,6 +256,41 @@ async function calcularHorariosDoDia(
 function dataISOEmBrasilia(instante: Date): string {
   // en-CA sai como AAAA-MM-DD — o único formato de locale que já vem na ordem certa.
   return instante.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+}
+
+// ============================================================================
+// FASE 4 — REGRA DE REAGENDAMENTO/CANCELAMENTO (definida pelo usuário)
+// ============================================================================
+//
+// Reagendar: só até 1 hora antes do horário marcado, E só enquanto o
+// profissional não tiver marcado "a caminho". Falhando qualquer uma das duas
+// condições, o cliente não reagenda — precisa marcar um agendamento novo (e
+// pagar de novo, sem estorno do anterior).
+//
+// Cancelar: SEM essa trava. Cancelar não pede um novo favor da agenda do
+// profissional — ele já foi pago (quando exigia pagamento) e "sem estorno"
+// já é a regra combinada, então cancelar tarde não custa nada a mais a
+// ninguém além do cliente perder o valor pago. Por isso fica disponível em
+// qualquer estado que ainda não seja `concluido`/`cancelado`.
+// ============================================================================
+
+const JANELA_REAGENDAMENTO_MS = 60 * 60000; // 1 hora
+
+function checarReagendamento(a: any, agoraMs: number): { permitido: boolean; motivo?: string } {
+  if (a.status === "a_caminho") {
+    return { permitido: false, motivo: "O profissional já está a caminho — não é mais possível reagendar." };
+  }
+  if (a.status !== "confirmado") {
+    return { permitido: false, motivo: "Este agendamento não pode mais ser reagendado." };
+  }
+  const inicioMs = new Date(a.dataHoraInicio).getTime();
+  if (inicioMs - agoraMs < JANELA_REAGENDAMENTO_MS) {
+    return {
+      permitido: false,
+      motivo: "Faltam menos de 1 hora para o horário marcado — não é mais possível reagendar por aqui.",
+    };
+  }
+  return { permitido: true };
 }
 
 // ============================================================================
@@ -524,7 +571,125 @@ export function registrarRotasAgendamentoPublico(app: any, db: any) {
     }
   });
 
+  // --------------------------------------------------------------------------
+  // FASE 4 — PÁGINA DE ACOMPANHAMENTO (link único, sem login)
+  // --------------------------------------------------------------------------
+
+  // DETALHE — o que a página de acompanhamento mostra, incluindo se dá pra
+  // reagendar/cancelar agora (a regra mora aqui, não no front, para o cliente
+  // não conseguir burlar escondendo/adiantando o relógio do navegador).
+  app.get("/api/agendamento/publico/agendamento/:id", async (req: any, res: any) => {
+    try {
+      const id = String(req.params.id || "");
+      const snap = await db.collection("agendamentos").doc(id).get();
+      if (!snap.exists) return res.status(404).json({ success: false, mensagem: "Agendamento não encontrado." });
+
+      const a = snap.data();
+      const reagendamento = checarReagendamento(a, Date.now());
+      const podeCancelar = !["concluido", "cancelado"].includes(a.status);
+
+      res.json({
+        success: true,
+        status: a.status,
+        userId: a.userId,
+        tipoId: a.tipoId,
+        tipoNome: a.tipoNome,
+        duracaoMin: a.duracaoMin,
+        dataHoraInicio: a.dataHoraInicio,
+        enderecoTexto: a.enderecoTexto || "",
+        clienteNome: a.cliente?.nome || "",
+        valor: a.valor || 0,
+        exigePagamento: !!a.exigePagamento,
+        podeReagendar: reagendamento.permitido,
+        motivoBloqueioReagendamento: reagendamento.motivo || null,
+        podeCancelar,
+        canceladoEm: a.canceladoEm || null,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, mensagem: err?.message || "Algo deu errado." });
+    }
+  });
+
+  // REAGENDAR — cliente escolhe um novo horário livre do mesmo profissional.
+  app.post("/api/agendamento/publico/agendamento/:id/reagendar", async (req: any, res: any) => {
+    try {
+      const id = String(req.params.id || "");
+      const ref = db.collection("agendamentos").doc(id);
+      const snap = await ref.get();
+      if (!snap.exists) return res.status(404).json({ success: false, mensagem: "Agendamento não encontrado." });
+
+      const a = snap.data();
+      const check = checarReagendamento(a, Date.now());
+      if (!check.permitido) return res.status(409).json({ success: false, mensagem: check.motivo });
+
+      const novoInicio = new Date(String(req.body?.novoDataHoraInicio || ""));
+      if (isNaN(novoInicio.getTime())) return res.status(400).json({ success: false, mensagem: "Horário inválido." });
+      if (novoInicio.getTime() < Date.now() + 60000) {
+        return res.status(400).json({ success: false, mensagem: "Escolha um horário no futuro." });
+      }
+      const novoFim = new Date(novoInicio.getTime() + Number(a.duracaoMin) * 60000);
+
+      // Revalida contra a grade de verdade, ignorando este mesmo agendamento
+      // (que ainda está "confirmado" no horário ANTIGO, e não pode contar
+      // como se estivesse ocupando o horário novo escolhido).
+      const dataISO = dataISOEmBrasilia(novoInicio);
+      const horariosValidos = await calcularHorariosDoDia(db, a.userId, dataISO, Number(a.duracaoMin), id);
+      if (!horariosValidos.includes(novoInicio.toISOString())) {
+        return res.status(409).json({ success: false, mensagem: "Este horário não está disponível. Escolha outro." });
+      }
+
+      if (a.googleEventId) {
+        await atualizarEventoAgendamento(db, a.userId, a.googleEventId, {
+          inicioISO: novoInicio.toISOString(),
+          fimISO: novoFim.toISOString(),
+        });
+      }
+
+      await ref.set(
+        {
+          dataHoraInicio: novoInicio.toISOString(),
+          dataHoraFimPrevisto: novoFim.toISOString(),
+          reagendadoEm: agora(),
+          atualizadoEm: agora(),
+        },
+        { merge: true }
+      );
+
+      res.json({ success: true, dataHoraInicio: novoInicio.toISOString() });
+    } catch (err: any) {
+      res.status(500).json({ success: false, mensagem: err?.message || "Não foi possível reagendar." });
+    }
+  });
+
+  // CANCELAR — disponível em qualquer estado que ainda não seja
+  // concluido/cancelado (ver nota sobre a regra, acima). Sem estorno.
+  app.post("/api/agendamento/publico/agendamento/:id/cancelar", async (req: any, res: any) => {
+    try {
+      const id = String(req.params.id || "");
+      const ref = db.collection("agendamentos").doc(id);
+      const snap = await ref.get();
+      if (!snap.exists) return res.status(404).json({ success: false, mensagem: "Agendamento não encontrado." });
+
+      const a = snap.data();
+      if (["concluido", "cancelado"].includes(a.status)) {
+        return res.status(409).json({ success: false, mensagem: "Este agendamento já não pode mais ser cancelado." });
+      }
+
+      if (a.googleEventId) await excluirEventoAgendamento(db, a.userId, a.googleEventId);
+
+      await ref.set(
+        { status: "cancelado", canceladoEm: agora(), canceladoPor: "cliente", atualizadoEm: agora() },
+        { merge: true }
+      );
+
+      res.json({ success: true, status: "cancelado" });
+    } catch (err: any) {
+      res.status(500).json({ success: false, mensagem: err?.message || "Não foi possível cancelar." });
+    }
+  });
+
   console.log(
-    "[Agendamento público] Rotas registradas: /api/agendamento/publico/:uid/perfil, /horarios, /agendar, /agendamento/:id/status"
+    "[Agendamento público] Rotas registradas: /api/agendamento/publico/:uid/perfil, /horarios, /agendar, " +
+      "/agendamento/:id (status/detalhe), /agendamento/:id/reagendar, /agendamento/:id/cancelar"
   );
 }

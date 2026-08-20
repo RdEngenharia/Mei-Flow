@@ -43,6 +43,7 @@
  */
 
 import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
+import { excluirEventoAgendamento } from "./googleCalendar.js";
 
 async function exigirUsuario(req: any): Promise<string> {
   return verificarLogin(req);
@@ -169,6 +170,35 @@ function validarDisponibilidade(body: any): { erro?: string; dias?: Record<DiaSe
   }
 
   return { dias };
+}
+
+// ============================================================================
+// AGENDAMENTOS DO PROFISSIONAL (Fase 4)
+// ============================================================================
+//
+// A Fase 3 criou a coleção `agendamentos`, alimentada só pela página pública
+// (agendamentoPublico.ts, sem login). Esta seção é a primeira vez que o
+// PRÓPRIO profissional lê e altera esses registros — precisa ver o que foi
+// marcado ("profissional vê o novo agendamento", seção 5 do desenho) e marcar
+// "a caminho" (toggle manual, seção 5.7). Concluir/dar baixa é da Fase 6.
+// ============================================================================
+
+function montarAgendamentoResumo(d: any) {
+  return {
+    id: d.id,
+    tipoNome: d.tipoNome,
+    duracaoMin: d.duracaoMin,
+    status: d.status,
+    dataHoraInicio: d.dataHoraInicio,
+    dataHoraFimPrevisto: d.dataHoraFimPrevisto,
+    enderecoTexto: d.enderecoTexto || "",
+    clienteNome: d.cliente?.nome || "",
+    clienteTelefone: d.cliente?.telefone || "",
+    valor: d.valor || 0,
+    exigePagamento: !!d.exigePagamento,
+    googleEventId: d.googleEventId || null,
+    criadoEm: d.criadoEm || null,
+  };
 }
 
 // ============================================================================
@@ -302,7 +332,77 @@ export function registrarRotasAgendamento(app: any, db: any) {
     }
   });
 
+  // --------------------------------------------------------------------------
+  // MEUS AGENDAMENTOS (Fase 4) — o que a página pública já criou
+  // --------------------------------------------------------------------------
+
+  app.get("/api/agendamento/lista", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const snap = await db.collection("agendamentos").where("userId", "==", uid).get();
+      const itens = snap.docs
+        .map((d: any) => montarAgendamentoResumo(d.data()))
+        .sort((a: any, b: any) => String(a.dataHoraInicio).localeCompare(String(b.dataHoraInicio)));
+      res.json({ success: true, agendamentos: itens });
+    } catch (err: any) {
+      const s = erroParaStatus(err);
+      res.status(s).json({ success: false, mensagem: mensagemDeErro(s, err) });
+    }
+  });
+
+  // MARCAR "A CAMINHO" — toggle manual, sem gatilho automático por horário
+  // (decisão explícita do usuário: "manual por enquanto").
+  app.post("/api/agendamento/:id/a-caminho", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const ref = db.collection("agendamentos").doc(String(req.params.id));
+      const snap = await ref.get();
+      if (!snap.exists || snap.data().userId !== uid) {
+        return res.status(404).json({ success: false, mensagem: "Agendamento não encontrado." });
+      }
+      if (snap.data().status !== "confirmado") {
+        return res.status(409).json({
+          success: false,
+          mensagem: "Só é possível marcar 'a caminho' em um agendamento confirmado.",
+        });
+      }
+      await ref.set({ status: "a_caminho", aCaminhoEm: agora(), atualizadoEm: agora() }, { merge: true });
+      res.json({ success: true, status: "a_caminho" });
+    } catch (err: any) {
+      const s = erroParaStatus(err);
+      res.status(s).json({ success: false, mensagem: mensagemDeErro(s, err) });
+    }
+  });
+
+  // CANCELAR pelo próprio profissional (ex.: imprevisto, não vai conseguir
+  // atender). Sem estorno automático — se for o caso, o profissional resolve
+  // direto com o cliente e/ou no painel da Asaas.
+  app.post("/api/agendamento/:id/cancelar", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const ref = db.collection("agendamentos").doc(String(req.params.id));
+      const snap = await ref.get();
+      if (!snap.exists || snap.data().userId !== uid) {
+        return res.status(404).json({ success: false, mensagem: "Agendamento não encontrado." });
+      }
+      const a = snap.data();
+      if (["concluido", "cancelado"].includes(a.status)) {
+        return res.status(409).json({ success: false, mensagem: "Este agendamento já não pode mais ser cancelado." });
+      }
+      if (a.googleEventId) await excluirEventoAgendamento(db, uid, a.googleEventId);
+      await ref.set(
+        { status: "cancelado", canceladoEm: agora(), canceladoPor: "profissional", atualizadoEm: agora() },
+        { merge: true }
+      );
+      res.json({ success: true, status: "cancelado" });
+    } catch (err: any) {
+      const s = erroParaStatus(err);
+      res.status(s).json({ success: false, mensagem: mensagemDeErro(s, err) });
+    }
+  });
+
   console.log(
-    "[Agendamento] Rotas registradas (Fase 1): /api/agendamento/tipos, /api/agendamento/disponibilidade"
+    "[Agendamento] Rotas registradas: /api/agendamento/tipos, /api/agendamento/disponibilidade, " +
+      "/api/agendamento/lista, /api/agendamento/:id/a-caminho, /api/agendamento/:id/cancelar"
   );
 }
