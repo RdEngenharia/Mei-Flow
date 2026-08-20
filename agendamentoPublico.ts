@@ -84,6 +84,16 @@
  *    esse caminho, porque não existe arquivo estático com esse nome.
  * 5. Adicione a regra de `agendamentos` no firestore.rules — deny-all, mesmo
  *    padrão de `cobrancas` e `tipos_agendamento`.
+ *
+ * ----------------------------------------------------------------------------
+ * FASE 6 — FUNÇÕES REAPROVEITADAS POR agendamento.ts
+ *
+ * `carregarTipo`, `calcularHorariosDoDia` e `dataISOEmBrasilia` ganharam
+ * `export` para a Fase 6 (integração com Orçamento e criação manual de
+ * agendamento pelo profissional, em agendamento.ts) reaproveitar a MESMA
+ * grade de horários — em vez de duplicar a lógica de disponibilidade num
+ * segundo lugar, que um dia divergiria. Nada muda no comportamento das rotas
+ * públicas deste arquivo.
  */
 
 import { lerCredenciaisBanco } from "./bancoCofre.js";
@@ -131,7 +141,7 @@ async function carregarTiposAtivos(db: any, uid: string) {
     .sort((a: any, b: any) => String(a.nome).localeCompare(String(b.nome), "pt-BR"));
 }
 
-async function carregarTipo(db: any, uid: string, tipoId: string) {
+export async function carregarTipo(db: any, uid: string, tipoId: string) {
   if (!tipoId) return null;
   const snap = await db.collection("tipos_agendamento").doc(String(tipoId)).get();
   if (!snap.exists) return null;
@@ -224,7 +234,7 @@ function gerarSlots(params: {
  * em /agendar, e para revalidar em /reagendar (com `excluirId`, para o
  * próprio agendamento sendo movido não contar como conflito consigo mesmo).
  */
-async function calcularHorariosDoDia(
+export async function calcularHorariosDoDia(
   db: any,
   uid: string,
   dataISO: string,
@@ -253,7 +263,7 @@ async function calcularHorariosDoDia(
 }
 
 /** "2026-08-25" no fuso de Brasília, a partir de um instante qualquer. */
-function dataISOEmBrasilia(instante: Date): string {
+export function dataISOEmBrasilia(instante: Date): string {
   // en-CA sai como AAAA-MM-DD — o único formato de locale que já vem na ordem certa.
   return instante.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
 }

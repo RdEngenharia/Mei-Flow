@@ -260,6 +260,13 @@ export interface Orcamento {
   atualizadoEm?: string;
   /** Preenchido quando o orçamento aceito virou lançamento no Livro Caixa. */
   vendaId?: string;
+  /**
+   * FASE 6 — preenchido quando este orçamento nasceu do botão "Gerar
+   * orçamento" de um agendamento (visita técnica que virou orçamento). Só
+   * rastreio: nenhuma lógica de funil depende deste campo.
+   * Ver claude/AGENDAMENTO_GOOGLE_CALENDAR_ESTRUTURA.md, seção 11.
+   */
+  agendamentoId?: string;
 
   /**
    * RÉGUA DE ACOMPANHAMENTO — os contatos já feitos com o cliente.

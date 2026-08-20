@@ -836,6 +836,7 @@ export function normalizarOrcamento(o: any): Orcamento {
     createdAt: String(o?.createdAt || new Date().toISOString()),
     atualizadoEm: o?.atualizadoEm || undefined,
     vendaId: o?.vendaId || undefined,
+    agendamentoId: o?.agendamentoId || undefined,
 
     /**
      * ⚠️ CAMPO NOVO PRECISA SER COPIADO AQUI TAMBÉM.
@@ -912,6 +913,7 @@ export async function saveOrcamentoToFirebase(userId: string, orc: Orcamento): P
       validade: orc.validade || '',
       situacao: orc.situacao || 'enviado',
       vendaId: orc.vendaId || '',
+      agendamentoId: orc.agendamentoId || '',
 
       /**
        * ⚠️ ESTES DOIS CAMPOS FALTAVAM — E O SINTOMA ERA CRUEL.

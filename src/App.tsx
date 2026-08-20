@@ -124,6 +124,8 @@ import {
   deleteVendaFromFirebase,
   saveUserProfileToFirebase,
   fetchUserProfileFromFirebase,
+  fetchOrcamentosFromFirebase,
+  saveOrcamentoToFirebase,
   storage
 } from "./firebase";
 import { ref as storageRef, uploadString, getDownloadURL } from "firebase/storage";
@@ -160,8 +162,15 @@ export default function App() {
   // Controle de Navegação por Abas/Módulos
   const [currentView, setCurrentView] = useState<
     | "home" | "clientes" | "financeiro" | "orcamentos" | "catalogo"
-    | "arquivos" | "banco" | "usuarios" | "estoque"
+    | "arquivos" | "banco" | "usuarios" | "estoque" | "agendamentos"
   >("home");
+
+  /**
+   * FASE 6 — id de um orçamento recém-criado a partir de um agendamento
+   * ("Gerar orçamento"), para a tela de Orçamentos abrir ele direto em edição
+   * assim que a pessoa chegar lá, em vez de deixá-la procurar na lista.
+   */
+  const [orcamentoParaAbrirEdicao, setOrcamentoParaAbrirEdicao] = useState<string | null>(null);
 
   /**
    * ==========================================================================
@@ -2315,6 +2324,111 @@ ${meiName}`;
     }
   };
 
+  /**
+   * FASE 6 — "Gerar orçamento" num agendamento (ver
+   * claude/AGENDAMENTO_GOOGLE_CALENDAR_ESTRUTURA.md). Reaproveita o Cliente se
+   * já existir um com o mesmo documento/telefone, cria um orçamento em branco
+   * vinculado a ele, marca o agendamento como concluído já com o id do
+   * orçamento gerado, e manda a pessoa direto para dentro do orçamento
+   * recém-criado (ver `abrirEdicaoId` em OrcamentoGenerator). Devolve
+   * true/false só para o painel de Agendamento saber se recarrega a lista —
+   * qualquer erro já vira toast aqui dentro.
+   */
+  const gerarOrcamentoDeAgendamento = async (a: any): Promise<boolean> => {
+    if (!user) {
+      triggerToast("⚠ Faça login para gerar um orçamento.");
+      return false;
+    }
+
+    try {
+      // -------- 1. cliente: reaproveita se já existir, senão cadastra --------
+      // CPF/CNPJ é opcional (nem todo cliente informa) — quando falta, o
+      // pareamento cai para nome + telefone.
+      const documento = String(a.clienteDocumento || "").replace(/\D/g, "");
+      const telefoneDigitos = String(a.clienteTelefone || "").replace(/\D/g, "");
+      let cliente: Cliente | undefined = documento
+        ? clientes.find((c) => (c.documento || "").replace(/\D/g, "") === documento)
+        : undefined;
+      if (!cliente && telefoneDigitos) {
+        cliente = clientes.find(
+          (c) => (c.telefone || "").replace(/\D/g, "") === telefoneDigitos && c.nome === a.clienteNome
+        );
+      }
+
+      if (!cliente) {
+        const temEndereco = a.endereco && (a.endereco.cep || a.endereco.logradouro);
+        const novoCliente: Cliente = {
+          id: `cli_${Date.now().toString().slice(-4)}`,
+          nome: a.clienteNome || "Cliente do agendamento",
+          documento: a.clienteDocumento || undefined,
+          telefone: a.clienteTelefone || undefined,
+          endereco: temEndereco
+            ? {
+                cep: String(a.endereco.cep || "").replace(/\D/g, ""),
+                logradouro: a.endereco.logradouro || "",
+                numero: a.endereco.numero || "",
+                bairro: a.endereco.bairro || "",
+                cidade: a.endereco.cidade || "",
+                uf: String(a.endereco.uf || "").toUpperCase(),
+                complemento: a.endereco.complemento || "",
+              }
+            : undefined,
+          createdAt: new Date().toISOString(),
+        };
+        await saveClienteToFirebase(user.uid, novoCliente);
+        cliente = novoCliente;
+        setClientes((prev) => [...prev, novoCliente]);
+      }
+
+      // -------- 2. orçamento em branco, vinculado ao agendamento --------
+      const existentes = await fetchOrcamentosFromFirebase(user.uid);
+      const numero = Math.max(0, ...existentes.map((o) => Number(o.numero) || 0)) + 1;
+      const validade = (() => {
+        const d = new Date();
+        d.setDate(d.getDate() + 15);
+        return d.toISOString().split("T")[0];
+      })();
+
+      const novoOrcamento: Orcamento = {
+        id: `orc_${Date.now()}`,
+        numero,
+        clienteId: cliente.id,
+        clienteNome: cliente.nome,
+        clienteDocumento: cliente.documento || undefined,
+        clienteEmail: cliente.email || undefined,
+        clienteTelefone: cliente.telefone || undefined,
+        itens: [],
+        desconto: 0,
+        total: 0,
+        observacoes: `Gerado a partir do agendamento "${a.tipoNome || "visita"}".`,
+        validade,
+        situacao: "enviado",
+        createdAt: new Date().toISOString(),
+        agendamentoId: a.id,
+      };
+      await saveOrcamentoToFirebase(user.uid, novoOrcamento);
+
+      // -------- 3. baixa do agendamento, já com o vínculo --------
+      const token = await auth.currentUser?.getIdToken();
+      const r = await fetch(getApiUrl(`/api/agendamento/${a.id}/concluir`), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ orcamentoGeradoId: novoOrcamento.id }),
+      });
+      const d = await r.json();
+      if (!r.ok || !d?.success) throw new Error(d?.mensagem || "Não foi possível concluir o agendamento.");
+
+      setOrcamentoParaAbrirEdicao(novoOrcamento.id);
+      irPara("orcamentos");
+      triggerToast(`✓ Orçamento nº ${numero} criado a partir do agendamento — continue o funil por lá.`);
+      return true;
+    } catch (err: any) {
+      console.error("[MEI Flow] Falha ao gerar orçamento a partir do agendamento:", err);
+      triggerToast(err?.message || "⚠ Não consegui gerar o orçamento. Tente de novo.");
+      return false;
+    }
+  };
+
   const handleAddDespesa = (e: React.FormEvent) => {
     e.preventDefault();
     if (!despesaValor || !despesaDescricao) return;
@@ -3531,6 +3645,8 @@ ${meiName}`;
             onConverterEmVenda={converterOrcamentoEmVenda}
             mensagensContato={mensagensContato}
             triggerToast={triggerToast}
+            abrirEdicaoId={orcamentoParaAbrirEdicao}
+            onAbrirEdicaoConsumida={() => setOrcamentoParaAbrirEdicao(null)}
           />
         )}
 
@@ -3587,7 +3703,11 @@ ${meiName}`;
         )}
 
         {currentView === "agendamentos" && (
-          <AgendamentoConfigPanel triggerToast={triggerToast} />
+          <AgendamentoConfigPanel
+            triggerToast={triggerToast}
+            clientes={clientes}
+            onGerarOrcamento={gerarOrcamentoDeAgendamento}
+          />
         )}
 
         {/*

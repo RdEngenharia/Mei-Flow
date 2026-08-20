@@ -4,8 +4,9 @@ import {
   Sparkles, Plus, Trash2, Loader2, Search, Package, Wrench, FileText, Calendar,
   User, CheckCircle2, Printer, X, Phone, Bookmark, ArrowRight, ArrowLeft,
   TrendingUp, Clock, XCircle, ShoppingCart, Cloud, CloudOff, Download,
-  MessageCircle, Copy, CheckCheck, BellRing, Pencil, Ban,
+  MessageCircle, Copy, CheckCheck, BellRing, Pencil, Ban, CalendarClock,
 } from "lucide-react";
+import AgendarModal from "./AgendarModal";
 import { db, saveOrcamentoToFirebase, fetchOrcamentosFromFirebase,
          deleteOrcamentoFromFirebase, normalizarOrcamento } from "../firebase";
 import { collection, getDocs } from "firebase/firestore";
@@ -72,6 +73,15 @@ interface OrcamentoGeneratorProps {
   onConverterEmVenda?: (orc: Orcamento) => Promise<string | null>;
   /** Textos dos 3 contatos, escritos pelo usuário. Vazio = padrão. */
   mensagensContato?: MensagensContato;
+  /**
+   * FASE 6 — id de um orçamento recém-criado (pelo botão "Gerar orçamento" de
+   * um agendamento) para abrir direto em modo edição assim que o histórico
+   * carregar, em vez de deixar a pessoa procurar na lista. `onAbrirEdicaoConsumida`
+   * avisa o chamador (App.tsx) que já abriu, para ele limpar o id e não reabrir
+   * de novo à toa (ex.: se a pessoa sair da edição e voltar para esta tela).
+   */
+  abrirEdicaoId?: string | null;
+  onAbrirEdicaoConsumida?: () => void;
 }
 
 const brl = (n: number) =>
@@ -152,6 +162,8 @@ export default function OrcamentoGenerator({
   triggerToast,
   onConverterEmVenda,
   mensagensContato,
+  abrirEdicaoId,
+  onAbrirEdicaoConsumida,
 }: OrcamentoGeneratorProps) {
   const [activeTab, setActiveTab] = useState<"criar" | "funil">("criar");
   const [historico, setHistorico] = useState<Orcamento[]>([]);
@@ -206,6 +218,9 @@ export default function OrcamentoGenerator({
   const [loadingCatalog, setLoadingCatalog] = useState(false);
   const [catalogSearch, setCatalogSearch] = useState("");
   const [itemDestino, setItemDestino] = useState<string | null>(null);
+
+  // Fase 6 — orçamento aceito virando o agendamento da instalação/serviço.
+  const [agendandoOrcamento, setAgendandoOrcamento] = useState<Orcamento | null>(null);
 
   // Visualização
   const [activePreviewQuote, setActivePreviewQuote] = useState<Orcamento | null>(null);
@@ -347,6 +362,22 @@ export default function OrcamentoGenerator({
       return d.toISOString().split("T")[0];
     });
   };
+
+  /**
+   * FASE 6 — abre direto em edição um orçamento que acabou de ser criado a
+   * partir de um agendamento. Espera o histórico terminar de carregar (senão
+   * `historico.find` não encontra nada) e só dispara uma vez por id — sem o
+   * `onAbrirEdicaoConsumida`, esta tela reabriria o mesmo orçamento toda vez
+   * que a pessoa saísse da edição e o componente re-renderizasse.
+   */
+  useEffect(() => {
+    if (!abrirEdicaoId || carregando) return;
+    const orc = historico.find((o) => o.id === abrirEdicaoId);
+    if (orc) {
+      iniciarEdicao(orc);
+      onAbrirEdicaoConsumida?.();
+    }
+  }, [abrirEdicaoId, historico, carregando]);
 
   const alterarItem = (id: string, campo: keyof ItemOrcamento, valor: any) => {
     setItens((atual) => atual.map((it) => (it.id === id ? { ...it, [campo]: valor } : it)));
@@ -1375,6 +1406,23 @@ export default function OrcamentoGenerator({
                                 </button>
                               )}
 
+                              {/*
+                                FASE 6 — orçamento aceito vira o início de uma
+                                instalação/serviço agendado. Os dados do
+                                cliente migram para o AgendarModal (endereço
+                                vem do cadastro de Cliente, se houver um
+                                vinculado); nada aqui exige pagamento de novo.
+                              */}
+                              {et.chave === "aceito" && (
+                                <button
+                                  onClick={() => setAgendandoOrcamento(orc)}
+                                  className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-[10px] font-bold cursor-pointer flex items-center gap-1"
+                                  title="Marcar um horário com este cliente, com os dados já preenchidos"
+                                >
+                                  <CalendarClock className="w-3 h-3" /> Agendar
+                                </button>
+                              )}
+
                               <button
                                 onClick={() => iniciarEdicao(orc)}
                                 className="px-2.5 py-1 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold cursor-pointer flex items-center gap-1"
@@ -1406,6 +1454,23 @@ export default function OrcamentoGenerator({
             </div>
           )}
         </div>
+      )}
+
+      {/* ------------------------------------------------------- Fase 6 --- */}
+      {agendandoOrcamento && (
+        <AgendarModal
+          titulo={`Agendar — ${agendandoOrcamento.clienteNome}`}
+          origemOrcamentoId={agendandoOrcamento.id}
+          clientePreenchido={{
+            nome: agendandoOrcamento.clienteNome,
+            documento: agendandoOrcamento.clienteDocumento,
+            telefone: agendandoOrcamento.clienteTelefone,
+            endereco: clientes.find((c) => c.id === agendandoOrcamento.clienteId)?.endereco,
+          }}
+          triggerToast={triggerToast}
+          onClose={() => setAgendandoOrcamento(null)}
+          onAgendado={() => setAgendandoOrcamento(null)}
+        />
       )}
 
       {/* ------------------------------------------------ catálogo (premium) */}

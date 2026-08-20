@@ -43,7 +43,8 @@
  */
 
 import { exigirUsuario as verificarLogin } from "./auth-firebase.js";
-import { excluirEventoAgendamento } from "./googleCalendar.js";
+import { excluirEventoAgendamento, criarEventoAgendamento } from "./googleCalendar.js";
+import { carregarTipo, calcularHorariosDoDia, dataISOEmBrasilia } from "./agendamentoPublico.js";
 
 async function exigirUsuario(req: any): Promise<string> {
   return verificarLogin(req);
@@ -186,6 +187,7 @@ function validarDisponibilidade(body: any): { erro?: string; dias?: Record<DiaSe
 function montarAgendamentoResumo(d: any) {
   return {
     id: d.id,
+    tipoId: d.tipoId || null,
     tipoNome: d.tipoNome,
     duracaoMin: d.duracaoMin,
     status: d.status,
@@ -194,10 +196,34 @@ function montarAgendamentoResumo(d: any) {
     enderecoTexto: d.enderecoTexto || "",
     clienteNome: d.cliente?.nome || "",
     clienteTelefone: d.cliente?.telefone || "",
+    // CPF/CNPJ é opcional (nem todo cliente informa) — só existe quando o
+    // pagamento pelo link público exigiu, ou quando o profissional digitou
+    // na criação manual. `null` é normal e esperado, não um dado faltando.
+    clienteDocumento: d.cliente?.documento || null,
+    endereco: {
+      cep: d.cliente?.cep || "",
+      logradouro: d.cliente?.logradouro || "",
+      numero: d.cliente?.numero || "",
+      complemento: d.cliente?.complemento || "",
+      bairro: d.cliente?.bairro || "",
+      cidade: d.cliente?.cidade || "",
+      uf: d.cliente?.uf || "",
+      referencia: d.cliente?.referencia || "",
+      lat: typeof d.cliente?.lat === "number" ? d.cliente.lat : null,
+      lng: typeof d.cliente?.lng === "number" ? d.cliente.lng : null,
+    },
     valor: d.valor || 0,
     exigePagamento: !!d.exigePagamento,
     googleEventId: d.googleEventId || null,
     criadoEm: d.criadoEm || null,
+    criadoPor: d.criadoPor || "cliente",
+    concluidoEm: d.concluidoEm || null,
+    // Vínculo Fase 6 — ver claude/AGENDAMENTO_GOOGLE_CALENDAR_ESTRUTURA.md:
+    // origemOrcamentoId = este agendamento nasceu de um orçamento aceito;
+    // orcamentoGeradoId = este agendamento já gerou um orçamento (não deixa
+    // gerar dois orçamentos da mesma visita por engano).
+    origemOrcamentoId: d.origemOrcamentoId || null,
+    orcamentoGeradoId: d.orcamentoGeradoId || null,
   };
 }
 
@@ -401,8 +427,218 @@ export function registrarRotasAgendamento(app: any, db: any) {
     }
   });
 
+  // ============================================================================
+  // FASE 6 — CONCLUIR (baixa simples) + INTEGRAÇÃO COM ORÇAMENTO
+  // ============================================================================
+  //
+  // Ver claude/AGENDAMENTO_GOOGLE_CALENDAR_ESTRUTURA.md, seção 11 (Fase 6), no
+  // projeto "Mei Flow". Esta é a baixa MÍNIMA — só muda o status para
+  // `concluido` e grava `concluidoEm`. A parte de horário de conclusão
+  // editável, descrição do serviço e relatório mensal (seção 9 do desenho)
+  // fica para uma etapa seguinte; esta rota já nasce pronta para carregar
+  // esses campos no futuro sem precisar de uma rota nova.
+  //
+  // Quando a baixa acontece pelo botão "Gerar orçamento" (Orçamento nasce dos
+  // dados do agendamento), o front já criou o orçamento do lado dele (a
+  // gravação de `usuarios/{uid}/orcamentos` é sempre feita pelo SDK do
+  // cliente, nunca pelo servidor — mesmo padrão de sempre nesta feature) e
+  // manda o id aqui em `orcamentoGeradoId`, só para registro/rastreio.
+
+  app.post("/api/agendamento/:id/concluir", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const ref = db.collection("agendamentos").doc(String(req.params.id));
+      const snap = await ref.get();
+      if (!snap.exists || snap.data().userId !== uid) {
+        return res.status(404).json({ success: false, mensagem: "Agendamento não encontrado." });
+      }
+      const a = snap.data();
+      if (["concluido", "cancelado"].includes(a.status)) {
+        return res.status(409).json({ success: false, mensagem: "Este agendamento já não está mais em aberto." });
+      }
+
+      const atualizacao: any = { status: "concluido", concluidoEm: agora(), atualizadoEm: agora() };
+
+      const orcamentoGeradoId = String(req.body?.orcamentoGeradoId || "").trim();
+      if (orcamentoGeradoId) {
+        if (a.orcamentoGeradoId) {
+          return res.status(409).json({
+            success: false,
+            mensagem: "Este agendamento já tem um orçamento gerado — evite gerar outro para a mesma visita.",
+          });
+        }
+        atualizacao.orcamentoGeradoId = orcamentoGeradoId;
+      }
+
+      await ref.set(atualizacao, { merge: true });
+      res.json({ success: true, status: "concluido", orcamentoGeradoId: atualizacao.orcamentoGeradoId || null });
+    } catch (err: any) {
+      const s = erroParaStatus(err);
+      res.status(s).json({ success: false, mensagem: mensagemDeErro(s, err) });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // HORÁRIOS DISPONÍVEIS — versão autenticada da mesma grade que a página
+  // pública usa (mesma função `calcularHorariosDoDia`, reaproveitada de
+  // agendamentoPublico.ts). Serve tanto o agendamento criado a partir de um
+  // orçamento aceito quanto a criação manual pelo profissional.
+  //   ?tipoId=...&data=2026-08-25
+  // --------------------------------------------------------------------------
+  app.get("/api/agendamento/horarios", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const tipoId = String(req.query?.tipoId || "");
+      const dataISO = String(req.query?.data || "");
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dataISO)) {
+        return res.status(400).json({ success: false, mensagem: "Informe a data no formato AAAA-MM-DD." });
+      }
+
+      const tipo = await carregarTipo(db, uid, tipoId);
+      if (!tipo) return res.status(404).json({ success: false, mensagem: "Tipo de agendamento não encontrado." });
+
+      const hojeISO = dataISOEmBrasilia(new Date());
+      if (dataISO < hojeISO) return res.json({ success: true, horarios: [] });
+
+      const horarios = await calcularHorariosDoDia(db, uid, dataISO, tipo.duracaoPadraoMin);
+      res.json({ success: true, horarios });
+    } catch (err: any) {
+      const s = erroParaStatus(err);
+      res.status(s).json({ success: false, mensagem: mensagemDeErro(s, err) });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // CRIAR AGENDAMENTO — pelo próprio profissional, sem o cliente passar pelo
+  // link público. Dois casos de uso (ver claude/AGENDAMENTO_GOOGLE_CALENDAR_ESTRUTURA.md,
+  // Fase 6): (1) agendar a instalação/serviço a partir de um orçamento já
+  // aceito — `origemOrcamentoId` amarra os dois; (2) marcar um horário manual
+  // para um cliente que não sabe ou não quer usar o link (decisão do
+  // usuário). Em ambos os casos: SEMPRE confirma direto, sem pagamento — o
+  // profissional já está falando com o cliente, e se houver dinheiro
+  // envolvido isso é combinado pelo orçamento/venda, não por aqui. Por isso
+  // nenhum campo de cliente é obrigatório além do nome: nem todo cliente
+  // passa CPF, telefone ou endereço completo nessa hora, e travar a criação
+  // por isso seria pior do que aceitar o cadastro incompleto.
+  // --------------------------------------------------------------------------
+  app.post("/api/agendamento/criar", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const { tipoId, dataHoraInicio, cliente, origemOrcamentoId } = req.body || {};
+
+      const tipo = await carregarTipo(db, uid, String(tipoId || ""));
+      if (!tipo) return res.status(404).json({ success: false, mensagem: "Tipo de agendamento não encontrado." });
+
+      const inicio = new Date(String(dataHoraInicio || ""));
+      if (isNaN(inicio.getTime())) return res.status(400).json({ success: false, mensagem: "Horário inválido." });
+      if (inicio.getTime() < Date.now() - 60000) {
+        return res.status(400).json({ success: false, mensagem: "Este horário já passou. Escolha outro." });
+      }
+      const fim = new Date(inicio.getTime() + tipo.duracaoPadraoMin * 60000);
+
+      const nome = String(cliente?.nome || "").trim();
+      if (!nome) return res.status(400).json({ success: false, mensagem: "Informe o nome do cliente." });
+      if (nome.length > 120) return res.status(400).json({ success: false, mensagem: "Nome muito longo." });
+
+      // Telefone, documento e endereço são OPCIONAIS aqui — diferente do
+      // link público, onde o telefone é a única forma de contato e por isso
+      // é exigido. Aqui quem está cadastrando já está falando com o cliente.
+      const telefone = String(cliente?.telefone || "").replace(/\D/g, "");
+      if (telefone && (telefone.length < 10 || telefone.length > 11)) {
+        return res.status(400).json({ success: false, mensagem: "Telefone inválido — informe com DDD ou deixe em branco." });
+      }
+      const documento = String(cliente?.documento || "").replace(/\D/g, "");
+      if (documento && documento.length !== 11 && documento.length !== 14) {
+        return res.status(400).json({ success: false, mensagem: "CPF/CNPJ inválido — informe 11 ou 14 dígitos, ou deixe em branco." });
+      }
+      const cepDigitos = String(cliente?.cep || "").replace(/\D/g, "");
+      if (cepDigitos && cepDigitos.length !== 8) {
+        return res.status(400).json({ success: false, mensagem: "CEP inválido — informe 8 dígitos ou deixe em branco." });
+      }
+
+      // -------- revalida a grade: o horário pedido precisa continuar livre --------
+      const dataISO = dataISOEmBrasilia(inicio);
+      const horariosValidos = await calcularHorariosDoDia(db, uid, dataISO, tipo.duracaoPadraoMin);
+      if (!horariosValidos.includes(inicio.toISOString())) {
+        return res.status(409).json({
+          success: false,
+          mensagem: "Este horário acabou de deixar de estar disponível. Escolha outro.",
+        });
+      }
+
+      const endereco = {
+        cep: cepDigitos,
+        numero: String(cliente?.numero || "").trim(),
+        complemento: String(cliente?.complemento || "").trim(),
+        logradouro: String(cliente?.logradouro || "").trim(),
+        bairro: String(cliente?.bairro || "").trim(),
+        cidade: String(cliente?.cidade || "").trim(),
+        uf: String(cliente?.uf || "").trim(),
+        referencia: String(cliente?.referencia || "").trim(),
+        lat: typeof cliente?.lat === "number" ? cliente.lat : null,
+        lng: typeof cliente?.lng === "number" ? cliente.lng : null,
+      };
+      const enderecoTexto = [
+        endereco.logradouro && `${endereco.logradouro}, ${endereco.numero}`,
+        !endereco.logradouro && endereco.numero,
+        endereco.complemento,
+        endereco.bairro,
+        endereco.cidade && endereco.uf ? `${endereco.cidade}/${endereco.uf}` : endereco.cidade || endereco.uf,
+        cepDigitos ? `CEP ${cepDigitos.slice(0, 5)}-${cepDigitos.slice(5)}` : "",
+      ]
+        .filter(Boolean)
+        .join(" — ");
+
+      const origemId = String(origemOrcamentoId || "").trim();
+
+      const ref = db.collection("agendamentos").doc();
+      const registro: any = {
+        id: ref.id,
+        userId: uid,
+        tipoId: tipo.id,
+        tipoNome: tipo.nome,
+        duracaoMin: tipo.duracaoPadraoMin,
+        valor: tipo.valor || 0,
+        // Sempre false aqui: mesmo que o tipo normalmente exija pagamento no
+        // link público, este agendamento nasceu de uma criação manual do
+        // profissional e confirma direto — ver o comentário no topo da rota.
+        exigePagamento: false,
+        dataHoraInicio: inicio.toISOString(),
+        dataHoraFimPrevisto: fim.toISOString(),
+        cliente: { nome, telefone: telefone || "", documento: documento || null, ...endereco },
+        enderecoTexto,
+        criadoPor: "profissional",
+        criadoEm: agora(),
+        atualizadoEm: agora(),
+        status: "confirmado",
+        pagamento: null,
+      };
+      if (origemId) registro.origemOrcamentoId = origemId;
+
+      const googleEventId = await criarEventoAgendamento(db, uid, {
+        titulo: `${tipo.nome} — ${nome}`,
+        descricao:
+          `Agendado pelo profissional no MEI Flow.\nCliente: ${nome}` +
+          (telefone ? `\nTelefone: ${telefone}` : "") +
+          (enderecoTexto ? `\nEndereço: ${enderecoTexto}` : ""),
+        local: enderecoTexto,
+        inicioISO: inicio.toISOString(),
+        fimISO: fim.toISOString(),
+      });
+      registro.googleEventId = googleEventId;
+
+      await ref.set(registro);
+      res.json({ success: true, agendamentoId: ref.id, status: "confirmado" });
+    } catch (err: any) {
+      const s = erroParaStatus(err);
+      res.status(s).json({ success: false, mensagem: mensagemDeErro(s, err) });
+    }
+  });
+
   console.log(
     "[Agendamento] Rotas registradas: /api/agendamento/tipos, /api/agendamento/disponibilidade, " +
-      "/api/agendamento/lista, /api/agendamento/:id/a-caminho, /api/agendamento/:id/cancelar"
+      "/api/agendamento/lista, /api/agendamento/:id/a-caminho, /api/agendamento/:id/cancelar, " +
+      "/api/agendamento/:id/concluir, /api/agendamento/horarios, /api/agendamento/criar"
   );
 }

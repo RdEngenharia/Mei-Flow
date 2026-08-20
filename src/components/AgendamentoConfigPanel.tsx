@@ -2,10 +2,12 @@ import React, { useCallback, useEffect, useState } from "react";
 import {
   CalendarClock, Plus, Pencil, Trash2, Loader2, AlertTriangle, Save,
   X, Wallet, Clock, Info, CheckCircle2, ExternalLink, Unlink, Mail, ShieldCheck,
-  Link2, Copy, Check, Truck, MapPin, Phone, Ban, ClipboardList,
+  Link2, Copy, Check, Truck, MapPin, Phone, Ban, ClipboardList, FileText,
 } from "lucide-react";
 import { auth } from "../firebase";
 import { getApiUrl } from "../utils/nativeFile";
+import { Cliente } from "../types";
+import AgendarModal from "./AgendarModal";
 
 /**
  * ============================================================================
@@ -30,6 +32,15 @@ import { getApiUrl } from "../utils/nativeFile";
 
 interface Props {
   triggerToast?: (msg: string) => void;
+  /** Fase 6 — lista de clientes já cadastrados, para o "Novo agendamento" buscar em vez de digitar do zero. */
+  clientes?: Cliente[];
+  /**
+   * Fase 6 — chamado quando o profissional clica "Gerar orçamento" num
+   * agendamento. Quem cria o Cliente/Orçamento (sempre pelo SDK do cliente,
+   * nunca pelo servidor) e marca a baixa é o App.tsx — este painel só pede e
+   * recarrega a lista quando a Promise resolve `true`.
+   */
+  onGerarOrcamento?: (agendamento: Agendamento) => Promise<boolean>;
 }
 
 type TipoAgendamento = {
@@ -89,6 +100,7 @@ type StatusAgendamento = "aguardando_pagamento" | "confirmado" | "a_caminho" | "
 
 type Agendamento = {
   id: string;
+  tipoId?: string | null;
   tipoNome: string;
   duracaoMin: number;
   status: StatusAgendamento;
@@ -96,8 +108,18 @@ type Agendamento = {
   enderecoTexto: string;
   clienteNome: string;
   clienteTelefone: string;
+  // CPF/CNPJ é opcional — nem todo agendamento tem um (só é pedido quando o
+  // link público exigiu pagamento). `null` é normal.
+  clienteDocumento?: string | null;
+  endereco?: {
+    cep?: string; logradouro?: string; numero?: string; complemento?: string;
+    bairro?: string; cidade?: string; uf?: string;
+  };
   valor: number;
   exigePagamento: boolean;
+  // Fase 6 — vínculo com Orçamento (ver claude/AGENDAMENTO_GOOGLE_CALENDAR_ESTRUTURA.md).
+  origemOrcamentoId?: string | null;
+  orcamentoGeradoId?: string | null;
 };
 
 const RUBRICA_STATUS: Record<StatusAgendamento, { rotulo: string; classe: string }> = {
@@ -124,7 +146,7 @@ function substituirPlaceholders(modelo: string, valores: Record<string, string>)
   return Object.entries(valores).reduce((txt, [chave, valor]) => txt.split(`{${chave}}`).join(valor), modelo);
 }
 
-export default function AgendamentoConfigPanel({ triggerToast }: Props) {
+export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerarOrcamento }: Props) {
   const [abaInterna, setAbaInterna] = useState<
     "agendamentos" | "google" | "tipos" | "disponibilidade" | "mensagens"
   >("agendamentos");
@@ -228,6 +250,9 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
   const [confirmandoCancelamentoId, setConfirmandoCancelamentoId] = useState<string | null>(null);
   const [cancelandoId, setCancelandoId] = useState<string | null>(null);
   const [linkCopiadoId, setLinkCopiadoId] = useState<string | null>(null);
+  // Fase 6 — Gerar orçamento / Novo agendamento manual.
+  const [gerandoOrcamentoId, setGerandoOrcamentoId] = useState<string | null>(null);
+  const [mostrarNovoAgendamento, setMostrarNovoAgendamento] = useState(false);
 
   // ---------------------------------------------------------------- Tipos --
   const [tipos, setTipos] = useState<TipoAgendamento[]>([]);
@@ -395,6 +420,31 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
       setErro(e?.message || "Não foi possível cancelar.");
     } finally {
       setCancelandoId(null);
+    }
+  };
+
+  // Fase 6 — a visita virou orçamento: quem cria o Cliente/Orçamento e marca
+  // a baixa é o App.tsx (onGerarOrcamento), porque é lá que mora o cadastro
+  // de clientes e a gravação de orçamentos. Este painel só pede e, se deu
+  // certo, recarrega para já ver o status "Concluído" e o botão sumir.
+  const gerarOrcamento = async (a: Agendamento) => {
+    if (!onGerarOrcamento) {
+      triggerToast?.("Recurso indisponível no momento.");
+      return;
+    }
+    if (a.orcamentoGeradoId) {
+      triggerToast?.("Este agendamento já gerou um orçamento.");
+      return;
+    }
+    setGerandoOrcamentoId(a.id);
+    setErro(null);
+    try {
+      const ok = await onGerarOrcamento(a);
+      if (ok) await carregar();
+    } catch (e: any) {
+      setErro(e?.message || "Não foi possível gerar o orçamento.");
+    } finally {
+      setGerandoOrcamentoId(null);
     }
   };
 
@@ -646,6 +696,15 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
           </div>
         ) : abaInterna === "agendamentos" ? (
           <div className="space-y-3">
+            <div className="flex justify-end">
+              <button
+                onClick={() => setMostrarNovoAgendamento(true)}
+                className="px-3.5 py-2 bg-indigo-600 text-white rounded-xl text-[11px] font-bold flex items-center gap-1.5 hover:bg-indigo-700 transition-colors cursor-pointer"
+                title="Para clientes que não sabem ou não querem usar o link público"
+              >
+                <Plus className="w-3.5 h-3.5" /> Novo agendamento
+              </button>
+            </div>
             {agendamentos.length === 0 ? (
               <div className="py-10 flex flex-col items-center gap-2.5 text-center">
                 <ClipboardList className="w-8 h-8 text-slate-300" />
@@ -736,6 +795,27 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
                       >
                         <Copy className="w-3 h-3" /> Msg. avaliação
                       </button>
+                    )}
+
+                    {(a.status === "confirmado" || a.status === "a_caminho") && !a.orcamentoGeradoId && (
+                      <button
+                        onClick={() => gerarOrcamento(a)}
+                        disabled={gerandoOrcamentoId === a.id}
+                        title="Marca este agendamento como concluído e já abre um orçamento novo com os dados do cliente"
+                        className="px-3 py-1.5 bg-violet-50 text-violet-700 border border-violet-100 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-violet-100 transition-colors cursor-pointer disabled:opacity-60"
+                      >
+                        {gerandoOrcamentoId === a.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <FileText className="w-3 h-3" />
+                        )}
+                        Gerar orçamento
+                      </button>
+                    )}
+                    {a.orcamentoGeradoId && (
+                      <span className="px-3 py-1.5 bg-violet-50 text-violet-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5">
+                        <FileText className="w-3 h-3" /> Orçamento gerado
+                      </span>
                     )}
 
                     {(a.status === "confirmado" || a.status === "a_caminho") &&
@@ -1148,6 +1228,18 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
           </div>
         )}
       </div>
+
+      {mostrarNovoAgendamento && (
+        <AgendarModal
+          clientes={clientes}
+          triggerToast={triggerToast}
+          onClose={() => setMostrarNovoAgendamento(false)}
+          onAgendado={() => {
+            setMostrarNovoAgendamento(false);
+            carregar();
+          }}
+        />
+      )}
     </div>
   );
 }
