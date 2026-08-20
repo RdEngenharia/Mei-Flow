@@ -3,9 +3,12 @@ import {
   CalendarClock, Plus, Pencil, Trash2, Loader2, AlertTriangle, Save,
   X, Wallet, Clock, Info, CheckCircle2, ExternalLink, Unlink, Mail, ShieldCheck,
   Link2, Copy, Check, Truck, MapPin, Phone, Ban, ClipboardList, FileText,
+  BarChart3, Download, MessageSquareText,
 } from "lucide-react";
 import { auth } from "../firebase";
-import { getApiUrl } from "../utils/nativeFile";
+import { getApiUrl, savePdfCrossPlatform, isNativePlatform } from "../utils/nativeFile";
+import { carregarLogoBase64 } from "../utils/logoImagem";
+import { desenharRelatorioAgendamento, nomeArquivoRelatorioAgendamento } from "../utils/agendamentoRelatorioPdf";
 import { Cliente } from "../types";
 import AgendarModal from "./AgendarModal";
 
@@ -41,6 +44,15 @@ interface Props {
    * recarrega a lista quando a Promise resolve `true`.
    */
   onGerarOrcamento?: (agendamento: Agendamento) => Promise<boolean>;
+  // Fase 6b — mesmos dados que já alimentam o cabeçalho do PDF do orçamento
+  // (OrcamentoGenerator), reaproveitados aqui pro cabeçalho do PDF do
+  // relatório mensal. Nenhum é obrigatório: sem eles o PDF só sai mais simples.
+  planType?: "free" | "premium";
+  companyLogo?: string;
+  meiName?: string;
+  cnpjPrestador?: string;
+  telefonePrestador?: string;
+  emailPrestador?: string;
 }
 
 type TipoAgendamento = {
@@ -120,6 +132,10 @@ type Agendamento = {
   // Fase 6 — vínculo com Orçamento (ver claude/AGENDAMENTO_GOOGLE_CALENDAR_ESTRUTURA.md).
   origemOrcamentoId?: string | null;
   orcamentoGeradoId?: string | null;
+  // Fase 6b — horário real de início (marcado em "a caminho") e descrição do
+  // que foi feito, editável a qualquer momento depois da baixa.
+  aCaminhoEm?: string | null;
+  descricaoServico?: string | null;
 };
 
 const RUBRICA_STATUS: Record<StatusAgendamento, { rotulo: string; classe: string }> = {
@@ -137,6 +153,67 @@ function dataHoraBR(iso: string): string {
   return `${data} às ${hora}`;
 }
 
+/**
+ * FASE 6b — conversão ISO ⇄ <input type="datetime-local">, sempre em
+ * horário de Brasília (mesma convenção fixa -03:00 usada no resto da
+ * feature, nunca `new Date(texto)` cru).
+ */
+function isoParaDatetimeLocal(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const partes = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
+  })
+    .formatToParts(d)
+    .reduce((acc: Record<string, string>, p) => { if (p.type !== "literal") acc[p.type] = p.value; return acc; }, {});
+  return `${partes.year}-${partes.month}-${partes.day}T${partes.hour}:${partes.minute}`;
+}
+
+function datetimeLocalParaIso(valor: string): string | null {
+  if (!valor) return null;
+  const d = new Date(`${valor}:00-03:00`);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function formatarDuracaoAtendimento(min?: number | null): string {
+  const m = Math.round(Number(min) || 0);
+  if (m <= 0) return "—";
+  return formatarDuracao(m);
+}
+
+const MESES_NOME = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
+
+type RelatorioAtendimento = {
+  id: string;
+  clienteNome: string;
+  dataHoraInicio: string;
+  aCaminhoEm: string | null;
+  concluidoEm: string;
+  duracaoMin: number;
+  valor: number;
+  descricaoServico: string;
+  origemOrcamentoId: string | null;
+  orcamentoGeradoId: string | null;
+};
+
+type RelatorioMensal = {
+  mes: number;
+  ano: number;
+  totalAgendados: number;
+  totalConcluidos: number;
+  duracaoMediaMin: number;
+  valorRecebidoDireto: number;
+  valorRecebidoOrcamentos: number;
+  valorRecebido: number;
+  valorPorHora: number;
+  atendimentos: RelatorioAtendimento[];
+};
+
 type Mensagens = { convite: string; confirmacao: string; avaliacao: string; linkAvaliacaoGoogle: string };
 
 const MENSAGENS_VAZIAS: Mensagens = { convite: "", confirmacao: "", avaliacao: "", linkAvaliacaoGoogle: "" };
@@ -146,9 +223,12 @@ function substituirPlaceholders(modelo: string, valores: Record<string, string>)
   return Object.entries(valores).reduce((txt, [chave, valor]) => txt.split(`{${chave}}`).join(valor), modelo);
 }
 
-export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerarOrcamento }: Props) {
+export default function AgendamentoConfigPanel({
+  triggerToast, clientes, onGerarOrcamento,
+  planType, companyLogo, meiName, cnpjPrestador, telefonePrestador, emailPrestador,
+}: Props) {
   const [abaInterna, setAbaInterna] = useState<
-    "agendamentos" | "google" | "tipos" | "disponibilidade" | "mensagens"
+    "agendamentos" | "google" | "tipos" | "disponibilidade" | "mensagens" | "relatorio"
   >("agendamentos");
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -254,6 +334,22 @@ export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerar
   const [gerandoOrcamentoId, setGerandoOrcamentoId] = useState<string | null>(null);
   const [mostrarNovoAgendamento, setMostrarNovoAgendamento] = useState(false);
   const [concluindoId, setConcluindoId] = useState<string | null>(null);
+
+  // Fase 6b — editar baixa (horário de conclusão + descrição do serviço).
+  const [editandoBaixaId, setEditandoBaixaId] = useState<string | null>(null);
+  const [formBaixaConcluidoEm, setFormBaixaConcluidoEm] = useState("");
+  const [formBaixaDescricao, setFormBaixaDescricao] = useState("");
+  const [salvandoBaixa, setSalvandoBaixa] = useState(false);
+
+  // Fase 6b — relatório mensal.
+  const agora6b = new Date();
+  const [relatorioMes, setRelatorioMes] = useState(agora6b.getMonth() + 1);
+  const [relatorioAno, setRelatorioAno] = useState(agora6b.getFullYear());
+  const [relatorioDados, setRelatorioDados] = useState<RelatorioMensal | null>(null);
+  const [carregandoRelatorio, setCarregandoRelatorio] = useState(false);
+  const [erroRelatorio, setErroRelatorio] = useState<string | null>(null);
+  const [gerandoPdfRelatorio, setGerandoPdfRelatorio] = useState(false);
+  const [logoRelatorioPronta, setLogoRelatorioPronta] = useState<string | undefined>(undefined);
 
   // ---------------------------------------------------------------- Tipos --
   const [tipos, setTipos] = useState<TipoAgendamento[]>([]);
@@ -469,6 +565,106 @@ export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerar
       setErro(e?.message || "Não foi possível gerar o orçamento.");
     } finally {
       setGerandoOrcamentoId(null);
+    }
+  };
+
+  // -------------------------------------------------------- Editar baixa (6b) --
+
+  const abrirEdicaoBaixa = (a: Agendamento) => {
+    setEditandoBaixaId(a.id);
+    setFormBaixaConcluidoEm(isoParaDatetimeLocal(a.concluidoEm));
+    setFormBaixaDescricao(a.descricaoServico || "");
+    setErro(null);
+  };
+
+  const cancelarEdicaoBaixa = () => {
+    setEditandoBaixaId(null);
+    setFormBaixaConcluidoEm("");
+    setFormBaixaDescricao("");
+  };
+
+  const salvarBaixa = async (id: string) => {
+    const concluidoEm = datetimeLocalParaIso(formBaixaConcluidoEm);
+    if (formBaixaConcluidoEm && !concluidoEm) {
+      setErro("Horário de conclusão inválido.");
+      return;
+    }
+    setSalvandoBaixa(true);
+    setErro(null);
+    try {
+      const h = await comToken();
+      const r = await fetch(getApiUrl(`/api/agendamento/${id}/baixa`), {
+        method: "PUT",
+        headers: h,
+        body: JSON.stringify({ concluidoEm, descricaoServico: formBaixaDescricao }),
+      });
+      const d = await r.json();
+      if (!r.ok || !d?.success) throw new Error(d?.mensagem || "Não foi possível salvar a baixa.");
+      setAgendamentos((lista) =>
+        lista.map((a) => (a.id === id ? { ...a, ...d.agendamento } : a))
+      );
+      cancelarEdicaoBaixa();
+      triggerToast?.("Baixa atualizada.");
+    } catch (e: any) {
+      setErro(e?.message || "Não foi possível salvar a baixa.");
+    } finally {
+      setSalvandoBaixa(false);
+    }
+  };
+
+  // -------------------------------------------------------- Relatório mensal (6b) --
+
+  const carregarRelatorio = useCallback(async (mes: number, ano: number) => {
+    setCarregandoRelatorio(true);
+    setErroRelatorio(null);
+    try {
+      const h = await comToken();
+      const r = await fetch(getApiUrl(`/api/agendamento/relatorio?mes=${mes}&ano=${ano}`), { headers: h });
+      const d = await r.json();
+      if (!r.ok || !d?.success) throw new Error(d?.mensagem || "Não foi possível carregar o relatório.");
+      setRelatorioDados(d);
+    } catch (e: any) {
+      setErroRelatorio(e?.message || "Não foi possível carregar o relatório.");
+      setRelatorioDados(null);
+    } finally {
+      setCarregandoRelatorio(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (abaInterna === "relatorio") carregarRelatorio(relatorioMes, relatorioAno);
+  }, [abaInterna, relatorioMes, relatorioAno, carregarRelatorio]);
+
+  // Pré-carrega a logo assim que houver uma — mesmo padrão do OrcamentoGenerator,
+  // pra não fazer o profissional esperar a baixa no momento de gerar o PDF.
+  useEffect(() => {
+    let vivo = true;
+    if (planType === "premium" && companyLogo) {
+      carregarLogoBase64(companyLogo).then((b64) => { if (vivo) setLogoRelatorioPronta(b64); });
+    }
+    return () => { vivo = false; };
+  }, [planType, companyLogo]);
+
+  const baixarRelatorioPdf = async () => {
+    if (!relatorioDados || gerandoPdfRelatorio) return;
+    setGerandoPdfRelatorio(true);
+    try {
+      const { jsPDF } = await import("jspdf");
+      const doc = new jsPDF({ unit: "mm", format: "a4" });
+      desenharRelatorioAgendamento(doc, relatorioDados, {
+        meiName,
+        cnpjPrestador,
+        telefonePrestador,
+        emailPrestador,
+        logoBase64: logoRelatorioPronta || (planType === "premium" ? await carregarLogoBase64(companyLogo) : undefined),
+        premium: planType === "premium",
+      });
+      await savePdfCrossPlatform(doc, nomeArquivoRelatorioAgendamento(relatorioDados));
+      triggerToast?.(isNativePlatform() ? "✓ PDF salvo em Downloads." : "✓ PDF gerado.");
+    } catch (e) {
+      triggerToast?.("⚠ Não consegui gerar o PDF.");
+    } finally {
+      setGerandoPdfRelatorio(false);
     }
   };
 
@@ -692,7 +888,7 @@ export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerar
         )}
 
         <div className="flex gap-1.5 bg-slate-100 rounded-2xl p-1 w-fit overflow-x-auto">
-          {(["agendamentos", "google", "tipos", "disponibilidade", "mensagens"] as const).map((aba) => (
+          {(["agendamentos", "google", "tipos", "disponibilidade", "mensagens", "relatorio"] as const).map((aba) => (
             <button
               key={aba}
               onClick={() => setAbaInterna(aba)}
@@ -708,7 +904,9 @@ export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerar
                 ? "Tipos de agendamento"
                 : aba === "disponibilidade"
                 ? "Disponibilidade"
-                : "Modelos de mensagem"}
+                : aba === "mensagens"
+                ? "Modelos de mensagem"
+                : "Relatório mensal"}
             </button>
           ))}
         </div>
@@ -773,6 +971,34 @@ export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerar
                     )}
                   </div>
 
+                  {/* Fase 6b — duração real, descrição do serviço e o lembrete visual quando falta escrever. */}
+                  {a.status === "concluido" && (
+                    <div className="flex flex-col gap-1 pt-1 border-t border-slate-100">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
+                          <Clock className="w-3 h-3" /> {formatarDuracaoAtendimento(
+                            a.concluidoEm
+                              ? Math.round(
+                                  (new Date(a.concluidoEm).getTime() -
+                                    new Date(a.aCaminhoEm || a.dataHoraInicio).getTime()) /
+                                    60000
+                                )
+                              : 0
+                          )}
+                        </span>
+                        {a.descricaoServico ? (
+                          <span className="inline-flex items-start gap-1.5 text-[11px] text-slate-500">
+                            <MessageSquareText className="w-3 h-3 shrink-0 mt-0.5" /> {a.descricaoServico}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 bg-amber-100/60 text-amber-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">
+                            <AlertTriangle className="w-2.5 h-2.5" /> Descrição pendente
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-1.5 pt-1 flex-wrap">
                     {a.status === "confirmado" && (
                       <button
@@ -818,6 +1044,17 @@ export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerar
                         className="px-3 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-emerald-100 transition-colors cursor-pointer"
                       >
                         <Copy className="w-3 h-3" /> Msg. avaliação
+                      </button>
+                    )}
+
+                    {/* Fase 6b — corrige o horário de conclusão e escreve/edita a descrição do serviço. */}
+                    {a.status === "concluido" && editandoBaixaId !== a.id && (
+                      <button
+                        onClick={() => abrirEdicaoBaixa(a)}
+                        className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-slate-200 transition-colors cursor-pointer"
+                        title="Ajustar o horário em que o serviço terminou e escrever o que foi feito"
+                      >
+                        <Pencil className="w-3 h-3" /> Editar baixa
                       </button>
                     )}
 
@@ -893,6 +1130,53 @@ export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerar
                         </button>
                       ))}
                   </div>
+
+                  {/* Fase 6b — formulário de edição da baixa, aberto por "Editar baixa" acima. */}
+                  {editandoBaixaId === a.id && (
+                    <div className="pt-2 mt-1 border-t border-slate-100 space-y-2.5">
+                      <div>
+                        <label className="block text-[10px] font-extrabold uppercase tracking-widest text-slate-400 mb-1.5">
+                          Horário em que o serviço terminou
+                        </label>
+                        <input
+                          type="datetime-local"
+                          value={formBaixaConcluidoEm}
+                          onChange={(e) => setFormBaixaConcluidoEm(e.target.value)}
+                          className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-extrabold uppercase tracking-widest text-slate-400 mb-1.5">
+                          Descrição do serviço realizado
+                        </label>
+                        <textarea
+                          value={formBaixaDescricao}
+                          onChange={(e) => setFormBaixaDescricao(e.target.value)}
+                          rows={2}
+                          maxLength={2000}
+                          placeholder="Ex.: Troca da resistência do chuveiro e teste de funcionamento."
+                          className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition resize-y"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => salvarBaixa(a.id)}
+                          disabled={salvandoBaixa}
+                          className="flex-1 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition-colors cursor-pointer disabled:opacity-60"
+                        >
+                          {salvandoBaixa ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                          Salvar
+                        </button>
+                        <button
+                          onClick={cancelarEdicaoBaixa}
+                          disabled={salvandoBaixa}
+                          className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-200 transition-colors cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))
             )}
@@ -1194,7 +1478,7 @@ export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerar
               {disponibilidadeAlterada ? "Salvar disponibilidade" : "Disponibilidade salva"}
             </button>
           </div>
-        ) : (
+        ) : abaInterna === "mensagens" ? (
           <div className="space-y-4">
             <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-4 flex gap-3">
               <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
@@ -1274,6 +1558,101 @@ export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerar
               )}
               {mensagensAlteradas ? "Salvar modelos" : "Modelos salvos"}
             </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <input
+                type="month"
+                value={`${relatorioAno}-${String(relatorioMes).padStart(2, "0")}`}
+                onChange={(e) => {
+                  const [ano, mes] = e.target.value.split("-").map(Number);
+                  if (ano && mes) { setRelatorioAno(ano); setRelatorioMes(mes); }
+                }}
+                className="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 transition"
+              />
+              <button
+                onClick={baixarRelatorioPdf}
+                disabled={!relatorioDados || carregandoRelatorio || gerandoPdfRelatorio}
+                className="ml-auto px-3.5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-indigo-700 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {gerandoPdfRelatorio ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                Baixar PDF
+              </button>
+            </div>
+
+            {erroRelatorio && (
+              <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex gap-3">
+                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <p className="text-xs text-red-900 leading-relaxed">{erroRelatorio}</p>
+              </div>
+            )}
+
+            {carregandoRelatorio ? (
+              <div className="py-16 flex flex-col items-center gap-3 text-slate-400">
+                <Loader2 className="w-6 h-6 animate-spin" />
+                <p className="text-xs font-medium">Carregando…</p>
+              </div>
+            ) : relatorioDados ? (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                  {[
+                    ["Agendados", String(relatorioDados.totalAgendados)],
+                    ["Concluídos", String(relatorioDados.totalConcluidos)],
+                    ["Tempo médio", formatarDuracaoAtendimento(relatorioDados.duracaoMediaMin)],
+                    ["Valor recebido", formatarReais(relatorioDados.valorRecebido)],
+                    ["R$ / hora", formatarReais(relatorioDados.valorPorHora)],
+                  ].map(([rot, val]) => (
+                    <div key={rot} className="bg-white border border-slate-200/70 rounded-2xl p-3.5">
+                      <p className="text-[9px] font-extrabold uppercase tracking-widest text-slate-400">{rot}</p>
+                      <p className="text-sm font-bold text-slate-800 mt-1">{val}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {(relatorioDados.valorRecebidoDireto > 0 || relatorioDados.valorRecebidoOrcamentos > 0) && (
+                  <p className="text-[10px] text-slate-400 leading-relaxed px-1">
+                    {formatarReais(relatorioDados.valorRecebidoDireto)} pago direto pelo link de agendamento
+                    {" + "}
+                    {formatarReais(relatorioDados.valorRecebidoOrcamentos)} de orçamentos aceitos vinculados a
+                    agendamentos concluídos no período.
+                  </p>
+                )}
+
+                <div className="space-y-2.5">
+                  {relatorioDados.atendimentos.length === 0 ? (
+                    <div className="py-10 flex flex-col items-center gap-2.5 text-center">
+                      <BarChart3 className="w-8 h-8 text-slate-300" />
+                      <p className="text-xs text-slate-400 max-w-xs">
+                        Nenhum atendimento concluído em {MESES_NOME[relatorioMes - 1]}/{relatorioAno}.
+                      </p>
+                    </div>
+                  ) : (
+                    relatorioDados.atendimentos.map((a) => (
+                      <div key={a.id} className="bg-white border border-slate-200/70 rounded-2xl p-4 space-y-1.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-bold text-slate-800 truncate">{a.clienteNome || "—"}</p>
+                            <p className="text-[11px] text-slate-500 mt-0.5">{dataHoraBR(a.concluidoEm)}</p>
+                          </div>
+                          <span className="shrink-0 text-xs font-bold text-indigo-600">{formatarReais(a.valor)}</span>
+                        </div>
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
+                            <Clock className="w-3 h-3" /> {formatarDuracaoAtendimento(a.duracaoMin)}
+                          </span>
+                          {a.descricaoServico ? (
+                            <span className="text-[11px] text-slate-500">{a.descricaoServico}</span>
+                          ) : (
+                            <span className="text-[11px] text-slate-400 italic">Sem descrição</span>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            ) : null}
           </div>
         )}
       </div>

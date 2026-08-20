@@ -217,7 +217,13 @@ function montarAgendamentoResumo(d: any) {
     googleEventId: d.googleEventId || null,
     criadoEm: d.criadoEm || null,
     criadoPor: d.criadoPor || "cliente",
+    // Marcado pela Fase 4 quando o profissional aperta "a caminho" — usado
+    // pela Fase 6b como início real do atendimento (ver calcularDuracaoMin).
+    aCaminhoEm: d.aCaminhoEm || null,
     concluidoEm: d.concluidoEm || null,
+    // Fase 6b — descrição do que foi feito, opcional na hora da baixa e
+    // editável depois (ver seção 9.2 do desenho).
+    descricaoServico: d.descricaoServico || "",
     // Vínculo Fase 6 — ver claude/AGENDAMENTO_GOOGLE_CALENDAR_ESTRUTURA.md:
     // origemOrcamentoId = este agendamento nasceu de um orçamento aceito;
     // orcamentoGeradoId = este agendamento já gerou um orçamento (não deixa
@@ -225,6 +231,26 @@ function montarAgendamentoResumo(d: any) {
     origemOrcamentoId: d.origemOrcamentoId || null,
     orcamentoGeradoId: d.orcamentoGeradoId || null,
   };
+}
+
+// ============================================================================
+// FASE 6b — DURAÇÃO E BUCKET DE MÊS (seção 9.1 do desenho)
+// ============================================================================
+//
+// Início: hora em que o profissional marcou "a caminho" — ou, se ele não
+// marcou, a hora agendada pelo cliente. Fim: `concluidoEm` (editável). Decisão
+// do usuário: mais simples e mais realista do que a duração padrão cadastrada
+// no tipo, porque parte de um horário real do próprio agendamento.
+function calcularDuracaoMin(a: any): number {
+  const inicioMs = new Date(a.aCaminhoEm || a.dataHoraInicio).getTime();
+  const fimMs = new Date(a.concluidoEm).getTime();
+  if (!Number.isFinite(inicioMs) || !Number.isFinite(fimMs) || fimMs <= inicioMs) return 0;
+  return Math.round((fimMs - inicioMs) / 60000);
+}
+
+/** "2026-08" no fuso de Brasília, a partir de um ISO qualquer — bucket de mês do relatório. */
+function mesAnoBrasilia(iso: string): string {
+  return dataISOEmBrasilia(new Date(iso)).slice(0, 7);
 }
 
 // ============================================================================
@@ -478,6 +504,177 @@ export function registrarRotasAgendamento(app: any, db: any) {
     }
   });
 
+  // ============================================================================
+  // FASE 6b — EDITAR BAIXA (horário de conclusão + descrição do serviço)
+  // ============================================================================
+  //
+  // Ver seções 9.1 e 9.2 do desenho. A baixa simples (Fase 6a) grava
+  // `concluidoEm` sempre como "agora" — esta rota deixa o profissional
+  // corrigir esse horário depois (ele às vezes só lembra de dar baixa já
+  // fora da casa do cliente) e escrever/editar a descrição do que foi feito,
+  // a qualquer momento, sem bloquear nada.
+  app.put("/api/agendamento/:id/baixa", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const ref = db.collection("agendamentos").doc(String(req.params.id));
+      const snap = await ref.get();
+      if (!snap.exists || snap.data().userId !== uid) {
+        return res.status(404).json({ success: false, mensagem: "Agendamento não encontrado." });
+      }
+      const a = snap.data();
+      if (a.status !== "concluido") {
+        return res.status(409).json({
+          success: false,
+          mensagem: "Só é possível editar a baixa de um agendamento já concluído.",
+        });
+      }
+
+      const atualizacao: any = { atualizadoEm: agora() };
+
+      if (req.body?.concluidoEm !== undefined) {
+        const novoConcluidoEm = new Date(String(req.body.concluidoEm));
+        if (isNaN(novoConcluidoEm.getTime())) {
+          return res.status(400).json({ success: false, mensagem: "Horário de conclusão inválido." });
+        }
+        if (novoConcluidoEm.getTime() > Date.now() + 60000) {
+          return res.status(400).json({ success: false, mensagem: "O horário de conclusão não pode estar no futuro." });
+        }
+        const inicioMs = new Date(a.aCaminhoEm || a.dataHoraInicio).getTime();
+        if (novoConcluidoEm.getTime() < inicioMs) {
+          return res.status(400).json({
+            success: false,
+            mensagem: "O horário de conclusão não pode ser antes do início do atendimento.",
+          });
+        }
+        atualizacao.concluidoEm = novoConcluidoEm.toISOString();
+      }
+
+      if (req.body?.descricaoServico !== undefined) {
+        const descricao = String(req.body.descricaoServico || "").trim();
+        if (descricao.length > 2000) {
+          return res.status(400).json({ success: false, mensagem: "A descrição pode ter no máximo 2000 caracteres." });
+        }
+        atualizacao.descricaoServico = descricao;
+      }
+
+      await ref.set(atualizacao, { merge: true });
+      res.json({ success: true, agendamento: montarAgendamentoResumo({ ...a, ...atualizacao }) });
+    } catch (err: any) {
+      const s = erroParaStatus(err);
+      res.status(s).json({ success: false, mensagem: mensagemDeErro(s, err) });
+    }
+  });
+
+  // ============================================================================
+  // FASE 6b — RELATÓRIO MENSAL (seção 9 do desenho)
+  // ============================================================================
+  //
+  // Métricas por mês: total agendado/concluído, tempo médio por serviço,
+  // valor recebido no período e R$/hora trabalhada. "Valor recebido" soma
+  // duas fontes, decidido com o usuário (2026-08-20): (1) pagamento direto —
+  // `valor` do próprio agendamento, só quando `exigePagamento` é verdadeiro,
+  // porque só nesse caso o dinheiro realmente passou pelo checkout da Asaas
+  // antes de o agendamento existir como `confirmado`; (2) orçamento vinculado
+  // — quando o agendamento nasceu de um orçamento aceito (`origemOrcamentoId`,
+  // botão "Agendar" do funil), soma o `total` desse orçamento, lido direto do
+  // Firestore (usuarios/{uid}/orcamentos) com o Admin SDK. Cada orçamento só
+  // conta UMA VEZ (por isso o Set), mesmo que — por algum motivo — mais de um
+  // agendamento aponte pra ele. ⚠️ Esta soma pode se sobrepor aos relatórios
+  // de Vendas/Recebimentos, que enxergam o mesmo orçamento por outro ângulo —
+  // risco aceito explicitamente pelo usuário em troca de um número mais
+  // completo aqui.
+  // ?mes=1..12&ano=AAAA
+  app.get("/api/agendamento/relatorio", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const mes = Math.round(Number(req.query?.mes));
+      const ano = Math.round(Number(req.query?.ano));
+      if (!Number.isFinite(mes) || mes < 1 || mes > 12 || !Number.isFinite(ano) || ano < 2000 || ano > 2100) {
+        return res.status(400).json({ success: false, mensagem: "Informe mês (1-12) e ano válidos." });
+      }
+      const bucketAlvo = `${ano}-${String(mes).padStart(2, "0")}`;
+
+      const snap = await db.collection("agendamentos").where("userId", "==", uid).get();
+      const todos = snap.docs.map((d: any) => d.data());
+
+      const agendadosNoMes = todos.filter((a: any) => a.dataHoraInicio && mesAnoBrasilia(a.dataHoraInicio) === bucketAlvo);
+      const concluidosNoMes = todos.filter(
+        (a: any) => a.status === "concluido" && a.concluidoEm && mesAnoBrasilia(a.concluidoEm) === bucketAlvo
+      );
+
+      let somaDuracaoMin = 0;
+      let valorDireto = 0;
+      const orcamentosContados = new Set<string>();
+      let valorOrcamentos = 0;
+
+      const atendimentos: any[] = [];
+      for (const a of concluidosNoMes) {
+        const duracaoMin = calcularDuracaoMin(a);
+        somaDuracaoMin += duracaoMin;
+        const valorAtendimento = a.exigePagamento ? Number(a.valor) || 0 : 0;
+        valorDireto += valorAtendimento;
+
+        let valorOrcamentoVinculado = 0;
+        if (a.origemOrcamentoId && !orcamentosContados.has(a.origemOrcamentoId)) {
+          try {
+            const orcSnap = await db
+              .collection("usuarios")
+              .doc(uid)
+              .collection("orcamentos")
+              .doc(String(a.origemOrcamentoId))
+              .get();
+            if (orcSnap.exists) {
+              const orc = orcSnap.data();
+              if (orc?.situacao === "aceito") {
+                valorOrcamentoVinculado = Number(orc.total) || 0;
+                valorOrcamentos += valorOrcamentoVinculado;
+                orcamentosContados.add(a.origemOrcamentoId);
+              }
+            }
+          } catch {
+            // Um orçamento ilegível não pode derrubar o relatório inteiro —
+            // só fica de fora da soma.
+          }
+        }
+
+        atendimentos.push({
+          id: a.id,
+          clienteNome: a.cliente?.nome || "",
+          dataHoraInicio: a.dataHoraInicio,
+          aCaminhoEm: a.aCaminhoEm || null,
+          concluidoEm: a.concluidoEm,
+          duracaoMin,
+          valor: valorAtendimento + valorOrcamentoVinculado,
+          descricaoServico: a.descricaoServico || "",
+          origemOrcamentoId: a.origemOrcamentoId || null,
+          orcamentoGeradoId: a.orcamentoGeradoId || null,
+        });
+      }
+      atendimentos.sort((x, y) => String(x.concluidoEm).localeCompare(String(y.concluidoEm)));
+
+      const valorRecebido = valorDireto + valorOrcamentos;
+      const duracaoMediaMin = concluidosNoMes.length ? Math.round(somaDuracaoMin / concluidosNoMes.length) : 0;
+      const valorPorHora = somaDuracaoMin > 0 ? valorRecebido / (somaDuracaoMin / 60) : 0;
+
+      res.json({
+        success: true,
+        mes,
+        ano,
+        totalAgendados: agendadosNoMes.length,
+        totalConcluidos: concluidosNoMes.length,
+        duracaoMediaMin,
+        valorRecebidoDireto: valorDireto,
+        valorRecebidoOrcamentos: valorOrcamentos,
+        valorRecebido,
+        valorPorHora,
+        atendimentos,
+      });
+    } catch (err: any) {
+      const s = erroParaStatus(err);
+      res.status(s).json({ success: false, mensagem: mensagemDeErro(s, err) });
+    }
+  });
+
   // --------------------------------------------------------------------------
   // HORÁRIOS DISPONÍVEIS — versão autenticada da mesma grade que a página
   // pública usa (mesma função `calcularHorariosDoDia`, reaproveitada de
@@ -639,6 +836,7 @@ export function registrarRotasAgendamento(app: any, db: any) {
   console.log(
     "[Agendamento] Rotas registradas: /api/agendamento/tipos, /api/agendamento/disponibilidade, " +
       "/api/agendamento/lista, /api/agendamento/:id/a-caminho, /api/agendamento/:id/cancelar, " +
-      "/api/agendamento/:id/concluir, /api/agendamento/horarios, /api/agendamento/criar"
+      "/api/agendamento/:id/concluir, /api/agendamento/:id/baixa, /api/agendamento/relatorio, " +
+      "/api/agendamento/horarios, /api/agendamento/criar"
   );
 }

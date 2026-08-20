@@ -3707,6 +3707,12 @@ ${meiName}`;
             triggerToast={triggerToast}
             clientes={clientes}
             onGerarOrcamento={gerarOrcamentoDeAgendamento}
+            planType={planType}
+            companyLogo={companyLogo || ""}
+            meiName={meiName}
+            cnpjPrestador={cnpjPrestador || ""}
+            telefonePrestador={telefonePrestador || ""}
+            emailPrestador={emailPrestador || ""}
           />
         )}
 
