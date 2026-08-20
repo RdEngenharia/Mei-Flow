@@ -453,6 +453,39 @@ export function registrarRotasAgendamento(app: any, db: any) {
     }
   });
 
+  // EXCLUIR — diferente de "Cancelar" (que é uma ação de negócio, visível pro
+  // cliente no link de acompanhamento e que preserva o histórico): isto
+  // apaga o registro de vez, pensado pra limpar agendamento de teste. Sem
+  // trava de status — funciona em qualquer estado, inclusive `concluido`.
+  // Remove também o evento do Google Calendar (se houver) e o lançamento
+  // que a Fase 6c cria no Livro Caixa quando o agendamento foi pago direto
+  // (mesmo id sempre — `tx_agnd_{id}` — então a remoção é direta, sem busca).
+  app.delete("/api/agendamento/:id", async (req: any, res: any) => {
+    try {
+      const uid = await exigirUsuario(req);
+      const id = String(req.params.id);
+      const ref = db.collection("agendamentos").doc(id);
+      const snap = await ref.get();
+      if (!snap.exists || snap.data().userId !== uid) {
+        return res.status(404).json({ success: false, mensagem: "Agendamento não encontrado." });
+      }
+      const a = snap.data();
+      if (a.googleEventId) {
+        try {
+          await excluirEventoAgendamento(db, uid, a.googleEventId);
+        } catch {
+          // Evento já removido/inacessível não pode travar a exclusão do agendamento.
+        }
+      }
+      await db.collection("usuarios").doc(uid).collection("vendas").doc(`tx_agnd_${id}`).delete().catch(() => {});
+      await ref.delete();
+      res.json({ success: true });
+    } catch (err: any) {
+      const s = erroParaStatus(err);
+      res.status(s).json({ success: false, mensagem: mensagemDeErro(s, err) });
+    }
+  });
+
   // ============================================================================
   // FASE 6 — CONCLUIR (baixa simples) + INTEGRAÇÃO COM ORÇAMENTO
   // ============================================================================
@@ -566,23 +599,28 @@ export function registrarRotasAgendamento(app: any, db: any) {
   });
 
   // ============================================================================
-  // FASE 6b — RELATÓRIO MENSAL (seção 9 do desenho)
+  // FASE 6b/6c — RELATÓRIO MENSAL (seção 9 do desenho)
   // ============================================================================
   //
   // Métricas por mês: total agendado/concluído, tempo médio por serviço,
-  // valor recebido no período e R$/hora trabalhada. "Valor recebido" soma
-  // duas fontes, decidido com o usuário (2026-08-20): (1) pagamento direto —
-  // `valor` do próprio agendamento, só quando `exigePagamento` é verdadeiro,
-  // porque só nesse caso o dinheiro realmente passou pelo checkout da Asaas
-  // antes de o agendamento existir como `confirmado`; (2) orçamento vinculado
-  // — quando o agendamento nasceu de um orçamento aceito (`origemOrcamentoId`,
-  // botão "Agendar" do funil), soma o `total` desse orçamento, lido direto do
-  // Firestore (usuarios/{uid}/orcamentos) com o Admin SDK. Cada orçamento só
-  // conta UMA VEZ (por isso o Set), mesmo que — por algum motivo — mais de um
-  // agendamento aponte pra ele. ⚠️ Esta soma pode se sobrepor aos relatórios
-  // de Vendas/Recebimentos, que enxergam o mesmo orçamento por outro ângulo —
-  // risco aceito explicitamente pelo usuário em troca de um número mais
-  // completo aqui.
+  // valor recebido no período e R$/hora trabalhada.
+  //
+  // ⚠️ "Valor recebido" é UMA FONTE SÓ, não duas — decisão corrigida com o
+  // usuário em 2026-08-20 (a primeira versão desta rota somava também o
+  // orçamento aceito vinculado por `origemOrcamentoId`, e arriscava contar o
+  // mesmo dinheiro duas vezes com Vendas/Recebimentos). A fonte única é o
+  // pagamento direto do agendamento — `valor`, só quando `exigePagamento` é
+  // verdadeiro, porque só nesse caso o dinheiro passou de verdade pelo
+  // checkout da Asaas antes de o agendamento existir como `confirmado`. Esse
+  // mesmo pagamento agora também vira lançamento no Livro Caixa (Fase 6c,
+  // ver `agendamentoPublico.ts`, rota de status) — os dois números sempre
+  // batem porque nascem do mesmo campo.
+  //
+  // R$/hora só divide pelas horas de quem PAGOU direto — não pela duração de
+  // todo mundo concluído no mês. Dividir dinheiro de uma fatia do trabalho
+  // pelo tempo do trabalho inteiro (que inclui visitas de orçamento sem
+  // pagamento nenhum aqui) deixaria o número artificialmente baixo demais
+  // pra servir de indicador de qualquer coisa.
   // ?mes=1..12&ano=AAAA
   app.get("/api/agendamento/relatorio", async (req: any, res: any) => {
     try {
@@ -603,58 +641,34 @@ export function registrarRotasAgendamento(app: any, db: any) {
       );
 
       let somaDuracaoMin = 0;
-      let valorDireto = 0;
-      const orcamentosContados = new Set<string>();
-      let valorOrcamentos = 0;
+      let somaDuracaoPagosMin = 0;
+      let valorRecebido = 0;
 
-      const atendimentos: any[] = [];
-      for (const a of concluidosNoMes) {
+      const atendimentos: any[] = concluidosNoMes.map((a: any) => {
         const duracaoMin = calcularDuracaoMin(a);
         somaDuracaoMin += duracaoMin;
         const valorAtendimento = a.exigePagamento ? Number(a.valor) || 0 : 0;
-        valorDireto += valorAtendimento;
-
-        let valorOrcamentoVinculado = 0;
-        if (a.origemOrcamentoId && !orcamentosContados.has(a.origemOrcamentoId)) {
-          try {
-            const orcSnap = await db
-              .collection("usuarios")
-              .doc(uid)
-              .collection("orcamentos")
-              .doc(String(a.origemOrcamentoId))
-              .get();
-            if (orcSnap.exists) {
-              const orc = orcSnap.data();
-              if (orc?.situacao === "aceito") {
-                valorOrcamentoVinculado = Number(orc.total) || 0;
-                valorOrcamentos += valorOrcamentoVinculado;
-                orcamentosContados.add(a.origemOrcamentoId);
-              }
-            }
-          } catch {
-            // Um orçamento ilegível não pode derrubar o relatório inteiro —
-            // só fica de fora da soma.
-          }
+        if (valorAtendimento > 0) {
+          valorRecebido += valorAtendimento;
+          somaDuracaoPagosMin += duracaoMin;
         }
-
-        atendimentos.push({
+        return {
           id: a.id,
           clienteNome: a.cliente?.nome || "",
           dataHoraInicio: a.dataHoraInicio,
           aCaminhoEm: a.aCaminhoEm || null,
           concluidoEm: a.concluidoEm,
           duracaoMin,
-          valor: valorAtendimento + valorOrcamentoVinculado,
+          valor: valorAtendimento,
           descricaoServico: a.descricaoServico || "",
           origemOrcamentoId: a.origemOrcamentoId || null,
           orcamentoGeradoId: a.orcamentoGeradoId || null,
-        });
-      }
+        };
+      });
       atendimentos.sort((x, y) => String(x.concluidoEm).localeCompare(String(y.concluidoEm)));
 
-      const valorRecebido = valorDireto + valorOrcamentos;
       const duracaoMediaMin = concluidosNoMes.length ? Math.round(somaDuracaoMin / concluidosNoMes.length) : 0;
-      const valorPorHora = somaDuracaoMin > 0 ? valorRecebido / (somaDuracaoMin / 60) : 0;
+      const valorPorHora = somaDuracaoPagosMin > 0 ? valorRecebido / (somaDuracaoPagosMin / 60) : 0;
 
       res.json({
         success: true,
@@ -663,8 +677,6 @@ export function registrarRotasAgendamento(app: any, db: any) {
         totalAgendados: agendadosNoMes.length,
         totalConcluidos: concluidosNoMes.length,
         duracaoMediaMin,
-        valorRecebidoDireto: valorDireto,
-        valorRecebidoOrcamentos: valorOrcamentos,
         valorRecebido,
         valorPorHora,
         atendimentos,
@@ -836,7 +848,7 @@ export function registrarRotasAgendamento(app: any, db: any) {
   console.log(
     "[Agendamento] Rotas registradas: /api/agendamento/tipos, /api/agendamento/disponibilidade, " +
       "/api/agendamento/lista, /api/agendamento/:id/a-caminho, /api/agendamento/:id/cancelar, " +
-      "/api/agendamento/:id/concluir, /api/agendamento/:id/baixa, /api/agendamento/relatorio, " +
-      "/api/agendamento/horarios, /api/agendamento/criar"
+      "/api/agendamento/:id (DELETE), /api/agendamento/:id/concluir, /api/agendamento/:id/baixa, " +
+      "/api/agendamento/relatorio, /api/agendamento/horarios, /api/agendamento/criar"
   );
 }

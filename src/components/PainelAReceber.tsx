@@ -38,17 +38,30 @@ export default function PainelAReceber({
   transacoes,
   onBaixar,
   onPagarComissao,
+  slotSecundario,
 }: {
   transacoes: Transacao[];
   onBaixar: (venda: Transacao, parcela: Recebimento) => void;
   onPagarComissao: (venda: Transacao) => void;
+  /**
+   * Preenche a segunda coluna da grade quando "Comissões a pagar" não tem
+   * nada pra mostrar — e quando o painel inteiro estaria vazio, vira o
+   * conteúdo sozinho. Pensado pro atalho de "Agendamentos de hoje"
+   * (`CardAgendamentosDoDia`, ver App.tsx): sem isto, aquele espaço fica em
+   * branco sempre que não há recebimento nem comissão pendente.
+   */
+  slotSecundario?: React.ReactNode;
 }) {
   const { linhas, total } = montarAReceber(transacoes);
   const comissoes = comissoesAPagar(transacoes);
   const totalComissoes = arredondar(comissoes.reduce((s, c) => s + c.comissao.valor, 0));
 
-  // Nada pendente não merece um painel vazio ocupando a tela.
-  if (linhas.length === 0 && comissoes.length === 0) return null;
+  // Nada pendente: o painel financeiro em si não tem o que mostrar. Se
+  // houver um atalho pra preencher o espaço, ele aparece sozinho; senão,
+  // nenhum painel vazio ocupa a tela à toa.
+  if (linhas.length === 0 && comissoes.length === 0) {
+    return slotSecundario ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">{slotSecundario}</div> : null;
+  }
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
@@ -144,8 +157,9 @@ export default function PainelAReceber({
       )}
 
       {/* ------------------------------------------------------------------ */}
-      {/* COMISSÕES A PAGAR                                                   */}
+      {/* COMISSÕES A PAGAR — sem nenhuma pendente, o slot extra usa o espaço */}
       {/* ------------------------------------------------------------------ */}
+      {comissoes.length === 0 && slotSecundario}
       {comissoes.length > 0 && (
         <div className="bg-white rounded-3xl border border-slate-200/60 shadow-xs overflow-hidden">
           <div className="px-6 py-5 border-b border-slate-100">

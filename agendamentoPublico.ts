@@ -268,6 +268,18 @@ export function dataISOEmBrasilia(instante: Date): string {
   return instante.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
 }
 
+/**
+ * "25/08/2026" no fuso de Brasília — mesmo formato `dd/mm/aaaa` que
+ * `hojeBR()` (src/utils/recebimentos.ts) grava em `Transacao.data` no
+ * cliente. Usado só quando o SERVIDOR precisa gravar uma venda direto
+ * (Fase 6c — pagamento de agendamento virando lançamento no Livro Caixa),
+ * porque o front não participa dessa escrita.
+ */
+function hojeEmBrasiliaDDMMYYYY(): string {
+  const [ano, mes, dia] = dataISOEmBrasilia(new Date()).split("-");
+  return `${dia}/${mes}/${ano}`;
+}
+
 // ============================================================================
 // FASE 4 — REGRA DE REAGENDAMENTO/CANCELAMENTO (definida pelo usuário)
 // ============================================================================
@@ -550,6 +562,49 @@ export function registrarRotasAgendamentoPublico(app: any, db: any) {
           const situacao = classificar(c.status, diasAte(c.vencimento));
 
           if (situacao === "pago") {
+            // ⚠️ FASE 6c — o dinheiro que a Asaas confirmou aqui só ficava
+            // registrado na coleção `cobrancas` (painel de Cobranças), nunca
+            // no Livro Caixa. Usuário notou: agendamento concluído com
+            // pagamento não aparecia no caixa. Grava a venda ANTES de marcar
+            // o agendamento como confirmado — se a escrita da venda falhar, o
+            // agendamento continua "aguardando_pagamento" e a próxima
+            // consulta em loop tenta de novo; se for a atualização do
+            // agendamento que falhar depois, a venda já gravada não duplica
+            // (mesmo id sempre, `set` com merge). Data do lançamento = hoje
+            // em Brasília — regime de caixa, mesmo princípio de
+            // RECEBIMENTO_PARCELADO_E_COMISSAO.md: entra na data em que o
+            // dinheiro realmente caiu, não na data do serviço.
+            const vendaId = `tx_agnd_${id}`;
+            await db
+              .collection("usuarios")
+              .doc(a.userId)
+              .collection("vendas")
+              .doc(vendaId)
+              .set(
+                {
+                  id: vendaId,
+                  tipo: "entrada",
+                  valor: Number(a.pagamento?.valor) || 0,
+                  data: hojeEmBrasiliaDDMMYYYY(),
+                  descricao: `Agendamento: ${a.tipoNome}`,
+                  categoria: "Agendamento",
+                  clienteId: "",
+                  clienteNome: a.cliente?.nome || "",
+                  clienteDocumento: a.cliente?.documento || "",
+                  formaPagamento: "Cartão de Crédito",
+                  valorTotal: null,
+                  recebimentos: null,
+                  comissao: null,
+                  orcamentoId: null,
+                  composicao: null,
+                  repasse: null,
+                  agendamentoId: id,
+                  createdAt: agora(),
+                  atualizadoEm: agora(),
+                },
+                { merge: true }
+              );
+
             const googleEventId = await criarEventoAgendamento(db, a.userId, {
               titulo: `${a.tipoNome} — ${a.cliente?.nome || ""}`,
               descricao:

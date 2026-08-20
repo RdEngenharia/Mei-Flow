@@ -53,6 +53,7 @@ import { composicaoDosItens, valorParaCaixa } from "./utils/composicaoValor";
 import { mascararDocumento, documentoInvalidoCompleto, rotuloDocumento } from "./utils/documentoBR";
 import PainelAReceber from "./components/PainelAReceber";
 import CardBoletosAReceber from "./components/CardBoletosAReceber";
+import CardAgendamentosDoDia from "./components/CardAgendamentosDoDia";
 import ModalBaixaRecebimento from "./components/ModalBaixaRecebimento";
 import CentralNotificacoes from "./components/CentralNotificacoes";
 /*
@@ -3018,6 +3019,9 @@ ${meiName}`;
               transacoes={transacoes}
               onBaixar={(venda, parcela) => setBaixaEmAndamento({ venda, parcela })}
               onPagarComissao={handlePagarComissao}
+              slotSecundario={
+                <CardAgendamentosDoDia userId={user?.uid || userId} onAbrir={() => irPara("agendamentos")} />
+              }
             />
 
             {/*

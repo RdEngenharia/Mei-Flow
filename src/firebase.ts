@@ -708,6 +708,7 @@ export async function saveVendaToFirebase(userId: string, tx: Transacao): Promis
           })
         : null,
       orcamentoId: tx.orcamentoId || null,
+      agendamentoId: tx.agendamentoId || null,
 
       // Retrato de material × serviço, e o fornecedor que fatura o material
       // direto ao cliente, quando existir. Ver utils/composicaoValor.ts.
@@ -768,6 +769,7 @@ export async function fetchVendasFromFirebase(userId: string): Promise<Transacao
           : undefined,
         comissao: data.comissao && data.comissao.beneficiario ? data.comissao : undefined,
         orcamentoId: data.orcamentoId || undefined,
+        agendamentoId: data.agendamentoId || undefined,
         composicao: data.composicao && typeof data.composicao === 'object' ? data.composicao : undefined,
         repasse: data.repasse && data.repasse.ativo ? data.repasse : undefined,
         createdAt: data.createdAt || undefined,

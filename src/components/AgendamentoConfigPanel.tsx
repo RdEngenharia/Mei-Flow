@@ -207,8 +207,6 @@ type RelatorioMensal = {
   totalAgendados: number;
   totalConcluidos: number;
   duracaoMediaMin: number;
-  valorRecebidoDireto: number;
-  valorRecebidoOrcamentos: number;
   valorRecebido: number;
   valorPorHora: number;
   atendimentos: RelatorioAtendimento[];
@@ -334,6 +332,8 @@ export default function AgendamentoConfigPanel({
   const [gerandoOrcamentoId, setGerandoOrcamentoId] = useState<string | null>(null);
   const [mostrarNovoAgendamento, setMostrarNovoAgendamento] = useState(false);
   const [concluindoId, setConcluindoId] = useState<string | null>(null);
+  const [confirmandoExclusaoAgendamentoId, setConfirmandoExclusaoAgendamentoId] = useState<string | null>(null);
+  const [excluindoAgendamentoId, setExcluindoAgendamentoId] = useState<string | null>(null);
 
   // Fase 6b — editar baixa (horário de conclusão + descrição do serviço).
   const [editandoBaixaId, setEditandoBaixaId] = useState<string | null>(null);
@@ -517,6 +517,28 @@ export default function AgendamentoConfigPanel({
       setErro(e?.message || "Não foi possível cancelar.");
     } finally {
       setCancelandoId(null);
+    }
+  };
+
+  // Excluir de vez — pensado pra limpar agendamento de teste. Diferente de
+  // cancelar: apaga o documento (e o evento do Google Calendar e o
+  // lançamento correspondente no Livro Caixa, se houver — o servidor cuida
+  // dos dois), some da lista, funciona em qualquer status.
+  const excluirAgendamento = async (id: string) => {
+    setExcluindoAgendamentoId(id);
+    setErro(null);
+    try {
+      const h = await comToken();
+      const r = await fetch(getApiUrl(`/api/agendamento/${id}`), { method: "DELETE", headers: h });
+      const d = await r.json();
+      if (!r.ok || !d?.success) throw new Error(d?.mensagem || "Não foi possível excluir.");
+      setAgendamentos((lista) => lista.filter((a) => a.id !== id));
+      setConfirmandoExclusaoAgendamentoId(null);
+      triggerToast?.("Agendamento excluído.");
+    } catch (e: any) {
+      setErro(e?.message || "Não foi possível excluir.");
+    } finally {
+      setExcluindoAgendamentoId(null);
     }
   };
 
@@ -1129,6 +1151,38 @@ export default function AgendamentoConfigPanel({
                           <Ban className="w-3 h-3" /> Cancelar
                         </button>
                       ))}
+
+                    {/*
+                      Excluir é diferente de Cancelar: apaga o registro de vez
+                      (pensado pra limpar agendamento de teste), funciona em
+                      qualquer status, e some da tela — não fica marcado como
+                      cancelado no histórico.
+                    */}
+                    {confirmandoExclusaoAgendamentoId === a.id ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <button
+                          onClick={() => excluirAgendamento(a.id)}
+                          disabled={excluindoAgendamentoId === a.id}
+                          className="px-2.5 py-1.5 bg-red-600 text-white rounded-lg text-[10px] font-bold hover:bg-red-700 transition-colors cursor-pointer disabled:opacity-60"
+                        >
+                          {excluindoAgendamentoId === a.id ? "Excluindo…" : "Excluir de vez"}
+                        </button>
+                        <button
+                          onClick={() => setConfirmandoExclusaoAgendamentoId(null)}
+                          className="px-2.5 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold hover:bg-slate-200 transition-colors cursor-pointer"
+                        >
+                          Voltar
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmandoExclusaoAgendamentoId(a.id)}
+                        title="Apaga este agendamento de vez — não aparece mais em nenhuma lista"
+                        className="w-7 h-7 rounded-lg bg-white text-slate-300 border border-slate-200 flex items-center justify-center hover:bg-red-50 hover:text-red-500 hover:border-red-100 transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
                   </div>
 
                   {/* Fase 6b — formulário de edição da baixa, aberto por "Editar baixa" acima. */}
@@ -1610,14 +1664,12 @@ export default function AgendamentoConfigPanel({
                   ))}
                 </div>
 
-                {(relatorioDados.valorRecebidoDireto > 0 || relatorioDados.valorRecebidoOrcamentos > 0) && (
-                  <p className="text-[10px] text-slate-400 leading-relaxed px-1">
-                    {formatarReais(relatorioDados.valorRecebidoDireto)} pago direto pelo link de agendamento
-                    {" + "}
-                    {formatarReais(relatorioDados.valorRecebidoOrcamentos)} de orçamentos aceitos vinculados a
-                    agendamentos concluídos no período.
-                  </p>
-                )}
+                <p className="text-[10px] text-slate-400 leading-relaxed px-1">
+                  Valor recebido considera só o pagamento feito direto pelo link de agendamento (cartão via
+                  Asaas) — esse mesmo valor já entra no Livro Caixa sozinho, na data em que foi pago. Serviço
+                  que veio de um orçamento tem o faturamento dele contado na tela de Orçamentos/Livro Caixa,
+                  não aqui, pra não somar o mesmo dinheiro duas vezes.
+                </p>
 
                 <div className="space-y-2.5">
                   {relatorioDados.atendimentos.length === 0 ? (

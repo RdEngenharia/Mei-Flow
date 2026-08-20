@@ -158,6 +158,14 @@ export interface Transacao {
   comissao?: Comissao;
   /** Orçamento que originou a venda, quando veio do funil. */
   orcamentoId?: string;
+  /**
+   * Agendamento que originou a venda, quando o pagamento veio do link
+   * público de agendamento (cartão via Asaas). Gravado pelo servidor
+   * (`agendamentoPublico.ts`, no instante em que o pagamento é confirmado —
+   * nunca pelo app), no mesmo padrão de `orcamentoId`. Ver
+   * claude/AGENDAMENTO_GOOGLE_CALENDAR_ESTRUTURA.md, seção 9.
+   */
+  agendamentoId?: string;
   /** Despesa de comissão aponta para a venda de origem, para o estorno achar. */
   vendaOrigemId?: string;
   /**
