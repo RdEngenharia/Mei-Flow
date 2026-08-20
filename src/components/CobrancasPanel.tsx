@@ -877,16 +877,40 @@ export default function CobrancasPanel({
                               : calcularValorComRepasse(totalCartaoDigitado, parcelasCartao);
                             const selecionado = repasseTaxa ? comRepasse : semRepasse;
                             const taxaAntecip = (comRepasse as any).valorTaxaAntecipacao;
-                            const usarValorLiquidoComoMeta = () => {
-                              setValor(selecionado.valorLiquido.toFixed(2).replace(".", ","));
-                              setRepasseTaxa(true);
+                            /**
+                             * ⚠️ POR QUE ISTO TROCA O MODO, E NÃO SÓ COPIA O NÚMERO.
+                             *
+                             * Em "Cliente paga" o campo já É o valor que você quer
+                             * receber — clicar e copiar o próprio valor de volta não
+                             * mudaria nada na tela, e foi exatamente isso que pareceu
+                             * "não funcionou" num teste real. Para o clique sempre fazer
+                             * alguma coisa visível, ele alterna o modo: se estava
+                             * "Cliente paga" (campo = líquido), muda para "Você paga" e
+                             * o campo passa a mostrar o total cobrado; se estava "Você
+                             * paga" (campo = total), muda para "Cliente paga" e o campo
+                             * passa a mostrar o líquido que você recebe agora — que é o
+                             * pedido original: usar o valor que você recebe como a nova
+                             * meta.
+                             */
+                            const usarValorDesteResultado = () => {
+                              if (repasseTaxa) {
+                                setValor(selecionado.valorBruto.toFixed(2).replace(".", ","));
+                                setRepasseTaxa(false);
+                              } else {
+                                setValor(selecionado.valorLiquido.toFixed(2).replace(".", ","));
+                                setRepasseTaxa(true);
+                              }
                             };
                             return (
                               <button
                                 type="button"
-                                onClick={usarValorLiquidoComoMeta}
+                                onClick={usarValorDesteResultado}
                                 className="w-full bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 rounded-xl p-3 text-center text-white space-y-0.5 transition-colors cursor-pointer"
-                                title="Toque para usar este valor líquido como o que você quer receber"
+                                title={
+                                  repasseTaxa
+                                    ? "Toque para editar direto o total cobrado do cliente"
+                                    : "Toque para travar o valor que você recebe como a nova meta"
+                                }
                               >
                                 <p className="text-[11px] uppercase tracking-wider font-bold opacity-80">
                                   {repasseTaxa ? "Cobre do cliente" : "O cliente paga"}
@@ -904,7 +928,9 @@ export default function CobrancasPanel({
                                   </p>
                                 )}
                                 <p className="text-[9px] opacity-70 pt-1">
-                                  toque para usar {brl(selecionado.valorLiquido)} como valor a receber
+                                  {repasseTaxa
+                                    ? `toque para editar o total de ${brl(selecionado.valorBruto)} direto`
+                                    : `toque para travar ${brl(selecionado.valorLiquido)} como valor a receber`}
                                 </p>
                               </button>
                             );
