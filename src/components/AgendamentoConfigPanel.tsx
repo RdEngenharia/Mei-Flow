@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   CalendarClock, Plus, Pencil, Trash2, Loader2, AlertTriangle, Save,
-  X, Wallet, Clock, Info, CheckCircle2,
+  X, Wallet, Clock, Info, CheckCircle2, ExternalLink, Unlink, Mail, ShieldCheck,
 } from "lucide-react";
 import { auth } from "../firebase";
 import { getApiUrl } from "../utils/nativeFile";
@@ -72,10 +72,23 @@ function formatarDuracao(min: number): string {
 
 const TIPO_VAZIO = { nome: "", duracaoPadraoMin: 60, exigePagamento: false };
 
+type StatusGoogle = {
+  conectado: boolean;
+  emailConectado?: string;
+  conectadoEm?: string;
+  configuradoNoServidor?: boolean;
+};
+
 export default function AgendamentoConfigPanel({ triggerToast }: Props) {
-  const [abaInterna, setAbaInterna] = useState<"tipos" | "disponibilidade">("tipos");
+  const [abaInterna, setAbaInterna] = useState<"google" | "tipos" | "disponibilidade">("tipos");
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+
+  // ------------------------------------------------------------ Google Calendar --
+  const [googleStatus, setGoogleStatus] = useState<StatusGoogle>({ conectado: false });
+  const [conectandoGoogle, setConectandoGoogle] = useState(false);
+  const [desconectandoGoogle, setDesconectandoGoogle] = useState(false);
+  const [confirmandoDesconexao, setConfirmandoDesconexao] = useState(false);
 
   // ---------------------------------------------------------------- Tipos --
   const [tipos, setTipos] = useState<TipoAgendamento[]>([]);
@@ -94,9 +107,10 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
     setErro(null);
     try {
       const h = await comToken();
-      const [rTipos, rDisp] = await Promise.all([
+      const [rTipos, rDisp, rGoogle] = await Promise.all([
         fetch(getApiUrl("/api/agendamento/tipos"), { headers: h }),
         fetch(getApiUrl("/api/agendamento/disponibilidade"), { headers: h }),
+        fetch(getApiUrl("/api/agendamento/google/status"), { headers: h }),
       ]);
 
       const dTipos = await rTipos.json();
@@ -105,6 +119,16 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
 
       const dDisp = await rDisp.json();
       if (dDisp?.success) setDias({ ...DIAS_VAZIOS, ...dDisp.dias });
+
+      const dGoogle = await rGoogle.json();
+      if (dGoogle?.success) {
+        setGoogleStatus({
+          conectado: !!dGoogle.conectado,
+          emailConectado: dGoogle.emailConectado || "",
+          conectadoEm: dGoogle.conectadoEm || undefined,
+          configuradoNoServidor: dGoogle.configuradoNoServidor !== false,
+        });
+      }
     } catch (e: any) {
       setErro(
         e?.message === "NAO_AUTENTICADO"
@@ -119,6 +143,67 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
   useEffect(() => {
     carregar();
   }, [carregar]);
+
+  /**
+   * A conexão com o Google acontece numa aba separada (o navegador sai do
+   * MEI Flow para a tela de consentimento do Google e volta). Duas formas de
+   * saber que terminou, porque nenhuma das duas é 100% garantida sozinha:
+   * a aba de callback avisa por postMessage assim que fecha, e — reforço,
+   * caso o postMessage falhe por algum motivo — recarrega o status sempre
+   * que esta janela ganha foco de novo (a pessoa fechou a aba do Google e
+   * voltou pra cá).
+   */
+  useEffect(() => {
+    const aoReceberMensagem = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      if (e.data?.tipo === "meiflow-google-calendar") carregar();
+    };
+    const aoFocar = () => carregar();
+    window.addEventListener("message", aoReceberMensagem);
+    window.addEventListener("focus", aoFocar);
+    return () => {
+      window.removeEventListener("message", aoReceberMensagem);
+      window.removeEventListener("focus", aoFocar);
+    };
+  }, [carregar]);
+
+  const conectarGoogle = async () => {
+    setConectandoGoogle(true);
+    setErro(null);
+    try {
+      const h = await comToken();
+      const r = await fetch(getApiUrl("/api/agendamento/google/conectar"), { headers: h });
+      const d = await r.json();
+      if (!r.ok || !d?.success) throw new Error(d?.mensagem || "Não foi possível iniciar a conexão.");
+
+      const popup = window.open(d.url, "_blank", "width=520,height=650");
+      if (!popup) {
+        setErro("O navegador bloqueou a janela de conexão. Habilite pop-ups para este site e tente de novo.");
+      }
+    } catch (e: any) {
+      setErro(e?.message || "Não foi possível iniciar a conexão.");
+    } finally {
+      setConectandoGoogle(false);
+    }
+  };
+
+  const desconectarGoogle = async () => {
+    setDesconectandoGoogle(true);
+    setErro(null);
+    try {
+      const h = await comToken();
+      const r = await fetch(getApiUrl("/api/agendamento/google/credenciais"), { method: "DELETE", headers: h });
+      const d = await r.json();
+      if (!r.ok || !d?.success) throw new Error(d?.mensagem || "Não foi possível desconectar.");
+      setGoogleStatus((s) => ({ ...s, conectado: false, emailConectado: "", conectadoEm: undefined }));
+      setConfirmandoDesconexao(false);
+      triggerToast?.("Google Calendar desconectado.");
+    } catch (e: any) {
+      setErro(e?.message || "Não foi possível desconectar.");
+    } finally {
+      setDesconectandoGoogle(false);
+    }
+  };
 
   // ---------------------------------------------------------------- Tipos --
 
@@ -287,7 +372,7 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
         )}
 
         <div className="flex gap-1.5 bg-slate-100 rounded-2xl p-1 w-fit">
-          {(["tipos", "disponibilidade"] as const).map((aba) => (
+          {(["google", "tipos", "disponibilidade"] as const).map((aba) => (
             <button
               key={aba}
               onClick={() => setAbaInterna(aba)}
@@ -295,7 +380,7 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
                 abaInterna === aba ? "bg-white text-indigo-700 shadow-xs" : "text-slate-500 hover:text-slate-700"
               }`}
             >
-              {aba === "tipos" ? "Tipos de agendamento" : "Disponibilidade"}
+              {aba === "google" ? "Google Calendar" : aba === "tipos" ? "Tipos de agendamento" : "Disponibilidade"}
             </button>
           ))}
         </div>
@@ -304,6 +389,86 @@ export default function AgendamentoConfigPanel({ triggerToast }: Props) {
           <div className="py-16 flex flex-col items-center gap-3 text-slate-400">
             <Loader2 className="w-6 h-6 animate-spin" />
             <p className="text-xs font-medium">Carregando…</p>
+          </div>
+        ) : abaInterna === "google" ? (
+          <div className="space-y-3">
+            {googleStatus.configuradoNoServidor === false ? (
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex gap-3">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-900 leading-relaxed">
+                  O MEI Flow ainda não configurou a integração com o Google Calendar neste servidor.
+                  Isto não depende de você — avise o suporte.
+                </p>
+              </div>
+            ) : googleStatus.conectado ? (
+              <div className="bg-white border border-slate-200/70 rounded-2xl p-5 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shrink-0">
+                    <ShieldCheck className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-800">Google Calendar conectado</p>
+                    {googleStatus.emailConectado && (
+                      <p className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5 truncate">
+                        <Mail className="w-3 h-3 shrink-0" /> {googleStatus.emailConectado}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  A partir da próxima fase, os agendamentos confirmados vão aparecer sozinhos nesta
+                  agenda. Por enquanto, a conexão já está pronta e sendo guardada com segurança.
+                </p>
+
+                {confirmandoDesconexao ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-600">Desconectar o Google Calendar?</span>
+                    <button
+                      onClick={desconectarGoogle}
+                      disabled={desconectandoGoogle}
+                      className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-[11px] font-bold hover:bg-red-700 transition-colors cursor-pointer"
+                    >
+                      {desconectandoGoogle ? "Desconectando…" : "Sim, desconectar"}
+                    </button>
+                    <button
+                      onClick={() => setConfirmandoDesconexao(false)}
+                      className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[11px] font-bold hover:bg-slate-200 transition-colors cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmandoDesconexao(true)}
+                    className="text-[11px] font-bold text-red-500 flex items-center gap-1.5 hover:text-red-600 transition-colors cursor-pointer"
+                  >
+                    <Unlink className="w-3.5 h-3.5" /> Desconectar
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="bg-white border border-slate-200/70 rounded-2xl p-5 space-y-4 text-center">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100 mx-auto">
+                  <CalendarClock className="w-6 h-6" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-slate-800">Nenhuma conta do Google conectada</p>
+                  <p className="text-xs text-slate-400 mt-1 leading-relaxed max-w-sm mx-auto">
+                    Conecte sua agenda do Google para que os agendamentos confirmados apareçam nela
+                    automaticamente, nas próximas fases desta função.
+                  </p>
+                </div>
+                <button
+                  onClick={conectarGoogle}
+                  disabled={conectandoGoogle}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-colors cursor-pointer disabled:opacity-60"
+                >
+                  {conectandoGoogle ? <Loader2 className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
+                  Conectar Google Calendar
+                </button>
+              </div>
+            )}
           </div>
         ) : abaInterna === "tipos" ? (
           <div className="space-y-3">

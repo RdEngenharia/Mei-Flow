@@ -178,5 +178,20 @@ service cloud.firestore {
     match /disponibilidade_agenda/{doc} {
       allow read, write: if false;
     }
+
+    // google_calendar_credenciais guarda o refresh token cifrado da conexão
+    // do profissional com o Google Calendar (Fase 2 — ver
+    // claude/AGENDAMENTO_GOOGLE_CALENDAR_ESTRUTURA.md). google_oauth_estado
+    // guarda os tokens de uso único do vaivém do OAuth (curtíssima duração,
+    // apagados assim que usados). Mesmo bloqueio de sempre: só o servidor,
+    // pelo Admin SDK, toca nessas coleções.
+
+    match /google_calendar_credenciais/{doc} {
+      allow read, write: if false;
+    }
+
+    match /google_oauth_estado/{doc} {
+      allow read, write: if false;
+    }
   }
 }
