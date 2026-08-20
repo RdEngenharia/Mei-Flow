@@ -110,22 +110,6 @@ type Resumo = {
   atualizadoEm?: string;
 };
 
-type ProvedorLinkPagamento = {
-  id: string;
-  nome: string;
-  maxParcelas: number;
-  situacao: string;
-  credenciais: CampoCredencial[];
-};
-
-type ResumoLinkPagamento = {
-  cadastrado: boolean;
-  provedor?: string;
-  provedorNome?: string;
-  identificacao?: string;
-  atualizadoEm?: string;
-};
-
 async function comToken(): Promise<Record<string, string>> {
   const t = await auth.currentUser?.getIdToken();
   if (!t) throw new Error("Você precisa estar logado.");
@@ -206,44 +190,18 @@ export default function BancoCredenciaisPanel({
   } | null>(null);
   const [copiado, setCopiado] = useState<string>("");
 
-  /**
-   * LINK DE PAGAMENTO — um SEGUNDO provedor, independente do banco acima.
-   *
-   * A Asaas (banco principal, formulário acima) não tem maquininha física.
-   * A InfinitePay cobre isso: gera link e aceita na maquineta, em até 12x,
-   * recebendo em até 1 dia útil. Fica num cadastro separado de propósito —
-   * ligar isto NÃO troca nem desliga o banco principal.
-   */
-  const [provedoresLink, setProvedoresLink] = useState<ProvedorLinkPagamento[]>([]);
-  const [resumoLink, setResumoLink] = useState<ResumoLinkPagamento>({ cadastrado: false });
-  const [handleLink, setHandleLink] = useState("");
-  const [salvandoLink, setSalvandoLink] = useState(false);
-  const [erroLink, setErroLink] = useState<string | null>(null);
-
   const provedorAtual = provedores.find((p) => p.id === form.provedor) || null;
-  const provedorLinkAtual = provedoresLink[0] || null;
 
   const carregar = useCallback(async () => {
     setCarregando(true);
     setErro(null);
     try {
       const h = await comToken();
-      const [rProv, rCred, rAviso, rProvLink, rCredLink] = await Promise.all([
+      const [rProv, rCred, rAviso] = await Promise.all([
         fetch(getApiUrl("/api/banco/provedores"), { headers: h }),
         fetch(getApiUrl("/api/banco/credenciais"), { headers: h }),
         fetch(getApiUrl("/api/banco/webhook"), { headers: h }),
-        fetch(getApiUrl("/api/banco/link-pagamento/provedores"), { headers: h }),
-        fetch(getApiUrl("/api/banco/link-pagamento"), { headers: h }),
       ]);
-
-      try {
-        const dProvLink = await rProvLink.json();
-        if (dProvLink?.success) setProvedoresLink(dProvLink.provedores || []);
-        const dCredLink = await rCredLink.json();
-        if (dCredLink?.success) setResumoLink(dCredLink);
-      } catch {
-        // Link de pagamento é opcional — se não carregar, o resto da tela segue normal.
-      }
 
       try {
         const dAviso = await rAviso.json();
@@ -361,50 +319,6 @@ export default function BancoCredenciaisPanel({
       setErro(e?.message || "Não foi possível remover.");
     } finally {
       setSalvando(false);
-    }
-  };
-
-  const salvarLink = async () => {
-    if (!resumoLink.cadastrado && !handleLink.trim()) {
-      setErroLink("Informe o seu handle da InfinitePay.");
-      return;
-    }
-    setSalvandoLink(true);
-    setErroLink(null);
-    try {
-      const h = await comToken();
-      const r = await fetch(getApiUrl("/api/banco/link-pagamento"), {
-        method: "PUT",
-        headers: h,
-        body: JSON.stringify({ provedor: "infinitepay", handle: handleLink }),
-      });
-      const d = await r.json();
-      if (!r.ok || !d?.success) throw new Error(d?.mensagem || "Não foi possível guardar.");
-      setResumoLink(d);
-      setHandleLink("");
-      triggerToast?.("InfinitePay conectada para link de pagamento.");
-    } catch (e: any) {
-      setErroLink(e?.message || "Não foi possível guardar.");
-    } finally {
-      setSalvandoLink(false);
-    }
-  };
-
-  const apagarLink = async () => {
-    setSalvandoLink(true);
-    setErroLink(null);
-    try {
-      const h = await comToken();
-      const r = await fetch(getApiUrl("/api/banco/link-pagamento"), { method: "DELETE", headers: h });
-      const d = await r.json();
-      if (!r.ok || !d?.success) throw new Error(d?.mensagem || "Não foi possível remover.");
-      setResumoLink({ cadastrado: false });
-      setHandleLink("");
-      triggerToast?.("InfinitePay desconectada.");
-    } catch (e: any) {
-      setErroLink(e?.message || "Não foi possível remover.");
-    } finally {
-      setSalvandoLink(false);
     }
   };
 
@@ -752,84 +666,6 @@ export default function BancoCredenciaisPanel({
                     As credenciais são guardadas cifradas e usadas apenas para registrar as
                     suas cobranças. Nenhum outro usuário do sistema tem acesso a elas.
                   </p>
-
-                  {/*
-                    LINK DE PAGAMENTO — cartão do InfinitePay, cadastro à parte.
-
-                    Fica separado do formulário do banco de propósito: ligar
-                    isto aqui não troca nem desliga o banco principal acima.
-                    É só uma segunda forma de cobrar no cartão.
-                  */}
-                  <div className="pt-2">
-                    <div className="flex items-center gap-2 mb-3 px-1">
-                      <div className="h-px flex-1 bg-slate-200" />
-                      <p className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
-                        Link de pagamento (opcional)
-                      </p>
-                      <div className="h-px flex-1 bg-slate-200" />
-                    </div>
-
-                    <div className="bg-white rounded-2xl border border-slate-200/70 p-5 space-y-4">
-                      <div className="flex items-start gap-3">
-                        <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shrink-0">
-                          <Landmark className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-                            InfinitePay
-                            {resumoLink.cadastrado && (
-                              <span className="inline-flex items-center gap-1 bg-emerald-100/60 text-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">
-                                <ShieldCheck className="w-2.5 h-2.5" /> Conectado
-                              </span>
-                            )}
-                          </h4>
-                          <p className="text-[11px] text-slate-500 leading-relaxed mt-1">
-                            {provedorLinkAtual?.situacao ||
-                              "Gera um link de cartão fora da Asaas, para quem prefere pagar na maquininha física ou receber em até 1 dia útil. Parcela em até 12x."}
-                          </p>
-                        </div>
-                      </div>
-
-                      {erroLink && (
-                        <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-xl p-3 leading-relaxed">
-                          {erroLink}
-                        </p>
-                      )}
-
-                      {resumoLink.cadastrado ? (
-                        <div className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
-                          <p className="text-xs text-slate-600">
-                            Handle {resumoLink.identificacao || "—"}
-                          </p>
-                          <button
-                            onClick={apagarLink}
-                            disabled={salvandoLink}
-                            className="text-[11px] font-bold text-red-600 hover:text-red-700 disabled:opacity-50 shrink-0 flex items-center gap-1"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" /> Desconectar
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col sm:flex-row gap-2">
-                          <input
-                            type="text"
-                            value={handleLink}
-                            onChange={(e) => setHandleLink(e.target.value)}
-                            placeholder="seu-handle (sem o @)"
-                            className="flex-1 min-w-0 px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 transition"
-                          />
-                          <button
-                            onClick={salvarLink}
-                            disabled={salvandoLink}
-                            className="bg-emerald-600 text-white font-bold text-xs rounded-xl px-4 py-2.5 flex items-center justify-center gap-2 hover:bg-emerald-700 disabled:opacity-50 transition shrink-0"
-                          >
-                            {salvandoLink ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                            Conectar
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
                 </>
               )}
             </div>
