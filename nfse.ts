@@ -1301,7 +1301,7 @@ async function emitirNota(
       doc: dados.clienteDocumento || "",
       nome: dados.clienteNome || "Consumidor",
     },
-    descricao: dados.descricao || servico.descricao || cfg.descricaoPadrao || "Prestacao de servicos",
+    descricao: dados.descricao || servico.descricao || cfg.descricaoPadrao || "Prestação de serviços",
     valor,
     codigoServico: servico.codigo,
     codigoNbs: servico.nbs || "",

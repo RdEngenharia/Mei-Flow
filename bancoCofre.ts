@@ -639,7 +639,17 @@ export function registrarRotasBanco(app: any, db: any) {
       }
 
       const token = await garantirTokenWebhook(db, uid);
-      const base = (process.env.APP_URL || "https://meiflow.rdhomologacao.com.br").replace(/\/+$/, "");
+      // ⚠️ Preferir sempre a variável de ambiente. O valor fixo abaixo só
+      // entra em cena se ela faltar E o próprio pedido não trouxer o host —
+      // um domínio de um ambiente específico, hardcoded, quebraria em
+      // silêncio para qualquer outro domínio (produção nova, domínio
+      // próprio, etc.). Preferir o host de quem chamou é mais portátil.
+      const hostDoPedido = req.headers?.["x-forwarded-host"] || req.headers?.host;
+      const protocoloDoPedido = String(req.headers?.["x-forwarded-proto"] || "https").split(",")[0];
+      const base = (
+        process.env.APP_URL ||
+        (hostDoPedido ? `${protocoloDoPedido}://${hostDoPedido}` : "https://meiflow.rdhomologacao.com.br")
+      ).replace(/\/+$/, "");
 
       res.json({
         success: true,

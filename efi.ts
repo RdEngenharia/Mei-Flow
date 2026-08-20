@@ -817,6 +817,11 @@ export function registrarRotasEfi(
           barcode: boleto.linhaDigitavel,
           link: boleto.linkPdf,
           pdfUrl: boleto.linkPdf,
+          // ⚠️ Sem isto, a nota fiscal emitida automaticamente ao pagar (ver
+          // emitirNfseDaCobranca em nfse.ts) não sabia qual foi o serviço
+          // prestado e caía no texto genérico "Prestacao de servicos" — mesmo
+          // o boleto tendo saído com a descrição certa para o cliente.
+          descricao: descricaoAsaas,
           criadoEm: new Date().toISOString(),
           pagoEm: null,
         });
@@ -946,6 +951,10 @@ export function registrarRotasEfi(
           barcode: cobranca.barcode || "",
           link: cobranca.link || "",
           pdfUrl: cobranca.pdf?.charge || "",
+          // Mesmo texto que foi mandado para a Efí em `payload.payment.banking_billet.message`
+          // — é o que a nota fiscal automática (emitirNfseDaCobranca, em nfse.ts) usa como
+          // descrição do serviço.
+          descricao: String(mensagem || "Emitido via MEI Flow").slice(0, 100),
           criadoEm: new Date().toISOString(),
           pagoEm: null,
         });
@@ -1158,6 +1167,10 @@ export function registrarRotasEfi(
         barcode: "",
         link: cobranca.linkPagamento,
         pdfUrl: "",
+        // Mesmo texto mandado para a Asaas como descrição da cobrança — é o
+        // que a nota fiscal automática (emitirNfseDaCobranca, em nfse.ts) usa
+        // como descrição do serviço quando o pagamento for confirmado.
+        descricao: String(mensagem || "").trim() || "Emitido via MEI Flow",
         criadoEm: new Date().toISOString(),
         pagoEm: null,
         installmentId: cobranca.installmentId || null,
@@ -1519,6 +1532,10 @@ export function registrarRotasEfi(
           barcode: p.barcode || "",
           link: p.link || carne.link || carne.carnet_link || "",
           pdfUrl: p.pdf?.charge || carne.pdf?.carnet || "",
+          // Mesmo texto usado no carnê (payload.items[0].name / payload.message) — é o
+          // que a nota fiscal automática (emitirNfseDaCobranca, em nfse.ts) usa como
+          // descrição do serviço quando esta parcela for paga.
+          descricao: String(descricao || "Emitido via MEI Flow").slice(0, 100),
           criadoEm: new Date().toISOString(),
           pagoEm: null,
         });
