@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import {
   Receipt, Plus, X, Loader2, AlertTriangle, CheckCircle2, Copy, ExternalLink,
   TrendingUp, Clock, AlertOctagon, Wallet, ChevronRight, ChevronDown, RefreshCw, Search, Sparkles,
-  Trash2, CreditCard, BellOff,
+  Trash2, CreditCard, BellOff, Link2, Smartphone,
 } from "lucide-react";
 import { auth } from "../firebase";
 import { montarAgenda, ordemDaAba } from "../utils/agendaCobrancas";
@@ -137,7 +137,7 @@ export default function CobrancasPanel({
   const [vencimento, setVencimento] = useState("");
   const [descricao, setDescricao] = useState("");
   const [gerado, setGerado] = useState<any>(null);
-  const [modo, setModo] = useState<"avista" | "carne" | "cartao">("avista");
+  const [modo, setModo] = useState<"avista" | "carne" | "cartao" | "link">("avista");
   const [parcelas, setParcelas] = useState(3);
   /** Parcelas do cartão — faixa diferente da do carnê (1 a 21, não 2 a 24 boletos mensais). */
   const [parcelasCartao, setParcelasCartao] = useState(1);
@@ -400,14 +400,26 @@ export default function CobrancasPanel({
   const emitir = async (e: React.FormEvent) => {
     e.preventDefault();
     const valorNum = parseFloat(String(valor).replace(",", "."));
-    if (!clienteId || !valorNum || valorNum <= 0 || !vencimento) {
-      setErro("Preencha o cliente, o valor e a data de vencimento.");
+    // Link de pagamento não tem vencimento — só boleto/carnê/cartão exigem.
+    if (!clienteId || !valorNum || valorNum <= 0 || (modo !== "link" && !vencimento)) {
+      setErro(
+        modo === "link"
+          ? "Preencha o cliente e o valor."
+          : "Preencha o cliente, o valor e a data de vencimento."
+      );
       return;
     }
     setEmitindo(true);
     setErro(null);
     try {
-      const rota = modo === "carne" ? "/api/efi/carne" : modo === "cartao" ? "/api/efi/cartao" : "/api/efi/boleto";
+      const rota =
+        modo === "carne"
+          ? "/api/efi/carne"
+          : modo === "cartao"
+          ? "/api/efi/cartao"
+          : modo === "link"
+          ? "/api/efi/link-pagamento"
+          : "/api/efi/boleto";
       const corpo =
         modo === "carne"
           ? {
@@ -417,6 +429,12 @@ export default function CobrancasPanel({
               primeiroVencimento: vencimento,
               descricao: descricao || undefined,
               ...(pedirEndereco ? { endereco: end } : {}),
+            }
+          : modo === "link"
+          ? {
+              customerId: clienteId,
+              valor: valorNum,
+              mensagem: descricao || undefined,
             }
           : modo === "cartao"
           ? {
@@ -470,6 +488,8 @@ export default function CobrancasPanel({
       triggerToast?.(
         modo === "carne"
           ? `✓ Carnê com ${d.parcelas} parcelas gerado!`
+          : modo === "link"
+          ? "✓ Link de pagamento gerado!"
           : modo === "cartao"
           ? antecipar
             ? d.antecipacao?.solicitada
@@ -645,7 +665,7 @@ export default function CobrancasPanel({
                   className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-2xl shadow-sm transition-all cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
                 >
                   <Plus className="w-4 h-4" />
-                  <span>Emitir boleto ou carnê</span>
+                  <span>Nova cobrança</span>
                 </button>
               )}
 
@@ -654,33 +674,54 @@ export default function CobrancasPanel({
                 <form onSubmit={emitir} className="bg-white border border-slate-200/60 rounded-3xl p-5 space-y-3.5 text-left">
                   <div className="flex items-center justify-between">
                     <h4 className="text-sm font-extrabold text-slate-800">
-                      {modo === "carne" ? "Novo carnê" : "Novo boleto"}
+                      {modo === "carne" ? "Novo carnê" : modo === "link" ? "Novo link de pagamento" : modo === "cartao" ? "Nova cobrança em cartão" : "Novo boleto"}
                     </h4>
                     <button type="button" onClick={() => setShowForm(false)} className="text-xs text-slate-400 hover:text-slate-600 font-bold">
                       Cancelar
                     </button>
                   </div>
 
-                  {/* À vista, boleto parcelado (carnê) ou cartão de crédito */}
-                  <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl">
+                  {/* À vista, boleto parcelado (carnê), cartão via Asaas ou link de pagamento (InfinitePay) */}
+                  <div className="grid grid-cols-2 gap-1.5 bg-slate-100 p-1 rounded-xl">
                     {([
                       ["avista", "À vista"],
                       ["carne", "Boleto parcelado"],
                       ["cartao", "Cartão"],
+                      ["link", "Link de pagamento"],
                     ] as const).map(([k, r]) => (
                       <button
                         key={k}
                         type="button"
                         onClick={() => setModo(k as any)}
-                        className={`flex-1 py-2 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                        className={`py-2 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
                           modo === k ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-700"
                         }`}
                       >
                         {k === "cartao" && <CreditCard className="w-3 h-3" />}
+                        {k === "link" && <Link2 className="w-3 h-3" />}
                         {r}
                       </button>
                     ))}
                   </div>
+
+                  {/*
+                    LINK DE PAGAMENTO — tela própria, fora do fluxo de boleto.
+                    Diferente do cartão via Asaas (que exige a Asaas como banco principal), este
+                    usa a InfinitePay — pensado para quem quer oferecer a maquininha física ao
+                    cliente, ou fugir da taxa de antecipação da Asaas. O parcelamento (até 12x) é
+                    escolhido pelo CLIENTE na hora de pagar, não aqui — por isso não há seletor de
+                    parcelas nem simulador de taxa: o MEI Flow não sabe a taxa da InfinitePay.
+                  */}
+                  {modo === "link" && (
+                    <div className="bg-emerald-50/60 border border-emerald-100 rounded-2xl p-3 flex gap-2.5">
+                      <Smartphone className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                      <p className="text-[11px] text-emerald-800 leading-relaxed">
+                        Gera um link de cobrança pela InfinitePay — funciona também na maquininha
+                        física. O cliente escolhe em quantas vezes parcelar (até 12x) na hora de
+                        pagar. Exige o handle da InfinitePay cadastrado em Configurações → Banco.
+                      </p>
+                    </div>
+                  )}
 
                   {/*
                     A rota de cartão recusa quem não estiver com a Asaas conectada — mensagem clara
@@ -698,7 +739,7 @@ export default function CobrancasPanel({
                     )}
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2.5">
+                  <div className={modo === "link" ? "" : "grid grid-cols-2 gap-2.5"}>
                     <div>
                       <label className="block text-[11px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
                         {modo === "carne"
@@ -719,18 +760,21 @@ export default function CobrancasPanel({
                         className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2.5 px-3 text-sm focus:ring-1 focus:ring-emerald-500 focus:outline-none focus:bg-white font-mono"
                       />
                     </div>
-                    <div>
-                      <label className="block text-[11px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
-                        {modo === "carne" ? "1ª parcela *" : "Vencimento *"}
-                      </label>
-                      <input
-                        required
-                        type="date"
-                        value={vencimento}
-                        onChange={(e) => setVencimento(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2.5 px-3 text-sm focus:ring-1 focus:ring-emerald-500 focus:outline-none focus:bg-white"
-                      />
-                    </div>
+                    {/* Link de pagamento não tem vencimento — não é um boleto registrado. */}
+                    {modo !== "link" && (
+                      <div>
+                        <label className="block text-[11px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
+                          {modo === "carne" ? "1ª parcela *" : "Vencimento *"}
+                        </label>
+                        <input
+                          required
+                          type="date"
+                          value={vencimento}
+                          onChange={(e) => setVencimento(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2.5 px-3 text-sm focus:ring-1 focus:ring-emerald-500 focus:outline-none focus:bg-white"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   {modo === "carne" && (
@@ -1020,7 +1064,13 @@ export default function CobrancasPanel({
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
                         <span>
-                          {modo === "carne" ? "Gerando carnê..." : modo === "cartao" ? "Gerando cobrança..." : "Gerando boleto..."}
+                          {modo === "carne"
+                            ? "Gerando carnê..."
+                            : modo === "cartao"
+                            ? "Gerando cobrança..."
+                            : modo === "link"
+                            ? "Gerando link..."
+                            : "Gerando boleto..."}
                         </span>
                       </>
                     ) : (
@@ -1029,6 +1079,8 @@ export default function CobrancasPanel({
                         <span>
                           {modo === "carne"
                             ? `Gerar carnê ${parcelas}x`
+                            : modo === "link"
+                            ? "Gerar link de pagamento"
                             : modo === "cartao"
                             ? parcelasCartao > 1
                               ? `Gerar cobrança em até ${parcelasCartao}x`
@@ -1047,12 +1099,20 @@ export default function CobrancasPanel({
                   <div className="flex items-center gap-2 text-emerald-800">
                     <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                     <h4 className="text-sm font-extrabold">
-                      {gerado.carneId ? "Carnê gerado!" : modo === "cartao" ? "Cobrança em cartão gerada!" : "Boleto gerado!"}
+                      {gerado.carneId
+                        ? "Carnê gerado!"
+                        : modo === "link"
+                        ? "Link de pagamento gerado!"
+                        : modo === "cartao"
+                        ? "Cobrança em cartão gerada!"
+                        : "Boleto gerado!"}
                     </h4>
                   </div>
                   <p className="text-xs text-emerald-700 font-medium">
                     {gerado.carneId
                       ? `${gerado.parcelas} parcelas de ${brl(gerado.valorParcela)}, totalizando ${brl(gerado.valorTotal)}. Envie o link do carnê para o seu cliente — todas as parcelas ficam nele.`
+                      : modo === "link"
+                      ? `Valor de ${brl(gerado.valor)}. Envie o link abaixo — o cliente escolhe em até 12x pela InfinitePay, no link ou na maquininha física.`
                       : modo === "cartao"
                       ? `Valor de ${brl(gerado.valor)}${gerado.parcelas > 1 ? `, em até ${gerado.parcelas}x` : " à vista"}. Envie o link abaixo — o cliente digita o cartão numa página segura da Asaas.`
                       : `Valor de ${brl(gerado.valor)}. Envie o link abaixo para o seu cliente.`}
@@ -1098,7 +1158,7 @@ export default function CobrancasPanel({
                       onClick={() => window.open(gerado.link || gerado.pdf, "_blank")}
                       className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
                     >
-                      <ExternalLink className="w-3.5 h-3.5" /> Abrir boleto
+                      <ExternalLink className="w-3.5 h-3.5" /> {modo === "link" ? "Abrir link" : "Abrir boleto"}
                     </button>
                   </div>
                   <button
