@@ -686,39 +686,27 @@ export default function CobrancasPanel({
                     A rota de cartão recusa quem não estiver com a Asaas conectada — mensagem clara
                     em vez de deixar o usuário só descobrir depois de preencher tudo.
                   */}
-                  {modo === "cartao" && (
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 -mt-1">
-                      <p className="text-[10px] text-amber-800 font-bold leading-relaxed">
-                        ⚠️ Só funciona com a Asaas como banco principal (Configurações → Banco). Com Efí ou
-                        outro banco conectado, cartão de crédito não aparece como opção.
-                      </p>
-                    </div>
-                  )}
-
                   <div>
-                    <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
+                    <label className="block text-[11px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
                       Cliente *
                     </label>
                     <SeletorClienteCobranca clientes={clientes} value={clienteId} onChange={setClienteId} />
                     {clientes.length === 0 && (
-                      <p className="text-[9px] text-amber-600 font-bold mt-1">
+                      <p className="text-[11px] text-amber-600 font-bold mt-1">
                         Você ainda não tem clientes cadastrados. Cadastre um antes de emitir.
                       </p>
                     )}
-                    <p className="text-[9px] text-slate-400 mt-1 font-medium">
-                      O cliente precisa ter CPF ou CNPJ preenchido — é exigência do banco.
-                    </p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
-                      <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
+                      <label className="block text-[11px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
                         {modo === "carne"
                           ? "Valor TOTAL (R$) *"
                           : modo === "cartao"
                           ? repasseTaxa
-                            ? "Quanto você quer receber líquido (R$) *"
-                            : "Quanto o cliente vai pagar (R$) *"
+                            ? "Quanto você quer receber (R$) *"
+                            : "Quanto o cliente paga (R$) *"
                           : "Valor (R$) *"}
                       </label>
                       <input
@@ -728,16 +716,11 @@ export default function CobrancasPanel({
                         value={valor}
                         onChange={(e) => setValor(e.target.value)}
                         placeholder="150,00"
-                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none focus:bg-white font-mono"
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2.5 px-3 text-sm focus:ring-1 focus:ring-emerald-500 focus:outline-none focus:bg-white font-mono"
                       />
-                      {modo === "cartao" && (
-                        <p className="text-[9px] text-slate-400 mt-1 font-medium">
-                          Escolha "quem paga a taxa" logo abaixo — o sentido deste campo muda conforme essa escolha.
-                        </p>
-                      )}
                     </div>
                     <div>
-                      <label className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
+                      <label className="block text-[11px] uppercase tracking-wider font-extrabold text-slate-500 mb-1">
                         {modo === "carne" ? "1ª parcela *" : "Vencimento *"}
                       </label>
                       <input
@@ -745,14 +728,14 @@ export default function CobrancasPanel({
                         type="date"
                         value={vencimento}
                         onChange={(e) => setVencimento(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2.5 px-3 text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none focus:bg-white"
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl py-2.5 px-3 text-sm focus:ring-1 focus:ring-emerald-500 focus:outline-none focus:bg-white"
                       />
                     </div>
                   </div>
 
                   {modo === "carne" && (
                     <div className="bg-emerald-50/60 border border-emerald-100 rounded-2xl p-3 space-y-2">
-                      <label className="block text-[9px] uppercase tracking-wider font-extrabold text-emerald-800">
+                      <label className="block text-[11px] uppercase tracking-wider font-extrabold text-emerald-800">
                         Número de parcelas
                       </label>
                       <div className="flex items-center gap-2">
@@ -769,84 +752,66 @@ export default function CobrancasPanel({
                         const p = total > 0 ? total / parcelas : 0;
                         const baixo = p > 0 && p < 5;
                         return (
-                          <p className={`text-[11px] font-bold ${baixo ? "text-rose-600" : "text-emerald-700"}`}>
+                          <p className={`text-[12px] font-bold ${baixo ? "text-rose-600" : "text-emerald-700"}`}>
                             {total > 0
                               ? baixo
-                                ? `Parcela de ${brl(p)} — abaixo do mínimo de R$ 5,00. Reduza as parcelas.`
+                                ? `Parcela de ${brl(p)} — abaixo do mínimo de R$ 5,00.`
                                 : `${parcelas} boletos de ${brl(p)}, um por mês.`
-                              : "Digite o valor total acima para ver o valor de cada parcela."}
+                              : "Digite o valor total acima para ver a parcela."}
                           </p>
                         );
                       })()}
-                      <p className="text-[9px] text-emerald-700/70 font-medium leading-relaxed">
-                        O valor digitado é o <strong>total</strong> — ele é dividido entre as parcelas.
-                        A data escolhida é o vencimento da primeira; as demais caem de mês em mês.
-                      </p>
                     </div>
                   )}
 
                   {/*
-                    SIMULADOR DE VENDAS — o mesmo que a Asaas tem no painel dela, aqui dentro.
-
-                    Taxa fixa + percentual descontados uma vez, sobre o valor total — nunca por
-                    parcela. Tabela padrão publicada pela Asaas (ver utils/taxasAsaas.ts); a taxa
-                    contratada da conta pode ser um pouco diferente, e o texto abaixo avisa isso.
+                    SIMULADOR — reordenado para seguir o fluxo de decisão: 1) quem paga a taxa
+                    2) parcelas 3) quando receber 4) resultado, um único número grande.
+                    Enxugado (pedido do usuário): fontes maiores, textos de apoio bem mais curtos,
+                    e sem repetir a mesma explicação em dois lugares.
                   */}
                   {modo === "cartao" && (
-                    <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-3 space-y-2">
-                      {/*
-                        REORDENADO (pedido do usuário: a tela original confundia porque o campo de
-                        valor lá em cima mudava de sentido dependendo de um botão que só aparecia
-                        bem mais abaixo). Ordem agora segue o fluxo natural de decisão:
-                        1) quem paga a taxa  2) quantas parcelas  3) quando quer receber
-                        4) resultado — um único número grande: "cobre do cliente".
-                      */}
-
+                    <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-3 space-y-3">
                       {/* 1) QUEM PAGA A TAXA */}
                       <div className="space-y-1.5">
-                        <label className="block text-[9px] uppercase tracking-wider font-extrabold text-indigo-800">
+                        <label className="block text-[11px] uppercase tracking-wider font-extrabold text-indigo-800">
                           1. Quem paga a taxa do cartão
                         </label>
                         <div className="grid grid-cols-2 gap-1.5">
                           <button
                             type="button"
                             onClick={() => setRepasseTaxa(false)}
-                            className={`text-[10px] font-bold rounded-xl py-2 px-2 border transition-colors ${
+                            className={`text-[12px] font-bold rounded-xl py-2.5 px-2 border transition-colors ${
                               !repasseTaxa
                                 ? "bg-indigo-600 border-indigo-600 text-white"
                                 : "bg-white border-indigo-200 text-indigo-700"
                             }`}
                           >
-                            Você (sem repasse)
+                            Você
                           </button>
                           <button
                             type="button"
                             onClick={() => setRepasseTaxa(true)}
-                            className={`text-[10px] font-bold rounded-xl py-2 px-2 border transition-colors ${
+                            className={`text-[12px] font-bold rounded-xl py-2.5 px-2 border transition-colors ${
                               repasseTaxa
                                 ? "bg-indigo-600 border-indigo-600 text-white"
                                 : "bg-white border-indigo-200 text-indigo-700"
                             }`}
                           >
-                            Cliente (com repasse)
+                            Cliente
                           </button>
                         </div>
-                        <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed">
-                          {repasseTaxa
-                            ? "O valor que você digitou acima é o que SOBRA PARA VOCÊ — o preço cobrado do cliente já vem maior, para cobrir a taxa."
-                            : "O valor que você digitou acima é o que O CLIENTE PAGA — a taxa sai do que sobra para você."}
-                        </p>
                       </div>
 
                       {/* 2) PARCELAS */}
-                      <div className="pt-2 border-t border-indigo-100 space-y-1.5">
-                        <label className="block text-[9px] uppercase tracking-wider font-extrabold text-indigo-800">
+                      <div className="pt-1 border-t border-indigo-100 space-y-1.5">
+                        <label className="block text-[11px] uppercase tracking-wider font-extrabold text-indigo-800">
                           2. Parcelas oferecidas ao cliente
                         </label>
                         <select
                           value={parcelasCartao}
                           onChange={(e) => setParcelasCartao(Number(e.target.value))}
-                          className="w-full bg-white border border-indigo-200 text-indigo-800 rounded-xl py-2.5 px-3 text-xs font-bold focus:ring-1 focus:ring-indigo-500 focus:outline-none cursor-pointer"
+                          className="w-full bg-white border border-indigo-200 text-indigo-800 rounded-xl py-2.5 px-3 text-sm font-bold focus:ring-1 focus:ring-indigo-500 focus:outline-none cursor-pointer"
                         >
                           {opcoesParcelasCartao.map(({ n, parcela }) => (
                             <option key={n} value={n}>
@@ -858,63 +823,44 @@ export default function CobrancasPanel({
                             </option>
                           ))}
                         </select>
-                        {totalCartaoDigitado > 0 && opcoesParcelasCartao[opcoesParcelasCartao.length - 1]?.n < 21 && (
-                          <p className="text-[9px] text-indigo-700/70 font-medium">
-                            Parcelas acima de {opcoesParcelasCartao[opcoesParcelasCartao.length - 1]?.n}x não aparecem
-                            porque a parcela ficaria abaixo do mínimo de R$ 5,00.
-                          </p>
-                        )}
                       </div>
 
-                      {/* 3) QUANDO VOCÊ QUER RECEBER — vale para à vista também, não só
-                          parcelado: uma venda em 1x de R$100 fica presa 32 dias do mesmo jeito,
-                          a menos que se peça antecipação. */}
-                      <div className="pt-2 border-t border-indigo-100 space-y-1.5">
-                        <label className="block text-[9px] uppercase tracking-wider font-extrabold text-indigo-800">
+                      {/* 3) QUANDO VOCÊ QUER RECEBER — vale para à vista também: uma venda em
+                          1x fica presa ~32 dias do mesmo jeito, sem antecipação. */}
+                      <div className="pt-1 border-t border-indigo-100 space-y-1.5">
+                        <label className="block text-[11px] uppercase tracking-wider font-extrabold text-indigo-800">
                           3. Quando você quer receber
                         </label>
                         <div className="grid grid-cols-2 gap-1.5">
                           <button
                             type="button"
                             onClick={() => setAntecipar(false)}
-                            className={`text-[10px] font-bold rounded-xl py-2 px-2 border transition-colors ${
+                            className={`text-[12px] font-bold rounded-xl py-2.5 px-2 border transition-colors ${
                               !antecipar
                                 ? "bg-indigo-600 border-indigo-600 text-white"
                                 : "bg-white border-indigo-200 text-indigo-700"
                             }`}
                           >
-                            {parcelasCartao > 1 ? "Mês a mês (padrão)" : "Padrão (~32 dias)"}
+                            {parcelasCartao > 1 ? "Mês a mês" : "~32 dias"}
                           </button>
                           <button
                             type="button"
                             onClick={() => setAntecipar(true)}
-                            className={`text-[10px] font-bold rounded-xl py-2 px-2 border transition-colors ${
+                            className={`text-[12px] font-bold rounded-xl py-2.5 px-2 border transition-colors ${
                               antecipar
                                 ? "bg-indigo-600 border-indigo-600 text-white"
                                 : "bg-white border-indigo-200 text-indigo-700"
                             }`}
                           >
-                            Tudo de uma vez (agora)
+                            De uma vez (agora)
                           </button>
                         </div>
-                        <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed">
-                          {antecipar
-                            ? "Antecipação: você recebe o valor de uma vez, logo após a venda, mas a taxa " +
-                              "descontada é maior que a padrão. A gente pede a antecipação assim que a " +
-                              "cobrança é gerada."
-                            : parcelasCartao > 1
-                            ? "Padrão da Asaas: cada parcela cai separada, a cada ~32 dias, com a taxa normal."
-                            : "Padrão da Asaas: o valor só cai na conta uns 32 dias depois do pagamento, " +
-                              "com a taxa normal — mesmo sendo à vista."}
-                        </p>
                       </div>
 
-                      {/* 4) RESULTADO — um número grande, batendo com a escolha acima. É este
-                          valor (não o que foi digitado lá em cima) que o cliente efetivamente vê
-                          na hora de pagar quando "com repasse" está ligado. */}
-                      <div className="pt-2 border-t border-indigo-100 space-y-2">
+                      {/* 4) RESULTADO — um número grande, batendo com a escolha acima. */}
+                      <div className="pt-1 border-t border-indigo-100">
                         {totalCartaoDigitado <= 0 ? (
-                          <p className="text-[11px] font-bold text-indigo-700">
+                          <p className="text-[12px] font-bold text-indigo-700">
                             Digite o valor acima para ver quanto cobrar.
                           </p>
                         ) : (
@@ -924,59 +870,31 @@ export default function CobrancasPanel({
                               ? calcularValorComRepasseTotal(totalCartaoDigitado, parcelasCartao)
                               : calcularValorComRepasse(totalCartaoDigitado, parcelasCartao);
                             const selecionado = repasseTaxa ? comRepasse : semRepasse;
+                            const taxaAntecip = (comRepasse as any).valorTaxaAntecipacao;
                             return (
-                              <>
-                                <div className="bg-indigo-600 rounded-xl p-3 text-center text-white">
-                                  <p className="text-[9px] uppercase tracking-wider font-bold opacity-80">
-                                    {repasseTaxa ? "Cobre do cliente" : "O cliente paga"}
-                                  </p>
-                                  <p className="text-xl font-extrabold">
-                                    {selecionado.parcelas === 1
-                                      ? brl(selecionado.valorBruto)
-                                      : `${selecionado.parcelas}x de ${brl(selecionado.valorParcela)}`}
-                                  </p>
-                                  {selecionado.parcelas > 1 && (
-                                    <p className="text-[10px] opacity-90">
-                                      total {brl(selecionado.valorBruto)}
-                                    </p>
-                                  )}
-                                  <p className="text-[10px] opacity-90 pt-1">
-                                    {repasseTaxa
-                                      ? `você recebe líquido: ${brl(selecionado.valorLiquido)} (o valor que digitou)`
-                                      : `você recebe líquido: ${brl(selecionado.valorLiquido)}`}
-                                  </p>
-                                </div>
-
-                                {repasseTaxa && antecipar && (comRepasse as any).valorTaxaAntecipacao != null && (
-                                  <p className="text-[10px] text-indigo-700 font-medium leading-relaxed">
-                                    Taxa embutida nesse preço: {brl(comRepasse.valorTaxas)} — sendo{" "}
-                                    {brl(comRepasse.valorTaxas - (comRepasse as any).valorTaxaAntecipacao)} de cartão e{" "}
-                                    {brl((comRepasse as any).valorTaxaAntecipacao)} de antecipação.{" "}
-                                    <span className="text-amber-700 font-bold">
-                                      ⚠️ Estimativa — confira no Simulador de vendas da Asaas antes de fechar
-                                      valores altos.
-                                    </span>
+                              <div className="bg-indigo-600 rounded-xl p-3 text-center text-white space-y-0.5">
+                                <p className="text-[11px] uppercase tracking-wider font-bold opacity-80">
+                                  {repasseTaxa ? "Cobre do cliente" : "O cliente paga"}
+                                </p>
+                                <p className="text-2xl font-extrabold">
+                                  {selecionado.parcelas === 1
+                                    ? brl(selecionado.valorBruto)
+                                    : `${selecionado.parcelas}x de ${brl(selecionado.valorParcela)}`}
+                                </p>
+                                <p className="text-[12px] opacity-90">
+                                  {selecionado.parcelas > 1 && `total ${brl(selecionado.valorBruto)} · `}
+                                  você recebe {brl(selecionado.valorLiquido)}
+                                </p>
+                                {repasseTaxa && antecipar && taxaAntecip != null && (
+                                  <p className="text-[10px] opacity-75 pt-1">
+                                    estimativa — confira no simulador da Asaas antes de fechar valores altos
                                   </p>
                                 )}
-                                {!repasseTaxa && (
-                                  <p className="text-[10px] text-indigo-700 font-medium">
-                                    Taxa que sai do seu bolso: {brl(semRepasse.valorTaxas)}
-                                    {antecipar &&
-                                      " + a taxa de antecipação (some do líquido — não aparece neste número)."}
-                                  </p>
-                                )}
-                              </>
+                              </div>
                             );
                           })()
                         )}
                       </div>
-
-                      <p className="text-[9px] text-indigo-700/70 font-medium leading-relaxed pt-1">
-                        Estimativa com a taxa promocional da Asaas (válida até 10/09/2026) — depois
-                        disso, ou se sua conta tiver uma taxa negociada à parte, o número real pode
-                        mudar. Para confirmar antes de uma venda grande, veja o simulador da própria
-                        Asaas em asaas.com/paymentSimulator (Cobranças → Simulador de vendas).
-                      </p>
                     </div>
                   )}
 
