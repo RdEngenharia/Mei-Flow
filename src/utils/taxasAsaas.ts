@@ -48,6 +48,53 @@
  * trocar esta tabela fixa por uma consulta de verdade.
  */
 
+/**
+ * ============================================================================
+ * ANTECIPAÇÃO — quanto custa receber "de uma vez" em vez de mês a mês
+ * ============================================================================
+ *
+ * A Asaas divulga a taxa como "X% ao mês" (confirmado no Simulador de vendas
+ * da própria conta, em 20/08/2026): 1,25% ao mês para venda à vista, 1,70% ao
+ * mês para venda parcelada. O "ao mês" importa: quem antecipa uma parcela que
+ * só cairia daqui a 10 meses paga uns 10 meses de taxa, não 1 — é por isso que
+ * antecipar um parcelamento longo (13x-21x) "desconta muito", como reclamado
+ * na prática.
+ *
+ * A Asaas não publica a fórmula exata (quantos dias por "mês", se conta do dia
+ * da venda ou da confirmação, arredondamento por parcela...). O que existe
+ * aqui é uma RECONSTRUÇÃO, calibrada batendo com três simulações reais feitas
+ * no Simulador de vendas da própria Asaas (R$ 10.000, R$ 21.515,60 e
+ * R$ 50.000, todas em 21x): nas três, o desconto da antecipação ficou em
+ * ~19,97% do valor já líquido da taxa de cartão — e a conta abaixo
+ * (1,70% × 32/30 dias × parcela média) bate em ~19,95%, a menos de 0,03 ponto
+ * percentual de diferença. Perto o bastante para orçar, não perto o bastante
+ * para faturar sem checar.
+ *
+ * ⚠️ ESTIMATIVA — para valores grandes, sempre confira o número exato no
+ * Simulador de vendas da própria Asaas (Cobranças → Simulador de vendas)
+ * antes de fechar o preço com o cliente.
+ */
+export const TAXA_ANTECIPACAO_AVISTA_MES = 1.25;
+export const TAXA_ANTECIPACAO_PARCELADO_MES = 1.70;
+/** Prazo padrão que a antecipação "pula" — o mesmo D+32 do recebimento normal. */
+const DIAS_PRAZO_PADRAO = 32;
+const DIAS_POR_MES = 30;
+
+/**
+ * Fração do valor (já líquido da taxa de cartão) que a antecipação desconta.
+ *
+ * À vista: uma parcela só, antecipando ~32 dias.
+ * Parcelado: parcela 1 vence em ~32 dias, parcela 2 em ~64, ..., parcela N em
+ * ~32×N — antecipar o plano inteiro de uma vez cobra a média dessas N
+ * distâncias, daí o fator (N+1)/2 (média de 1..N).
+ */
+export function fatorAntecipacaoEstimado(parcelas: number): number {
+  const p = parcelasValidas(parcelas);
+  const periodos = DIAS_PRAZO_PADRAO / DIAS_POR_MES;
+  if (p <= 1) return (TAXA_ANTECIPACAO_AVISTA_MES / 100) * periodos;
+  return (TAXA_ANTECIPACAO_PARCELADO_MES / 100) * periodos * ((p + 1) / 2);
+}
+
 export type FaixaTaxaCartao = {
   min: number;
   max: number;
@@ -162,5 +209,64 @@ export function calcularValorComRepasse(valorLiquidoDesejado: number, parcelas: 
     // pode diferir em menos de 1 centavo por causa do arredondamento acima.
     valorLiquido: liquidoAlvo,
     valorBruto,
+  };
+}
+
+export type SimulacaoComAntecipacao = SimulacaoCartao & {
+  /** Fração estimada que a antecipação desconta (ver fatorAntecipacaoEstimado). */
+  fatorAntecipacao: number;
+  /** Quanto da taxa total cobrada é só a parte da antecipação (não do cartão). */
+  valorTaxaAntecipacao: number;
+  /** Sempre true aqui — é reconstrução, não a tabela oficial da Asaas. */
+  estimativa: true;
+};
+
+/**
+ * O mesmo "repassar a taxa" de `calcularValorComRepasse`, mas cobrindo TAMBÉM
+ * o custo da antecipação — para quem quer receber o valor cheio de uma vez
+ * (sem esperar 32 dias / mês a mês) sem abrir mão de nada para isso, jogando
+ * as duas taxas (cartão + antecipação) para dentro do preço cobrado do
+ * cliente.
+ *
+ * A conta, em duas etapas (X = valor cobrado do cliente):
+ *   1) depois da taxa do cartão:      semAntecipar = X × (1 − taxaPercentual/100) − taxaFixa
+ *   2) depois da taxa de antecipação: líquido      = semAntecipar × (1 − fatorAntecipacao)
+ * Isolando X para que líquido = valorLiquidoDesejado:
+ *   X = [ valorLiquidoDesejado / (1 − fatorAntecipacao) + taxaFixa ] / (1 − taxaPercentual/100)
+ *
+ * ⚠️ Usa `fatorAntecipacaoEstimado`, que é uma RECONSTRUÇÃO da taxa da Asaas,
+ * não a tabela oficial dela — para uma venda grande, confira o número exato
+ * no Simulador de vendas da própria Asaas antes de fechar o preço.
+ */
+export function calcularValorComRepasseTotal(
+  valorLiquidoDesejado: number,
+  parcelas: number
+): SimulacaoComAntecipacao {
+  const p = parcelasValidas(parcelas);
+  const liquidoAlvo = Math.max(0, Number(valorLiquidoDesejado) || 0);
+  const faixa = taxaParaParcelas(p);
+  const fatorPercentual = faixa.taxaPercentual / 100;
+  const fatorAntecipacao = fatorAntecipacaoEstimado(p);
+
+  const semAntecipacaoAlvo = fatorAntecipacao < 1 ? liquidoAlvo / (1 - fatorAntecipacao) : liquidoAlvo;
+  const valorBruto =
+    fatorPercentual < 1
+      ? arredondar((semAntecipacaoAlvo + faixa.taxaFixa) / (1 - fatorPercentual))
+      : arredondar(semAntecipacaoAlvo + faixa.taxaFixa);
+
+  const valorTaxas = arredondar(Math.max(0, valorBruto - liquidoAlvo));
+  const valorTaxaAntecipacao = arredondar(Math.max(0, semAntecipacaoAlvo - liquidoAlvo));
+
+  return {
+    parcelas: p,
+    valorParcela: arredondar(valorBruto / p),
+    taxaFixa: faixa.taxaFixa,
+    taxaPercentual: faixa.taxaPercentual,
+    valorTaxas,
+    valorTaxaAntecipacao,
+    fatorAntecipacao,
+    valorLiquido: liquidoAlvo,
+    valorBruto,
+    estimativa: true,
   };
 }

@@ -8,7 +8,7 @@ import { auth } from "../firebase";
 import { montarAgenda, ordemDaAba } from "../utils/agendaCobrancas";
 import { getApiUrl } from "../utils/nativeFile";
 import { Cliente } from "../types";
-import { simularRecebimentoCartao, calcularValorComRepasse } from "../utils/taxasAsaas";
+import { simularRecebimentoCartao, calcularValorComRepasse, calcularValorComRepasseTotal } from "../utils/taxasAsaas";
 
 /**
  * PAINEL DE COBRANÇAS — emitir boletos e acompanhar o que foi pago.
@@ -424,9 +424,15 @@ export default function CobrancasPanel({
               // Sem repasse: o valor digitado é o que o cliente paga.
               // Com repasse: o valor digitado é o que o MEI quer receber —
               // a Asaas precisa do valor BRUTO (já com a taxa embutida) para
-              // cobrar do cliente, senão o líquido pedido nunca fecha.
+              // cobrar do cliente, senão o líquido pedido nunca fecha. Se além
+              // disso for antecipar, o bruto precisa cobrir as DUAS taxas
+              // (cartão + antecipação), senão a antecipação ainda desconta do
+              // MEI mesmo com repasse ligado — foi exatamente esse o problema
+              // relatado antes desta correção.
               valor: repasseTaxa
-                ? calcularValorComRepasse(valorNum, parcelasCartao).valorBruto
+                ? antecipar
+                  ? calcularValorComRepasseTotal(valorNum, parcelasCartao).valorBruto
+                  : calcularValorComRepasse(valorNum, parcelasCartao).valorBruto
                 : valorNum,
               vencimento,
               parcelas: parcelasCartao,
@@ -862,7 +868,9 @@ export default function CobrancasPanel({
                       ) : (
                         (() => {
                           const semRepasse = simularRecebimentoCartao(totalCartaoDigitado, parcelasCartao);
-                          const comRepasse = calcularValorComRepasse(totalCartaoDigitado, parcelasCartao);
+                          const comRepasse = antecipar
+                            ? calcularValorComRepasseTotal(totalCartaoDigitado, parcelasCartao)
+                            : calcularValorComRepasse(totalCartaoDigitado, parcelasCartao);
                           return (
                             <div className="space-y-1.5">
                               <div
@@ -881,9 +889,11 @@ export default function CobrancasPanel({
                                 <p className="text-[11px] text-slate-500">
                                   Taxa: {brl(semRepasse.taxaFixa)} + {semRepasse.taxaPercentual}% ={" "}
                                   <span className="font-bold text-rose-600">{brl(semRepasse.valorTaxas)}</span>
+                                  {antecipar && " (só a do cartão — a antecipação some do seu líquido do mesmo jeito)"}
                                 </p>
                                 <p className="text-[12px] font-extrabold text-emerald-700">
                                   Você recebe líquido: {brl(semRepasse.valorLiquido)}
+                                  {antecipar && " (antes de descontar a antecipação)"}
                                 </p>
                               </div>
 
@@ -893,7 +903,8 @@ export default function CobrancasPanel({
                                 }`}
                               >
                                 <p className="text-[9px] uppercase tracking-wider font-extrabold text-indigo-700">
-                                  Com repasse {repasseTaxa && "· selecionado"}
+                                  {antecipar ? "Com repasse (cartão + antecipação)" : "Com repasse"}
+                                  {repasseTaxa && " · selecionado"}
                                 </p>
                                 <p className="text-[11px] font-bold text-indigo-800">
                                   {comRepasse.parcelas === 1
@@ -903,10 +914,23 @@ export default function CobrancasPanel({
                                 <p className="text-[11px] text-slate-500">
                                   Taxa embutida no preço:{" "}
                                   <span className="font-bold text-rose-600">{brl(comRepasse.valorTaxas)}</span>
+                                  {antecipar && (comRepasse as any).valorTaxaAntecipacao != null && (
+                                    <>
+                                      {" "}
+                                      (cartão {brl(comRepasse.valorTaxas - (comRepasse as any).valorTaxaAntecipacao)} +
+                                      antecipação {brl((comRepasse as any).valorTaxaAntecipacao)})
+                                    </>
+                                  )}
                                 </p>
                                 <p className="text-[12px] font-extrabold text-emerald-700">
                                   Você recebe líquido: {brl(comRepasse.valorLiquido)} (o valor que você digitou)
                                 </p>
+                                {antecipar && (
+                                  <p className="text-[9px] text-amber-700 font-bold">
+                                    ⚠️ Estimativa — a Asaas não publica a fórmula exata da antecipação por
+                                    parcela. Confira no Simulador de vendas dela antes de fechar valores altos.
+                                  </p>
+                                )}
                               </div>
                             </div>
                           );
