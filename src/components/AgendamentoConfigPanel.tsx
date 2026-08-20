@@ -250,9 +250,10 @@ export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerar
   const [confirmandoCancelamentoId, setConfirmandoCancelamentoId] = useState<string | null>(null);
   const [cancelandoId, setCancelandoId] = useState<string | null>(null);
   const [linkCopiadoId, setLinkCopiadoId] = useState<string | null>(null);
-  // Fase 6 — Gerar orçamento / Novo agendamento manual.
+  // Fase 6 — Gerar orçamento / Novo agendamento manual / Concluir simples.
   const [gerandoOrcamentoId, setGerandoOrcamentoId] = useState<string | null>(null);
   const [mostrarNovoAgendamento, setMostrarNovoAgendamento] = useState(false);
+  const [concluindoId, setConcluindoId] = useState<string | null>(null);
 
   // ---------------------------------------------------------------- Tipos --
   const [tipos, setTipos] = useState<TipoAgendamento[]>([]);
@@ -420,6 +421,29 @@ export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerar
       setErro(e?.message || "Não foi possível cancelar.");
     } finally {
       setCancelandoId(null);
+    }
+  };
+
+  // Fase 6 — baixa simples: só marca "concluído", sem gerar orçamento nenhum.
+  // É a opção certa pra um atendimento comum (não uma visita de orçamento) e
+  // é a ÚNICA opção pra quem já nasceu de um orçamento aceito (ver
+  // `origemOrcamentoId` mais abaixo, no botão) — gerar um orçamento novo a
+  // partir de um agendamento que já veio de um orçamento seria dar mais uma
+  // volta no mesmo cliente à toa.
+  const concluirAgendamento = async (id: string) => {
+    setConcluindoId(id);
+    setErro(null);
+    try {
+      const h = await comToken();
+      const r = await fetch(getApiUrl(`/api/agendamento/${id}/concluir`), { method: "POST", headers: h });
+      const d = await r.json();
+      if (!r.ok || !d?.success) throw new Error(d?.mensagem || "Não foi possível concluir o agendamento.");
+      setAgendamentos((lista) => lista.map((a) => (a.id === id ? { ...a, status: "concluido" } : a)));
+      triggerToast?.("Agendamento concluído.");
+    } catch (e: any) {
+      setErro(e?.message || "Não foi possível concluir o agendamento.");
+    } finally {
+      setConcluindoId(null);
     }
   };
 
@@ -797,25 +821,50 @@ export default function AgendamentoConfigPanel({ triggerToast, clientes, onGerar
                       </button>
                     )}
 
-                    {(a.status === "confirmado" || a.status === "a_caminho") && !a.orcamentoGeradoId && (
-                      <button
-                        onClick={() => gerarOrcamento(a)}
-                        disabled={gerandoOrcamentoId === a.id}
-                        title="Marca este agendamento como concluído e já abre um orçamento novo com os dados do cliente"
-                        className="px-3 py-1.5 bg-violet-50 text-violet-700 border border-violet-100 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-violet-100 transition-colors cursor-pointer disabled:opacity-60"
-                      >
-                        {gerandoOrcamentoId === a.id ? (
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                        ) : (
-                          <FileText className="w-3 h-3" />
-                        )}
-                        Gerar orçamento
-                      </button>
-                    )}
+                    {/*
+                      Um agendamento que já NASCEU de um orçamento aceito
+                      (origemOrcamentoId) não pode gerar outro — seria dar
+                      mais uma volta no mesmo cliente à toa. Pra esse caso o
+                      único próximo passo é concluir simples, mais abaixo.
+                    */}
+                    {(a.status === "confirmado" || a.status === "a_caminho") &&
+                      !a.orcamentoGeradoId &&
+                      !a.origemOrcamentoId && (
+                        <button
+                          onClick={() => gerarOrcamento(a)}
+                          disabled={gerandoOrcamentoId === a.id}
+                          title="Marca este agendamento como concluído e já abre um orçamento novo com os dados do cliente"
+                          className="px-3 py-1.5 bg-violet-50 text-violet-700 border border-violet-100 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-violet-100 transition-colors cursor-pointer disabled:opacity-60"
+                        >
+                          {gerandoOrcamentoId === a.id ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <FileText className="w-3 h-3" />
+                          )}
+                          Gerar orçamento
+                        </button>
+                      )}
                     {a.orcamentoGeradoId && (
                       <span className="px-3 py-1.5 bg-violet-50 text-violet-600 rounded-lg text-[10px] font-bold flex items-center gap-1.5">
                         <FileText className="w-3 h-3" /> Orçamento gerado
                       </span>
+                    )}
+
+                    {/* Baixa simples — sempre disponível, com ou sem orçamento envolvido. */}
+                    {(a.status === "confirmado" || a.status === "a_caminho") && (
+                      <button
+                        onClick={() => concluirAgendamento(a.id)}
+                        disabled={concluindoId === a.id}
+                        title="Marca este agendamento como concluído, sem gerar orçamento"
+                        className="px-3 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-lg text-[10px] font-bold flex items-center gap-1.5 hover:bg-emerald-100 transition-colors cursor-pointer disabled:opacity-60"
+                      >
+                        {concluindoId === a.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="w-3 h-3" />
+                        )}
+                        Concluir
+                      </button>
                     )}
 
                     {(a.status === "confirmado" || a.status === "a_caminho") &&
